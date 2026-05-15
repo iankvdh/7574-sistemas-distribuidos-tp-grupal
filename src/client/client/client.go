@@ -1,28 +1,29 @@
 package client
 
 import (
-	"bufio"
-	"encoding/csv"
 	"errors"
 	"log/slog"
 	"net"
 	"os"
 	"os/signal"
-	"strconv"
-	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/messageprotocol/external"
 )
 
-const connectionAttempts = 3
-const connectionAttemptsDelayMs = 300
+const (
+	connectionAttempts = 3
+	connectionAttemptsDelayMs = 300
+)
 
 type ClientConfig struct {
-	ServerHost string
-	ServerPort string
-	InputFile  string
-	OutputFile string
+	ServerHost        string
+	ServerPort        string
+	InputTransactions string
+	InputAccounts     string
+	BatchSize         int
 }
 
 type Client struct {
@@ -63,14 +64,14 @@ func (client *Client) Run() error {
 	defer client.conn.Close()
 	go client.handleSignals()
 
-	if err := client.sendFruitRecords(); err != nil {
+	if err := client.sendTransactions(); err != nil {
 		if client.running.Load() {
 			return err
 		}
 		return nil
 	}
 
-	if err := client.recvFruitTop(); err != nil {
+	if err := client.sendAccounts(); err != nil {
 		if client.running.Load() {
 			return err
 		}
@@ -98,77 +99,5 @@ func (client *Client) expectMsgType(expectedMsgType external.MsgType) error {
 	if msgType != expectedMsgType {
 		return errors.New("Unexpected message type")
 	}
-	return nil
-}
-
-func (client *Client) sendFruitRecords() error {
-	file, err := os.Open(client.config.InputFile)
-	if err != nil {
-		slog.Debug("Error while runninging input file", "err", err)
-		return err
-	}
-	defer file.Close()
-
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		columns := strings.Split(scanner.Text(), ",")
-		fruit := columns[0]
-		amount, err := strconv.ParseInt(columns[1], 10, 32)
-		if err != nil {
-			slog.Debug("Error while parsing fruit record", "err", err)
-			return err
-		}
-
-		fruitRecord := fruititem.FruitItem{Fruit: fruit, Amount: uint32(amount)}
-		if err := external.WriteFruitRecord(client.conn, &fruitRecord); err != nil {
-			return err
-		}
-
-		if err := client.expectMsgType(external.Ack); err != nil {
-			return err
-		}
-	}
-
-	if err := external.WriteEndOfRecords(client.conn); err != nil {
-		return err
-	}
-	if err := client.expectMsgType(external.Ack); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func (client *Client) recvFruitTop() error {
-	if err := client.expectMsgType(external.FruitTop); err != nil {
-		return err
-	}
-
-	fruitTop, err := external.ReadFruitTop(client.conn)
-	if err != nil {
-		slog.Debug("Error while reading FruitTop message", "err", err)
-		return err
-	}
-	if err := external.WriteAck(client.conn); err != nil {
-		slog.Debug("Error while writing ack message", "err", err)
-		return err
-	}
-
-	outputFile, err := os.Create(client.config.OutputFile)
-	if err != nil {
-		slog.Debug("Error while creating output file", "err", err)
-		return err
-	}
-	outputFileWriter := csv.NewWriter(outputFile)
-
-	for _, fruitRecord := range fruitTop {
-		line := []string{fruitRecord.Fruit, strconv.Itoa(int(fruitRecord.Amount))}
-		if err := outputFileWriter.Write(line); err != nil {
-			slog.Debug("Error while writing output file", "err", err)
-			return err
-		}
-	}
-	outputFileWriter.Flush()
-
 	return nil
 }

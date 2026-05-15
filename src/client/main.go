@@ -4,6 +4,7 @@ import (
 	"errors"
 	"log/slog"
 	"os"
+	"strconv"
 
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/client/client"
 )
@@ -19,21 +20,31 @@ func loadConfig() (client.ClientConfig, error) {
 		return client.ClientConfig{}, errors.New("SERVER_PORT environment variable is required")
 	}
 
-	inputFile := os.Getenv("INPUT_FILE")
-	if inputFile == "" {
-		return client.ClientConfig{}, errors.New("INPUT_FILE environment variable is required")
+	inputTransactions := os.Getenv("INPUT_TRANSACTIONS")
+	if inputTransactions == "" {
+		return client.ClientConfig{}, errors.New("INPUT_TRANSACTIONS environment variable is required")
 	}
 
-	outputFile := os.Getenv("OUTPUT_FILE")
-	if outputFile == "" {
-		return client.ClientConfig{}, errors.New("OUTPUT_FILE environment variable is required")
+	inputAccounts := os.Getenv("INPUT_ACCOUNTS")
+	if inputAccounts == "" {
+		return client.ClientConfig{}, errors.New("INPUT_ACCOUNTS environment variable is required")
+	}
+
+	rawBatchSize := os.Getenv("BATCH_SIZE")
+	if rawBatchSize == "" {
+		return client.ClientConfig{}, errors.New("BATCH_SIZE environment variable is required")
+	}
+	batchSize, err := strconv.Atoi(rawBatchSize)
+	if err != nil || batchSize <= 0 {
+		return client.ClientConfig{}, errors.New("BATCH_SIZE must be a positive integer")
 	}
 
 	return client.ClientConfig{
-		ServerHost: serverHost,
-		ServerPort: serverPort,
-		InputFile:  inputFile,
-		OutputFile: outputFile,
+		ServerHost:        serverHost,
+		ServerPort:        serverPort,
+		InputTransactions: inputTransactions,
+		InputAccounts:     inputAccounts,
+		BatchSize:         batchSize,
 	}, nil
 }
 
