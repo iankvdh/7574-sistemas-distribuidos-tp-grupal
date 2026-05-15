@@ -1,23 +1,12 @@
 package transaction
 
-// Timestamp,From Bank,Account,To Bank,Account,Amount Received,
-// Receiving Currency,Amount Paid,Payment Currency,Payment Format,Is Laundering
-
 type Transaction struct {
-	Date            uint32 //  ->  2024-06-01 -> 20240601
-	FromBank        uint32
-	FromAccount     string
-	ToBank          uint32
-	ToAccount       string
-	AmountPaidCents uint64 //1.00  --> 100 (guardamos en centavos para evitar problemas de precisión con float)
-	PaymentCurrency string
-	PaymentFormat   string
+	Date            uint32 // 4 bytes - YYYYMMDD (e.g. 20220801)
+	FromBank        uint32 // 4 bytes
+	FromAccount     string // 1 + N bytes - uint8 length prefix
+	ToBank          uint32 // 4 bytes
+	ToAccount       string // 1 + N bytes - uint8 length prefix
+	AmountPaidCents uint64 // 8 bytes - TODO: when parsing, convert from string with decimal point to uint64 in cents (e.g. "123.45" -> 12345)
+	PaymentCurrency string // 1 + N bytes - uint8 length prefix
+	PaymentFormat   string // 1 + N bytes - uint8 length prefix
 }
-
-// func (fruitItem FruitItem) Sum(other FruitItem) FruitItem {
-// 	return FruitItem{Fruit: fruitItem.Fruit, Amount: fruitItem.Amount + other.Amount}
-// }
-
-// func (fruitItem FruitItem) Less(other FruitItem) bool {
-// 	return fruitItem.Amount < other.Amount
-// }
