@@ -1,4 +1,4 @@
-FROM golang:1.24-alpine3.23 AS builder
+FROM golang:1.26-alpine AS builder
 # Client uses docker multistage builds feature https://docs.docker.com/develop/develop-images/multistage-build/
 LABEL intermediateStageToBeDeleted=true
 RUN mkdir -p /build
