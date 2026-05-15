@@ -11,15 +11,6 @@ import (
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/messageprotocol/external"
 )
 
-const (
-	accColBankName = iota
-	accColBankID
-	accColAccountNumber
-	accColEntityID
-	accColEntityName
-	accColumnCount
-)
-
 func (client *Client) sendAccounts() error {
 	file, err := os.Open(client.config.InputAccounts)
 	if err != nil {
@@ -75,18 +66,4 @@ func (client *Client) flushAccountBatch(batch []account.Account) error {
 		return err
 	}
 	return client.expectMsgType(external.Ack)
-}
-
-func parseAccountRow(row []string) (account.Account, error) {
-	bankID, err := parseBankID(row[accColBankID])
-	if err != nil {
-		return account.Account{}, fmt.Errorf("bank id: %w", err)
-	}
-	return account.Account{
-		BankName:      row[accColBankName],
-		BankID:        bankID,
-		AccountNumber: row[accColAccountNumber],
-		EntityID:      row[accColEntityID],
-		EntityName:    row[accColEntityName],
-	}, nil
 }
