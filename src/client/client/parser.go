@@ -36,10 +36,9 @@ const (
 
 // Parsing constants.
 const (
-
-	dateStrLength = 10
+	dateStrLength      = 10
 	centsDecimalPlaces = 2
-	centsPerUnit = 100
+	centsPerUnit       = 100
 )
 
 func parseTransactionRow(row []string) (transaction.Transaction, error) {

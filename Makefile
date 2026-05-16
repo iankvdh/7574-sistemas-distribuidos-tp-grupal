@@ -1,33 +1,35 @@
 SHELL := /bin/bash
-PWD := $(shell pwd)
+COMPOSE_FILE := docker-compose.yaml
+COMPOSE_PROJECT_NAME := tp_grupal
+
+compose = COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT_NAME) docker compose -f $(COMPOSE_FILE)
 
 up:
-	mkdir -p output
-	COMPOSE_HTTP_TIMEOUT=300 docker compose -f docker-compose.yaml up --build --remove-orphans --detach
-	docker compose -f docker-compose.yaml logs --follow
+	@replicas=$$(awk -F= '/- GATEWAY_AMOUNT=/{gsub(/ /, "", $$2); print $$2; exit}' $(COMPOSE_FILE)); \
+	if [ -z "$$replicas" ]; then \
+		echo "No se encontró GATEWAY_AMOUNT en $(COMPOSE_FILE)"; \
+		exit 1; \
+	fi; \
+	COMPOSE_HTTP_TIMEOUT=300 COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT_NAME) docker compose -f $(COMPOSE_FILE) up --build --remove-orphans --detach --scale gateway=$$replicas
+	@$(compose) logs --follow
 .PHONY: up
 
 down:
-	docker compose -f docker-compose.yaml stop -t 1
-	docker compose -f docker-compose.yaml down
+	@$(compose) stop -t 1
+	@$(compose) down
 .PHONY: down
 
 logs:
-	docker compose -f docker-compose.yaml logs
+	@$(compose) logs
 .PHONY: logs
 
 test:
-	mkdir -p output
-	rm ./output/* -f
-	COMPOSE_HTTP_TIMEOUT=300 docker compose -f docker-compose.yaml up --build --remove-orphans --detach
-	go run ./verify_output.go
-	docker compose -f docker-compose.yaml stop -t 1
-	docker compose -f docker-compose.yaml down
+	@cd src && go test ./...
 .PHONY: test
 
 switch:
 	@echo Escenarios de prueba:
-	@echo "1) Un cliente, una sola réplica de cada elemento"
-	@read -p "Selecciona uno [1]: " option;	\
-	cp ./scenarios/$${option}.yaml docker-compose.yaml
+	@echo "1) Un cliente, gateway + rabbitmq"
+	@read -p "Selecciona uno [1]: " option; \
+	cp ./scenarios/$${option}.yaml $(COMPOSE_FILE)
 .PHONY: switch
