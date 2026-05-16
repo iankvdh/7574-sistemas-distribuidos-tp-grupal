@@ -7,7 +7,7 @@ import (
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/messageprotocol/external/serializer"
 )
 
-// readShortString reads a uint8-prefixed string from reader. 
+// readShortString reads a uint8-prefixed string from reader.
 // Shared by the Transaction and Account decoders.
 func readShortString(reader io.Reader) (string, error) {
 	lenBuf, err := safeio.ReadAll(reader, serializer.UINT8_SIZE)

@@ -1,6 +1,7 @@
 package external
 
 import (
+	"bytes"
 	"io"
 
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/messageprotocol/external/safeio"
@@ -87,16 +88,29 @@ func deserializeTransaction(reader io.Reader) (*transaction.Transaction, error) 
 // WriteTransactionBatch writes [MsgType=TransactionBatch][N uint32][tx1]...[txN]
 // in a single Write to keep one TCP segment per batch.
 func WriteTransactionBatch(writer io.Writer, txs []transaction.Transaction) error {
+	payload, err := SerializeTransactionBatchPayload(txs)
+	if err != nil {
+		return err
+	}
 	msg := serializer.SerializeUint8(uint8(TransactionBatch))
-	msg = append(msg, serializer.SerializeUint32(uint32(len(txs)))...)
+	msg = append(msg, payload...)
+	return safeio.WriteAll(writer, msg)
+}
+
+func SerializeTransactionBatchPayload(txs []transaction.Transaction) ([]byte, error) {
+	msg := serializer.SerializeUint32(uint32(len(txs)))
 	for i := range txs {
 		serialized, err := serializeTransaction(&txs[i])
 		if err != nil {
-			return err
+			return nil, err
 		}
 		msg = append(msg, serialized...)
 	}
-	return safeio.WriteAll(writer, msg)
+	return msg, nil
+}
+
+func DeserializeTransactionBatchPayload(payload []byte) ([]transaction.Transaction, error) {
+	return ReadTransactionBatch(bytes.NewReader(payload))
 }
 
 // ReadTransactionBatch reads [N uint32][tx1]...[txN] from reader. The MsgType

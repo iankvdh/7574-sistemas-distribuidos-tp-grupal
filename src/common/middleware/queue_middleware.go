@@ -7,8 +7,8 @@ import (
 )
 
 type queueMiddleware struct {
-	conn *amqp.Connection
-	channel *amqp.Channel
+	conn      *amqp.Connection
+	channel   *amqp.Channel
 	queueName string
 }
 
@@ -27,7 +27,7 @@ func newQueueMiddleware(queueName string, connectionSettings ConnSettings) (*que
 
 	if _, err := ch.QueueDeclare(
 		queueName,
-		true, // durable
+		true,  // durable
 		false, // auto-delete
 		false, // exclusive
 		false, // no-wait
@@ -39,21 +39,21 @@ func newQueueMiddleware(queueName string, connectionSettings ConnSettings) (*que
 	}
 
 	return &queueMiddleware{
-		conn: conn,
-		channel: ch,
+		conn:      conn,
+		channel:   ch,
 		queueName: queueName,
 	}, nil
 }
 
 func (q *queueMiddleware) Send(msg Message) error {
 	err := q.channel.Publish(
-		"", // exchange default
+		"",          // exchange default
 		q.queueName, // routing key
-		false, // mandatory
-		false, // immediate
+		false,       // mandatory
+		false,       // immediate
 		amqp.Publishing{
 			ContentType: "text/plain",
-			Body: []byte(msg.Body),
+			Body:        []byte(msg.Body),
 		},
 	)
 	if err != nil {
@@ -65,12 +65,12 @@ func (q *queueMiddleware) Send(msg Message) error {
 func (q *queueMiddleware) StartConsuming(callbackFunc func(msg Message, ack func(), nack func())) error {
 	deliveries, err := q.channel.Consume(
 		q.queueName, // queue
-		"", // random consumer tag
-		false, // no-auto-ack
-		false, // no-exclusive
-		false, // no-local
-		false, // no-wait
-		nil, // args
+		"",          // random consumer tag
+		false,       // no-auto-ack
+		false,       // no-exclusive
+		false,       // no-local
+		false,       // no-wait
+		nil,         // args
 	)
 	if err != nil {
 		return middlewareError(err)

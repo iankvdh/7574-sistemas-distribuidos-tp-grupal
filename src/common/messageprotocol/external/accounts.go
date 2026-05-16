@@ -1,6 +1,7 @@
 package external
 
 import (
+	"bytes"
 	"io"
 
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/account"
@@ -69,16 +70,29 @@ func deserializeAccount(reader io.Reader) (*account.Account, error) {
 // WriteAccountBatch writes [MsgType=AccountBatch][N uint32][acc1]...[accN]
 // in a single Write to keep one TCP segment per batch.
 func WriteAccountBatch(writer io.Writer, accs []account.Account) error {
+	payload, err := SerializeAccountBatchPayload(accs)
+	if err != nil {
+		return err
+	}
 	msg := serializer.SerializeUint8(uint8(AccountBatch))
-	msg = append(msg, serializer.SerializeUint32(uint32(len(accs)))...)
+	msg = append(msg, payload...)
+	return safeio.WriteAll(writer, msg)
+}
+
+func SerializeAccountBatchPayload(accs []account.Account) ([]byte, error) {
+	msg := serializer.SerializeUint32(uint32(len(accs)))
 	for i := range accs {
 		serialized, err := serializeAccount(&accs[i])
 		if err != nil {
-			return err
+			return nil, err
 		}
 		msg = append(msg, serialized...)
 	}
-	return safeio.WriteAll(writer, msg)
+	return msg, nil
+}
+
+func DeserializeAccountBatchPayload(payload []byte) ([]account.Account, error) {
+	return ReadAccountBatch(bytes.NewReader(payload))
 }
 
 // ReadAccountBatch reads [N uint32][acc1]...[accN]. The MsgType byte must have
