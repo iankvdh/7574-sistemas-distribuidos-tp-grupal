@@ -9,7 +9,7 @@ services:
     environment:
       - INPUT_TRANSACTIONS=/datasets/small_trans.csv
       - INPUT_ACCOUNTS=/datasets/small_accounts.csv
-      - BATCH_SIZE=256
+      - BATCH_MAX_BYTES=8192
       - GATEWAY_PREFIX=tp_grupal-gateway-
       - GATEWAY_AMOUNT=1
       - GATEWAY_PORT=5678

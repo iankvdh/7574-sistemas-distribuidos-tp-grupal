@@ -22,7 +22,7 @@ type ClientConfig struct {
 	GatewayPort        string
 	InputTransactions  string
 	InputAccounts      string
-	BatchSize          int
+	BatchMaxBytes      int
 	ConnectMaxAttempts int
 	BackoffBase        time.Duration
 	BackoffMax         time.Duration

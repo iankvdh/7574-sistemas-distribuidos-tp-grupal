@@ -4,6 +4,9 @@ import (
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/account"
+	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/transaction"
 )
 
 func TestBuildGatewayAddresses(t *testing.T) {
@@ -46,5 +49,40 @@ func TestComputeBackoffCap(t *testing.T) {
 		if got != tc.want {
 			t.Fatalf("attempt %d: got %s want %s", tc.attempt, got, tc.want)
 		}
+	}
+}
+
+func TestTransactionSize(t *testing.T) {
+	tx := transaction.Transaction{
+		Date:            20240101,
+		FromBank:        1,
+		FromAccount:     "abc",
+		ToBank:          2,
+		ToAccount:       "xyz",
+		AmountPaidCents: 100,
+		PaymentCurrency: "USD",
+		PaymentFormat:   "WIRE",
+	}
+
+	got := transactionSize(tx)
+	want := 37
+	if got != want {
+		t.Fatalf("unexpected transaction size: got %d want %d", got, want)
+	}
+}
+
+func TestAccountSize(t *testing.T) {
+	acc := account.Account{
+		BankName:      "bank",
+		BankID:        10,
+		AccountNumber: "123",
+		EntityID:      "e1",
+		EntityName:    "alice",
+	}
+
+	got := accountSize(acc)
+	want := 22
+	if got != want {
+		t.Fatalf("unexpected account size: got %d want %d", got, want)
 	}
 }

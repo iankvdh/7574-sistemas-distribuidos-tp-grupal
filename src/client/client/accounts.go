@@ -11,6 +11,10 @@ import (
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/messageprotocol/external"
 )
 
+const (
+	accountBatchHeaderBytes = 1 + 4 // MsgType + uint32 batch size
+)
+
 func (client *Client) sendAccounts() error {
 	file, err := os.Open(client.config.InputAccounts)
 	if err != nil {
@@ -25,7 +29,8 @@ func (client *Client) sendAccounts() error {
 		return fmt.Errorf("reading accounts header: %w", err)
 	}
 
-	batch := make([]account.Account, 0, client.config.BatchSize)
+	batch := make([]account.Account, 0, 16)
+	batchBytes := accountBatchHeaderBytes
 	for {
 		row, err := reader.Read()
 		if errors.Is(err, io.EOF) {
@@ -39,14 +44,27 @@ func (client *Client) sendAccounts() error {
 		if err != nil {
 			return fmt.Errorf("parsing account row: %w", err)
 		}
-		batch = append(batch, acc)
 
-		if len(batch) >= client.config.BatchSize {
+		accBytes := accountSize(acc)
+		if accBytes+accountBatchHeaderBytes > client.config.BatchMaxBytes {
+			return fmt.Errorf(
+				"account record too large for BATCH_MAX_BYTES: record=%d header=%d max=%d",
+				accBytes,
+				accountBatchHeaderBytes,
+				client.config.BatchMaxBytes,
+			)
+		}
+
+		if len(batch) > 0 && batchBytes+accBytes > client.config.BatchMaxBytes {
 			if err := client.flushAccountBatch(batch); err != nil {
 				return err
 			}
 			batch = batch[:0]
+			batchBytes = accountBatchHeaderBytes
 		}
+
+		batch = append(batch, acc)
+		batchBytes += accBytes
 	}
 
 	if len(batch) > 0 {
@@ -66,4 +84,12 @@ func (client *Client) flushAccountBatch(batch []account.Account) error {
 		return err
 	}
 	return client.expectMsgType(external.Ack)
+}
+
+func accountSize(acc account.Account) int {
+	return 1 + len(acc.BankName) +
+		4 + // BankID
+		1 + len(acc.AccountNumber) +
+		1 + len(acc.EntityID) +
+		1 + len(acc.EntityName)
 }

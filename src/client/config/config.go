@@ -15,6 +15,7 @@ const (
 	defaultBackoffMaxMs       = 3000
 	defaultConnectTimeoutMs   = 800
 	defaultQueryTimeoutMs     = 30000
+	defaultBatchMaxBytes      = 8192
 )
 
 func Load() (client.ClientConfig, error) {
@@ -47,7 +48,7 @@ func Load() (client.ClientConfig, error) {
 		return client.ClientConfig{}, errors.New("INPUT_ACCOUNTS environment variable is required")
 	}
 
-	batchSize, err := parsePositiveInt("BATCH_SIZE")
+	batchMaxBytes, err := parsePositiveIntWithDefault("BATCH_MAX_BYTES", defaultBatchMaxBytes)
 	if err != nil {
 		return client.ClientConfig{}, err
 	}
@@ -79,25 +80,13 @@ func Load() (client.ClientConfig, error) {
 		GatewayPort:        gatewayPort,
 		InputTransactions:  inputTransactions,
 		InputAccounts:      inputAccounts,
-		BatchSize:          batchSize,
+		BatchMaxBytes:      batchMaxBytes,
 		ConnectMaxAttempts: connectMaxAttempts,
 		BackoffBase:        time.Duration(backoffBaseMs) * time.Millisecond,
 		BackoffMax:         time.Duration(backoffMaxMs) * time.Millisecond,
 		ConnectTimeout:     time.Duration(connectTimeoutMs) * time.Millisecond,
 		QueryWaitTimeout:   time.Duration(queryTimeoutMs) * time.Millisecond,
 	}, nil
-}
-
-func parsePositiveInt(envName string) (int, error) {
-	raw := os.Getenv(envName)
-	if raw == "" {
-		return 0, errors.New(envName + " environment variable is required")
-	}
-	value, err := strconv.Atoi(raw)
-	if err != nil || value <= 0 {
-		return 0, errors.New(envName + " must be a positive integer")
-	}
-	return value, nil
 }
 
 func parsePositiveIntWithDefault(envName string, defaultValue int) (int, error) {
