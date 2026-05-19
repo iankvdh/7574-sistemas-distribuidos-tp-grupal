@@ -11,13 +11,17 @@ import (
 )
 
 type MessageHandler struct {
+	gatewayID         inner.GatewayID
 	clientID          inner.ClientID
 	transactionAmount uint32
 	accountAmount     uint32
 }
 
-func NewMessageHandler(clientID inner.ClientID) MessageHandler {
-	return MessageHandler{clientID: clientID}
+func NewMessageHandler(gatewayID inner.GatewayID, clientID inner.ClientID) MessageHandler {
+	return MessageHandler{
+		gatewayID: gatewayID,
+		clientID:  clientID,
+	}
 }
 
 func (handler *MessageHandler) ClientID() inner.ClientID {
@@ -30,11 +34,11 @@ func (handler *MessageHandler) SerializeTransactionBatchMessage(batch []transact
 		return nil, err
 	}
 	handler.transactionAmount += uint32(len(batch))
-	return inner.SerializeAllTransactionsBatch(handler.clientID, payload), nil
+	return inner.SerializeAllTransactionsBatch(handler.gatewayID, handler.clientID, payload)
 }
 
-func (handler *MessageHandler) SerializeTransactionEOFMessage() *middleware.Message {
-	return inner.SerializeAllTransactionsEOF(handler.clientID, handler.transactionAmount)
+func (handler *MessageHandler) SerializeTransactionEOFMessage() (*middleware.Message, error) {
+	return inner.SerializeAllTransactionsEOF(handler.gatewayID, handler.clientID, handler.transactionAmount)
 }
 
 func (handler *MessageHandler) SerializeAccountBatchMessage(batch []account.Account) (*middleware.Message, error) {
@@ -43,18 +47,18 @@ func (handler *MessageHandler) SerializeAccountBatchMessage(batch []account.Acco
 		return nil, err
 	}
 	handler.accountAmount += uint32(len(batch))
-	return inner.SerializeAllAccountsBatch(handler.clientID, payload), nil
+	return inner.SerializeAllAccountsBatch(handler.gatewayID, handler.clientID, payload)
 }
 
-func (handler *MessageHandler) SerializeAccountEOFMessage() *middleware.Message {
-	return inner.SerializeAllAccountsEOF(handler.clientID, handler.accountAmount)
+func (handler *MessageHandler) SerializeAccountEOFMessage() (*middleware.Message, error) {
+	return inner.SerializeAllAccountsEOF(handler.gatewayID, handler.clientID, handler.accountAmount)
 }
 
 type FinalMessage struct {
-	ClientID     inner.ClientID
-	QueryID      uint8
-	Status       string
-	EndOfResults bool
+	GatewayID inner.GatewayID
+	ClientID  inner.ClientID
+	QueryID   uint8
+	Status    string
 }
 
 func DeserializeFinalMessage(message *middleware.Message) (*FinalMessage, error) {
@@ -65,9 +69,12 @@ func DeserializeFinalMessage(message *middleware.Message) (*FinalMessage, error)
 
 	switch envelope.Kind {
 	case inner.FinalQueryResult:
-		return &FinalMessage{ClientID: envelope.ClientID, QueryID: envelope.QueryID, Status: envelope.Status}, nil
-	case inner.FinalEOF:
-		return &FinalMessage{ClientID: envelope.ClientID, EndOfResults: true}, nil
+		return &FinalMessage{
+			GatewayID: envelope.GatewayID,
+			ClientID:  envelope.ClientID,
+			QueryID:   envelope.QueryID,
+			Status:    envelope.Status,
+		}, nil
 	default:
 		return nil, fmt.Errorf("%w: %d", inner.ErrUnexpectedKind, envelope.Kind)
 	}

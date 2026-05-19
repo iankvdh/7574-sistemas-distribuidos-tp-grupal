@@ -22,6 +22,7 @@ type ClientConfig struct {
 	GatewayPort        string
 	InputTransactions  string
 	InputAccounts      string
+	ResultsDir         string
 	BatchMaxBytes      int
 	ConnectMaxAttempts int
 	BackoffBase        time.Duration
@@ -37,6 +38,7 @@ type Client struct {
 	config       ClientConfig
 	gatewayAddrs []string
 	rand         *rand.Rand
+	results      *resultsCollector
 }
 
 func NewClient(config ClientConfig) (*Client, error) {
@@ -173,6 +175,15 @@ func (client *Client) Run() error {
 	defer client.conn.Close()
 	go client.handleSignals()
 
+	if err := client.initResultsCollector(); err != nil {
+		return err
+	}
+	defer func() {
+		if err := client.closeResultsCollector(); err != nil {
+			slog.Warn("While closing result files", "client_id", client.clientID, "err", err)
+		}
+	}()
+
 	if err := client.sendTransactions(); err != nil {
 		if client.running.Load() {
 			return err
@@ -208,13 +219,23 @@ func (client *Client) handleSignals() {
 }
 
 func (client *Client) expectMsgType(expectedMsgType external.MsgType) error {
-	msgType, err := external.ReadMsgType(client.conn)
-	if err != nil {
-		slog.Debug("Error while reading message type", "err", err)
-		return err
-	}
-	if msgType != expectedMsgType {
+	for {
+		msgType, err := external.ReadMsgType(client.conn)
+		if err != nil {
+			slog.Debug("Error while reading message type", "err", err)
+			return err
+		}
+		if msgType == expectedMsgType {
+			return nil
+		}
+
+		if msgType == external.QueryResult {
+			if err := client.consumeQueryResultFromConn(); err != nil {
+				return err
+			}
+			continue
+		}
+
 		return fmt.Errorf("unexpected message type: got %d expected %d", msgType, expectedMsgType)
 	}
-	return nil
 }

@@ -7,19 +7,21 @@ services:
       gateway:
         condition: service_started
     environment:
-      - INPUT_TRANSACTIONS=/datasets/small_trans.csv
-      - INPUT_ACCOUNTS=/datasets/small_accounts.csv
+      - INPUT_TRANSACTIONS=/datasets/LI-Small_Trans.csv
+      - INPUT_ACCOUNTS=/datasets/LI-Small_accounts.csv
       - BATCH_MAX_BYTES=8192
-      - GATEWAY_PREFIX=tp_grupal-gateway-
+      - GATEWAY_PREFIX=${COMPOSE_PROJECT_NAME:-tp_grupal}-gateway-
       - GATEWAY_AMOUNT=1
       - GATEWAY_PORT=5678
       - CONNECT_MAX_ATTEMPTS=6
       - CONNECT_TIMEOUT_MS=800
       - BACKOFF_BASE_MS=200
       - BACKOFF_MAX_MS=3000
-      - QUERY_WAIT_TIMEOUT_MS=30000
+      - QUERY_WAIT_TIMEOUT_MS=3600000
+      - RESULTS_DIR=/results
     volumes:
       - ./datasets:/datasets
+      - ./results/client_0:/results
 
   gateway:
     build:
@@ -41,7 +43,6 @@ services:
     build:
       context: ./src/rabbitmq
       dockerfile: Dockerfile
-    container_name: rabbitmq
     environment:
       - RABBITMQ_LOG_LEVELS=error
     healthcheck:

@@ -8,6 +8,7 @@ import (
 )
 
 type ClientID string
+type GatewayID string
 
 type MsgKind uint8
 
@@ -17,7 +18,6 @@ const (
 	AllAccountsBatch
 	AllAccountsEOF
 	FinalQueryResult
-	FinalEOF
 )
 
 var (
@@ -26,22 +26,27 @@ var (
 )
 
 type Envelope struct {
-	ClientID ClientID `json:"c"`
-	Kind     MsgKind  `json:"k"`
-	Total    uint32   `json:"t,omitempty"`
-	Payload  []byte   `json:"p,omitempty"`
-	QueryID  uint8    `json:"q,omitempty"`
-	Status   string   `json:"s,omitempty"`
+	GatewayID GatewayID `json:"g,omitempty"`
+	ClientID  ClientID  `json:"c"`
+	Kind      MsgKind   `json:"k"`
+	Total     uint32    `json:"t,omitempty"`
+	Payload   []byte    `json:"p,omitempty"`
+	QueryID   uint8     `json:"q,omitempty"`
+	Status    string    `json:"s,omitempty"`
 }
 
-func SerializeEnvelope(kind MsgKind, clientID ClientID, total uint32, payload []byte) *middleware.Message {
-	body, _ := json.Marshal(Envelope{
-		ClientID: clientID,
-		Kind:     kind,
-		Total:    total,
-		Payload:  payload,
+func SerializeEnvelope(kind MsgKind, gatewayID GatewayID, clientID ClientID, total uint32, payload []byte) (*middleware.Message, error) {
+	body, err := json.Marshal(Envelope{
+		GatewayID: gatewayID,
+		ClientID:  clientID,
+		Kind:      kind,
+		Total:     total,
+		Payload:   payload,
 	})
-	return &middleware.Message{Body: string(body)}
+	if err != nil {
+		return nil, err
+	}
+	return &middleware.Message{Body: string(body)}, nil
 }
 
 func DeserializeEnvelope(msg *middleware.Message) (*Envelope, error) {
@@ -56,41 +61,41 @@ func DeserializeEnvelope(msg *middleware.Message) (*Envelope, error) {
 	if envelope.ClientID == "" {
 		return nil, ErrMalformedEnvelope
 	}
+	if envelope.GatewayID == "" {
+		return nil, ErrMalformedEnvelope
+	}
 	if envelope.Kind == 0 {
 		return nil, ErrMalformedEnvelope
 	}
 	return &envelope, nil
 }
 
-func SerializeAllTransactionsBatch(clientID ClientID, payload []byte) *middleware.Message {
-	return SerializeEnvelope(AllTransactionsBatch, clientID, 0, payload)
+func SerializeAllTransactionsBatch(gatewayID GatewayID, clientID ClientID, payload []byte) (*middleware.Message, error) {
+	return SerializeEnvelope(AllTransactionsBatch, gatewayID, clientID, 0, payload)
 }
 
-func SerializeAllTransactionsEOF(clientID ClientID, total uint32) *middleware.Message {
-	return SerializeEnvelope(AllTransactionsEOF, clientID, total, nil)
+func SerializeAllTransactionsEOF(gatewayID GatewayID, clientID ClientID, total uint32) (*middleware.Message, error) {
+	return SerializeEnvelope(AllTransactionsEOF, gatewayID, clientID, total, nil)
 }
 
-func SerializeAllAccountsBatch(clientID ClientID, payload []byte) *middleware.Message {
-	return SerializeEnvelope(AllAccountsBatch, clientID, 0, payload)
+func SerializeAllAccountsBatch(gatewayID GatewayID, clientID ClientID, payload []byte) (*middleware.Message, error) {
+	return SerializeEnvelope(AllAccountsBatch, gatewayID, clientID, 0, payload)
 }
 
-func SerializeAllAccountsEOF(clientID ClientID, total uint32) *middleware.Message {
-	return SerializeEnvelope(AllAccountsEOF, clientID, total, nil)
+func SerializeAllAccountsEOF(gatewayID GatewayID, clientID ClientID, total uint32) (*middleware.Message, error) {
+	return SerializeEnvelope(AllAccountsEOF, gatewayID, clientID, total, nil)
 }
 
-func SerializeFinalQueryResult(clientID ClientID, queryID uint8, status string) (*middleware.Message, error) {
+func SerializeFinalQueryResult(gatewayID GatewayID, clientID ClientID, queryID uint8, status string) (*middleware.Message, error) {
 	body, err := json.Marshal(Envelope{
-		ClientID: clientID,
-		Kind:     FinalQueryResult,
-		QueryID:  queryID,
-		Status:   status,
+		GatewayID: gatewayID,
+		ClientID:  clientID,
+		Kind:      FinalQueryResult,
+		QueryID:   queryID,
+		Status:    status,
 	})
 	if err != nil {
 		return nil, err
 	}
 	return &middleware.Message{Body: string(body)}, nil
-}
-
-func SerializeFinalEOF(clientID ClientID) *middleware.Message {
-	return SerializeEnvelope(FinalEOF, clientID, 0, nil)
 }

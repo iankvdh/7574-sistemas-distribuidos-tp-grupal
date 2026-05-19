@@ -2,19 +2,33 @@ package client
 
 import (
 	"fmt"
-	"log/slog"
 	"time"
 
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/messageprotocol/external"
 )
 
+const (
+	queryEOFStatus     = "EOF"
+	requiredQueryEOFs  = 5
+	minExpectedQueryID = 1
+	maxExpectedQueryID = 5
+)
+
 func (client *Client) receiveResults() error {
-	if err := client.conn.SetReadDeadline(time.Now().Add(client.config.QueryWaitTimeout)); err != nil {
+	if err := client.initResultsCollector(); err != nil {
 		return err
 	}
 	defer client.conn.SetReadDeadline(time.Time{})
 
 	for {
+		if client.hasAllQueryEOFs() {
+			return nil
+		}
+
+		if err := client.conn.SetReadDeadline(time.Now().Add(client.config.QueryWaitTimeout)); err != nil {
+			return err
+		}
+
 		msgType, err := external.ReadMsgType(client.conn)
 		if err != nil {
 			return err
@@ -22,14 +36,9 @@ func (client *Client) receiveResults() error {
 
 		switch msgType {
 		case external.QueryResult:
-			queryID, status, err := external.ReadQueryResult(client.conn)
-			if err != nil {
+			if err := client.consumeQueryResultFromConn(); err != nil {
 				return err
 			}
-			slog.Info("Received query result", "client_id", client.clientID, "query", queryID, "status", status)
-		case external.EndOfResults:
-			slog.Info("Received end of results", "client_id", client.clientID)
-			return nil
 		default:
 			return fmt.Errorf("unexpected result message type: %d", msgType)
 		}
