@@ -8,7 +8,7 @@ import (
 )
 
 type ClientID string
-type GatewayID string
+type GatewayID int
 
 type MsgKind uint8
 
@@ -61,7 +61,7 @@ func DeserializeEnvelope(msg *middleware.Message) (*Envelope, error) {
 	if envelope.ClientID == "" {
 		return nil, ErrMalformedEnvelope
 	}
-	if envelope.GatewayID == "" {
+	if envelope.GatewayID <= 0 {
 		return nil, ErrMalformedEnvelope
 	}
 	if envelope.Kind == 0 {

@@ -25,7 +25,7 @@ type Gateway struct {
 	allTransactionsQueue middleware.Middleware
 	allAccountsQueue     middleware.Middleware
 	finalQueue           middleware.Middleware
-	gatewayID            string
+	gatewayID            inner.GatewayID
 	listener             net.Listener
 	running              atomic.Bool
 	shutdownOnce         sync.Once
@@ -47,14 +47,9 @@ func NewGateway(config gatewayconfig.GatewayConfig) (*Gateway, error) {
 		return nil, err
 	}
 
-	gatewayID, err := os.Hostname()
-	if err != nil {
-		_ = allTransactionsQueue.Close()
-		_ = allAccountsQueue.Close()
-		return nil, err
-	}
+	gatewayID := inner.GatewayID(config.GatewayID)
 
-	finalQueueName := fmt.Sprintf("%s_%s", config.FinalQueue, gatewayID)
+	finalQueueName := fmt.Sprintf("%s_%d", config.FinalQueue, gatewayID)
 	finalQueue, err := middleware.CreateQueueMiddleware(finalQueueName, connSettings)
 	if err != nil {
 		_ = allTransactionsQueue.Close()
@@ -105,7 +100,7 @@ func (gateway *Gateway) Run() error {
 
 		// TODO: implement idempotency/recovery strategy for reconnecting clients.
 		clientID := inner.ClientID(uuid.NewString())
-		handler := messagehandler.NewMessageHandler(inner.GatewayID(gateway.gatewayID), clientID)
+		handler := messagehandler.NewMessageHandler(gateway.gatewayID, clientID)
 		state := gateway.registry.Add(clientID, conn)
 
 		gateway.waiting_group.Add(1)
