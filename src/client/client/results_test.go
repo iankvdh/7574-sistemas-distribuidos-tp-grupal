@@ -12,7 +12,7 @@ import (
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/messageprotocol/external"
 )
 
-func TestReceiveResultsCompletesAfterFiveQueryEOFs(t *testing.T) {
+func TestSendIngestMessageHandlesInterleavedResultBatch(t *testing.T) {
 	clientConn, serverConn := net.Pipe()
 	defer clientConn.Close()
 	defer serverConn.Close()
@@ -24,28 +24,130 @@ func TestReceiveResultsCompletesAfterFiveQueryEOFs(t *testing.T) {
 			ResultsDir: t.TempDir(),
 		},
 	}
+	c.running.Store(true)
+	if err := c.initResultsCollector(); err != nil {
+		t.Fatalf("initResultsCollector failed: %v", err)
+	}
+	defer c.closeResultsCollector()
+
+	c.startIOLoops()
+	defer c.stopIO()
+
+	serverDone := make(chan error, 1)
+	go func() {
+		msgType, err := external.ReadMsgType(serverConn)
+		if err != nil {
+			serverDone <- err
+			return
+		}
+		if msgType != external.EndOfTransactions {
+			serverDone <- errUnexpectedMsgType(msgType, external.EndOfTransactions)
+			return
+		}
+
+		if err := external.WriteResultBatch(serverConn, []external.ResultBatchItem{
+			{QueryID: 1, Status: "20,A,31,B,10.00"},
+			{QueryID: 1, Status: queryEOFStatus},
+		}); err != nil {
+			serverDone <- err
+			return
+		}
+
+		msgType, err = external.ReadMsgType(serverConn)
+		if err != nil {
+			serverDone <- err
+			return
+		}
+		if msgType != external.ResultBatchAck {
+			serverDone <- errUnexpectedMsgType(msgType, external.ResultBatchAck)
+			return
+		}
+
+		if err := external.WriteIngestAck(serverConn); err != nil {
+			serverDone <- err
+			return
+		}
+		serverDone <- nil
+	}()
+
+	if err := c.sendIngestMessage(func(conn net.Conn) error {
+		return external.WriteEndOfTransactions(conn)
+	}); err != nil {
+		t.Fatalf("sendIngestMessage returned error: %v", err)
+	}
+
+	select {
+	case err := <-serverDone:
+		if err != nil {
+			t.Fatalf("server side flow failed: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("server side flow timed out")
+	}
+
+	content, err := os.ReadFile(filepath.Join(c.config.ResultsDir, "test-client_q1.csv"))
+	if err != nil {
+		t.Fatalf("while reading persisted q1 file: %v", err)
+	}
+	rows := strings.Split(strings.TrimSpace(string(content)), "\n")
+	if len(rows) != 2 {
+		t.Fatalf("unexpected row count in q1 file: got %d rows (%v)", len(rows), rows)
+	}
+	if rows[1] != "20,A,31,B,10.00" {
+		t.Fatalf("unexpected row in q1 file: %q", rows[1])
+	}
+}
+
+func TestWaitForAllQueryEOFs(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+	defer serverConn.Close()
+
+	c := &Client{
+		conn:     clientConn,
+		clientID: "test-client",
+		config: ClientConfig{
+			ResultsDir: t.TempDir(),
+		},
+	}
+	c.running.Store(true)
+	if err := c.initResultsCollector(); err != nil {
+		t.Fatalf("initResultsCollector failed: %v", err)
+	}
+	defer c.closeResultsCollector()
+
+	c.startIOLoops()
+	defer c.stopIO()
+
+	for queryID := uint8(1); queryID <= 5; queryID++ {
+		if err := external.WriteResultBatch(serverConn, []external.ResultBatchItem{
+			{QueryID: queryID, Status: "row"},
+			{QueryID: queryID, Status: queryEOFStatus},
+		}); err != nil {
+			t.Fatalf("WriteResultBatch failed for query %d: %v", queryID, err)
+		}
+
+		msgType, err := external.ReadMsgType(serverConn)
+		if err != nil {
+			t.Fatalf("while reading ResultBatchAck for query %d: %v", queryID, err)
+		}
+		if msgType != external.ResultBatchAck {
+			t.Fatalf("unexpected msg type after result batch: got=%d want=%d", msgType, external.ResultBatchAck)
+		}
+	}
 
 	done := make(chan error, 1)
 	go func() {
-		done <- c.receiveResults()
+		done <- c.waitForAllQueryEOFs()
 	}()
-
-	for queryID := uint8(1); queryID <= 5; queryID++ {
-		if err := external.WriteQueryResult(serverConn, queryID, "row"); err != nil {
-			t.Fatalf("WriteQueryResult row failed for query %d: %v", queryID, err)
-		}
-		if err := external.WriteQueryResult(serverConn, queryID, queryEOFStatus); err != nil {
-			t.Fatalf("WriteQueryResult EOF failed for query %d: %v", queryID, err)
-		}
-	}
 
 	select {
 	case err := <-done:
 		if err != nil {
-			t.Fatalf("receiveResults returned error: %v", err)
+			t.Fatalf("waitForAllQueryEOFs returned error: %v", err)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("receiveResults did not finish after receiving five query EOF markers")
+		t.Fatal("waitForAllQueryEOFs timed out")
 	}
 
 	for queryID := uint8(1); queryID <= 5; queryID++ {
@@ -64,49 +166,15 @@ func TestReceiveResultsCompletesAfterFiveQueryEOFs(t *testing.T) {
 	}
 }
 
-func TestExpectMsgTypeConsumesInterleavedQueryResult(t *testing.T) {
-	clientConn, serverConn := net.Pipe()
-	defer clientConn.Close()
-	defer serverConn.Close()
+func errUnexpectedMsgType(got, expected external.MsgType) error {
+	return &unexpectedMsgTypeError{got: got, expected: expected}
+}
 
-	c := &Client{
-		conn:     clientConn,
-		clientID: "test-client",
-		config: ClientConfig{
-			ResultsDir: t.TempDir(),
-		},
-	}
+type unexpectedMsgTypeError struct {
+	got      external.MsgType
+	expected external.MsgType
+}
 
-	done := make(chan error, 1)
-	go func() {
-		done <- c.expectMsgType(external.Ack)
-	}()
-
-	if err := external.WriteQueryResult(serverConn, 1, "row-before-ack"); err != nil {
-		t.Fatalf("WriteQueryResult failed: %v", err)
-	}
-	if err := external.WriteAck(serverConn); err != nil {
-		t.Fatalf("WriteAck failed: %v", err)
-	}
-
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("expectMsgType returned error: %v", err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("expectMsgType did not return after receiving Ack")
-	}
-
-	content, err := os.ReadFile(filepath.Join(c.config.ResultsDir, "test-client_q1.csv"))
-	if err != nil {
-		t.Fatalf("while reading persisted q1 file: %v", err)
-	}
-	rows := strings.Split(strings.TrimSpace(string(content)), "\n")
-	if len(rows) != 2 {
-		t.Fatalf("unexpected row count in q1 file: got %d rows (%v)", len(rows), rows)
-	}
-	if rows[1] != "row-before-ack" {
-		t.Fatalf("unexpected persisted row: got %q", rows[1])
-	}
+func (err *unexpectedMsgTypeError) Error() string {
+	return "unexpected message type: got " + strconv.Itoa(int(err.got)) + " expected " + strconv.Itoa(int(err.expected))
 }

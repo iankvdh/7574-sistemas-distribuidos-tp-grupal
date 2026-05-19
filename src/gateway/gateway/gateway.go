@@ -26,6 +26,7 @@ type Gateway struct {
 	allAccountsQueue     middleware.Middleware
 	finalQueue           middleware.Middleware
 	gatewayID            inner.GatewayID
+	resultBatchMaxBytes  int
 	listener             net.Listener
 	running              atomic.Bool
 	shutdownOnce         sync.Once
@@ -70,6 +71,7 @@ func NewGateway(config gatewayconfig.GatewayConfig) (*Gateway, error) {
 		allAccountsQueue:     allAccountsQueue,
 		finalQueue:           finalQueue,
 		gatewayID:            gatewayID,
+		resultBatchMaxBytes:  config.ResultBatchMaxBytes,
 		listener:             listener,
 		shutdownCh:           make(chan struct{}),
 	}
@@ -138,11 +140,22 @@ func (gateway *Gateway) consumeFinalQueue() {
 	}
 }
 
-func (gateway *Gateway) forwardFinalMessage(msg middleware.Message, ack func(), _ func()) {
+func (gateway *Gateway) forwardFinalMessage(msg middleware.Message, ack func(), nack func()) {
 	finalMsg, err := messagehandler.DeserializeFinalMessage(&msg)
 	if err != nil {
 		slog.Error("Invalid message from FINAL queue", "err", err)
 		ack()
+		return
+	}
+
+	if finalMsg.GatewayID != gateway.gatewayID {
+		slog.Warn(
+			"Received FINAL message addressed to another gateway",
+			"expected_gateway_id", gateway.gatewayID,
+			"received_gateway_id", finalMsg.GatewayID,
+			"client_id", finalMsg.ClientID,
+		)
+		nack()
 		return
 	}
 
@@ -153,28 +166,30 @@ func (gateway *Gateway) forwardFinalMessage(msg middleware.Message, ack func(), 
 		return
 	}
 
-	err = state.WriteWithLock(func(conn net.Conn) error {
-		return external.WriteQueryResult(conn, finalMsg.QueryID, finalMsg.Status)
+	enqueued := state.EnqueueResult(clientregistry.ResultDelivery{
+		QueryID: finalMsg.QueryID,
+		Status:  finalMsg.Status,
+		Ack:     ack,
+		Nack:    nack,
 	})
-	if err != nil {
-		slog.Warn("Failed forwarding FINAL message to client", "client_id", finalMsg.ClientID, "err", err)
-		gateway.registry.RemoveAndClose(finalMsg.ClientID)
+	if !enqueued {
+		slog.Warn("Dropping FINAL message because client session is closed", "client_id", finalMsg.ClientID)
 		ack()
-		return
 	}
-
-	ack()
 }
 
 func (gateway *Gateway) handleClientSession(state *clientregistry.ClientState, handler *messagehandler.MessageHandler) {
 	defer gateway.waiting_group.Done()
 	defer gateway.registry.Remove(handler.ClientID())
-	defer state.Conn.Close()
+	defer state.Close()
 
 	if err := gateway.handleHandshake(state, handler.ClientID()); err != nil {
 		slog.Debug("Client handshake failed", "client_id", handler.ClientID(), "err", err)
 		return
 	}
+
+	gateway.waiting_group.Add(1)
+	go gateway.handleClientResultOutput(state, handler.ClientID())
 
 	for {
 		msgType, err := external.ReadMsgType(state.Conn)
@@ -206,8 +221,145 @@ func (gateway *Gateway) handleClientSession(state *clientregistry.ClientState, h
 				slog.Debug("While handling accounts EOF", "client_id", handler.ClientID(), "err", err)
 				return
 			}
+		case external.ResultBatchAck:
+			if !state.NotifyResultBatchAck() {
+				return
+			}
 		default:
 			slog.Warn("Client sent unexpected message type", "client_id", handler.ClientID(), "msg_type", msgType)
+			return
+		}
+	}
+}
+
+func (gateway *Gateway) handleClientResultOutput(state *clientregistry.ClientState, clientID inner.ClientID) {
+	defer gateway.waiting_group.Done()
+
+	pendingDeliveries := make([]clientregistry.ResultDelivery, 0, 16)
+	pendingItems := make([]external.ResultBatchItem, 0, 16)
+	currentBatchBytes := external.ResultBatchHeaderBytes()
+
+	nackPending := func() {
+		for _, pending := range pendingDeliveries {
+			pending.Nack()
+		}
+		pendingDeliveries = pendingDeliveries[:0]
+		pendingItems = pendingItems[:0]
+		currentBatchBytes = external.ResultBatchHeaderBytes()
+	}
+
+	flush := func() error {
+		if len(pendingItems) == 0 {
+			return nil
+		}
+
+		err := state.WriteWithLock(func(conn net.Conn) error {
+			return external.WriteResultBatch(conn, pendingItems)
+		})
+		if err != nil {
+			nackPending()
+			return err
+		}
+
+		if !state.WaitForResultBatchAck() {
+			nackPending()
+			return errors.New("client session closed while waiting ResultBatchAck")
+		}
+
+		for _, pending := range pendingDeliveries {
+			pending.Ack()
+		}
+		pendingDeliveries = pendingDeliveries[:0]
+		pendingItems = pendingItems[:0]
+		currentBatchBytes = external.ResultBatchHeaderBytes()
+		return nil
+	}
+
+	appendDelivery := func(delivery clientregistry.ResultDelivery) error {
+		item := external.ResultBatchItem{
+			QueryID: delivery.QueryID,
+			Status:  delivery.Status,
+		}
+		itemBytes, err := external.ResultBatchItemSize(item)
+		if err != nil {
+			return err
+		}
+		if itemBytes+external.ResultBatchHeaderBytes() > gateway.resultBatchMaxBytes {
+			return fmt.Errorf("result row exceeds RESULT_BATCH_MAX_BYTES: row=%d max=%d", itemBytes+external.ResultBatchHeaderBytes(), gateway.resultBatchMaxBytes)
+		}
+
+		if len(pendingItems) > 0 && currentBatchBytes+itemBytes > gateway.resultBatchMaxBytes {
+			if err := flush(); err != nil {
+				return err
+			}
+		}
+
+		pendingDeliveries = append(pendingDeliveries, delivery)
+		pendingItems = append(pendingItems, item)
+		currentBatchBytes += itemBytes
+		return nil
+	}
+
+	for {
+		delivery, ok := state.DequeueResult()
+		if !ok {
+			nackPending()
+			return
+		}
+
+		if err := appendDelivery(delivery); err != nil {
+			slog.Error("While building result batch for client", "client_id", clientID, "err", err)
+			delivery.Nack()
+			nackPending()
+			gateway.registry.RemoveAndClose(clientID)
+			return
+		}
+
+		shouldFlush := delivery.Status == "EOF"
+		if !shouldFlush {
+			for currentBatchBytes < gateway.resultBatchMaxBytes {
+				nextDelivery, exists := state.TryDequeueResult()
+				if !exists {
+					select {
+					case <-state.Closed():
+						nackPending()
+						return
+					default:
+					}
+					break
+				}
+
+				if err := appendDelivery(nextDelivery); err != nil {
+					slog.Error("While building result batch for client", "client_id", clientID, "err", err)
+					nextDelivery.Nack()
+					nackPending()
+					gateway.registry.RemoveAndClose(clientID)
+					return
+				}
+
+				if nextDelivery.Status == "EOF" {
+					shouldFlush = true
+					break
+				}
+			}
+		}
+
+		if shouldFlush || currentBatchBytes >= gateway.resultBatchMaxBytes {
+			if err := flush(); err != nil {
+				if gateway.running.Load() {
+					slog.Warn("While flushing result batch to client", "client_id", clientID, "err", err)
+				}
+				gateway.registry.RemoveAndClose(clientID)
+				return
+			}
+			continue
+		}
+
+		if err := flush(); err != nil {
+			if gateway.running.Load() {
+				slog.Warn("While flushing result batch to client", "client_id", clientID, "err", err)
+			}
+			gateway.registry.RemoveAndClose(clientID)
 			return
 		}
 	}
@@ -242,7 +394,7 @@ func (gateway *Gateway) handleTransactionBatch(state *clientregistry.ClientState
 	}
 
 	return state.WriteWithLock(func(conn net.Conn) error {
-		return external.WriteAck(conn)
+		return external.WriteIngestAck(conn)
 	})
 }
 
@@ -256,7 +408,7 @@ func (gateway *Gateway) handleEndOfTransactions(state *clientregistry.ClientStat
 	}
 
 	return state.WriteWithLock(func(conn net.Conn) error {
-		return external.WriteAck(conn)
+		return external.WriteIngestAck(conn)
 	})
 }
 
@@ -275,7 +427,7 @@ func (gateway *Gateway) handleAccountBatch(state *clientregistry.ClientState, ha
 	}
 
 	return state.WriteWithLock(func(conn net.Conn) error {
-		return external.WriteAck(conn)
+		return external.WriteIngestAck(conn)
 	})
 }
 
@@ -289,7 +441,7 @@ func (gateway *Gateway) handleEndOfAccounts(state *clientregistry.ClientState, h
 	}
 
 	return state.WriteWithLock(func(conn net.Conn) error {
-		return external.WriteAck(conn)
+		return external.WriteIngestAck(conn)
 	})
 }
 

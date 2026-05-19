@@ -21,10 +21,17 @@ func TestQueryReadinessAndEOFByClient(t *testing.T) {
 		{BankID: 20, BankName: "Bank 20"},
 	}
 
-	if outputs := processor.AddTransactions(gatewayID, clientID, txs); len(outputs) != 0 {
-		t.Fatalf("expected no outputs while appending tx batch, got %d", len(outputs))
+	outputs := processor.AddTransactions(gatewayID, clientID, txs)
+	if len(outputs) != 1 {
+		t.Fatalf("expected one incremental Q1 row, got %d", len(outputs))
 	}
-	outputs := processor.MarkTransactionsEOF(gatewayID, clientID, 1)
+	if outputs[0].QueryID != queries.Query1ID {
+		t.Fatalf("expected incremental output for Q1, got query=%d", outputs[0].QueryID)
+	}
+	if outputs[0].Status != "20,A,31,B,10.00" {
+		t.Fatalf("unexpected Q1 incremental row: %q", outputs[0].Status)
+	}
+	outputs = processor.MarkTransactionsEOF(gatewayID, clientID, 1)
 
 	if hasQueryEOF(outputs, queries.Query1ID) == false ||
 		hasQueryEOF(outputs, queries.Query3ID) == false ||

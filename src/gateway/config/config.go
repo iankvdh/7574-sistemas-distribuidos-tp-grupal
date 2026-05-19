@@ -12,12 +12,14 @@ const (
 	defaultAllAccountsQueue     = "all_accounts"
 	defaultFinalQueue           = "final"
 	defaultMomPort              = 5672
+	defaultResultBatchMaxBytes  = 8192
 )
 
 type GatewayConfig struct {
 	AllTransactionsQueue string
 	AllAccountsQueue     string
 	FinalQueue           string
+	ResultBatchMaxBytes  int
 	GatewayID            int
 	ServerHost           string
 	ServerPort           string
@@ -62,11 +64,16 @@ func Load() (GatewayConfig, error) {
 	allTransactionsQueue := envOrDefault("ALL_TRANSACTIONS_QUEUE", defaultAllTransactionsQueue)
 	allAccountsQueue := envOrDefault("ALL_ACCOUNTS_QUEUE", defaultAllAccountsQueue)
 	finalQueue := envOrDefault("FINAL_QUEUE", defaultFinalQueue)
+	resultBatchMaxBytes, err := parsePositiveIntWithDefault("RESULT_BATCH_MAX_BYTES", defaultResultBatchMaxBytes)
+	if err != nil {
+		return GatewayConfig{}, err
+	}
 
 	return GatewayConfig{
 		AllTransactionsQueue: allTransactionsQueue,
 		AllAccountsQueue:     allAccountsQueue,
 		FinalQueue:           finalQueue,
+		ResultBatchMaxBytes:  resultBatchMaxBytes,
 		GatewayID:            gatewayID,
 		ServerHost:           serverHost,
 		ServerPort:           serverPort,
@@ -81,4 +88,17 @@ func envOrDefault(key, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func parsePositiveIntWithDefault(envName string, defaultValue int) (int, error) {
+	raw := os.Getenv(envName)
+	if raw == "" {
+		return defaultValue, nil
+	}
+
+	value, err := strconv.Atoi(raw)
+	if err != nil || value <= 0 {
+		return 0, errors.New(envName + " must be a positive integer")
+	}
+	return value, nil
 }

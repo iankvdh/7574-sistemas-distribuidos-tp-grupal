@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/account"
@@ -73,17 +74,15 @@ func (client *Client) sendAccounts() error {
 		}
 	}
 
-	if err := external.WriteEndOfAccounts(client.conn); err != nil {
-		return err
-	}
-	return client.expectMsgType(external.Ack)
+	return client.sendIngestMessage(func(conn net.Conn) error {
+		return external.WriteEndOfAccounts(conn)
+	})
 }
 
 func (client *Client) flushAccountBatch(batch []account.Account) error {
-	if err := external.WriteAccountBatch(client.conn, batch); err != nil {
-		return err
-	}
-	return client.expectMsgType(external.Ack)
+	return client.sendIngestMessage(func(conn net.Conn) error {
+		return external.WriteAccountBatch(conn, batch)
+	})
 }
 
 func accountSize(acc account.Account) int {
