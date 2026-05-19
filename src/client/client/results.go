@@ -2,7 +2,6 @@ package client
 
 import (
 	"fmt"
-	"time"
 
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/messageprotocol/external"
 )
@@ -18,15 +17,10 @@ func (client *Client) receiveResults() error {
 	if err := client.initResultsCollector(); err != nil {
 		return err
 	}
-	defer client.conn.SetReadDeadline(time.Time{})
 
 	for {
 		if client.hasAllQueryEOFs() {
 			return nil
-		}
-
-		if err := client.conn.SetReadDeadline(time.Now().Add(client.config.QueryWaitTimeout)); err != nil {
-			return err
 		}
 
 		msgType, err := external.ReadMsgType(client.conn)

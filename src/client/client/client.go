@@ -28,7 +28,6 @@ type ClientConfig struct {
 	BackoffBase        time.Duration
 	BackoffMax         time.Duration
 	ConnectTimeout     time.Duration
-	QueryWaitTimeout   time.Duration
 }
 
 type Client struct {

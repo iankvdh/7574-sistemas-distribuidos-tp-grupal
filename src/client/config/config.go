@@ -14,7 +14,6 @@ const (
 	defaultBackoffBaseMs      = 200
 	defaultBackoffMaxMs       = 3000
 	defaultConnectTimeoutMs   = 800
-	defaultQueryTimeoutMs     = 30000
 	defaultBatchMaxBytes      = 8192
 	defaultResultsDir         = "results"
 )
@@ -70,10 +69,6 @@ func Load() (client.ClientConfig, error) {
 	if err != nil {
 		return client.ClientConfig{}, err
 	}
-	queryTimeoutMs, err := parsePositiveIntWithDefault("QUERY_WAIT_TIMEOUT_MS", defaultQueryTimeoutMs)
-	if err != nil {
-		return client.ClientConfig{}, err
-	}
 
 	return client.ClientConfig{
 		GatewayPrefix:      gatewayPrefix,
@@ -87,7 +82,6 @@ func Load() (client.ClientConfig, error) {
 		BackoffBase:        time.Duration(backoffBaseMs) * time.Millisecond,
 		BackoffMax:         time.Duration(backoffMaxMs) * time.Millisecond,
 		ConnectTimeout:     time.Duration(connectTimeoutMs) * time.Millisecond,
-		QueryWaitTimeout:   time.Duration(queryTimeoutMs) * time.Millisecond,
 	}, nil
 }
 
