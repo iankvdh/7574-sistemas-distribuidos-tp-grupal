@@ -21,8 +21,7 @@ func TestReceiveResultsCompletesAfterFiveQueryEOFs(t *testing.T) {
 		conn:     clientConn,
 		clientID: "test-client",
 		config: ClientConfig{
-			QueryWaitTimeout: time.Second,
-			ResultsDir:       t.TempDir(),
+			ResultsDir: t.TempDir(),
 		},
 	}
 
