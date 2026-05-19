@@ -15,7 +15,7 @@ func TestQueryReadinessAndEOFByClient(t *testing.T) {
 	clientID := inner.ClientID("client-a")
 
 	txs := []transaction.Transaction{
-		{Date: 20220901, FromBank: 20, FromAccount: "A", ToBank: 31, ToAccount: "B", AmountPaidCents: 1000, PaymentCurrency: "US Dollar", PaymentFormat: "Wire"},
+		{Date: 20220901, FromBank: 20, FromAccount: "A", ToBank: 31, ToAccount: "B", AmountPaid: 10.00, PaymentCurrency: "US Dollar", PaymentFormat: "Wire"},
 	}
 	accs := []account.Account{
 		{BankID: 20, BankName: "Bank 20"},
@@ -54,10 +54,10 @@ func TestClientIsolation(t *testing.T) {
 	clientB := inner.ClientID("same-client-id")
 
 	processor.AddTransactions(gatewayA, clientA, []transaction.Transaction{
-		{Date: 20220901, FromBank: 1, FromAccount: "A1", ToBank: 2, ToAccount: "B1", AmountPaidCents: 4999, PaymentCurrency: "US Dollar", PaymentFormat: "Wire"},
+		{Date: 20220901, FromBank: 1, FromAccount: "A1", ToBank: 2, ToAccount: "B1", AmountPaid: 49.99, PaymentCurrency: "US Dollar", PaymentFormat: "Wire"},
 	})
 	processor.AddTransactions(gatewayB, clientB, []transaction.Transaction{
-		{Date: 20220901, FromBank: 9, FromAccount: "X1", ToBank: 8, ToAccount: "Y1", AmountPaidCents: 10000, PaymentCurrency: "US Dollar", PaymentFormat: "Wire"},
+		{Date: 20220901, FromBank: 9, FromAccount: "X1", ToBank: 8, ToAccount: "Y1", AmountPaid: 100.00, PaymentCurrency: "US Dollar", PaymentFormat: "Wire"},
 	})
 
 	outputsA := processor.MarkTransactionsEOF(gatewayA, clientA, 1)

@@ -50,7 +50,7 @@ var toUSD = map[string]float64{
 func Query1Rows(transactions []transaction.Transaction) []string {
 	rows := make([]string, 0)
 	for _, tx := range transactions {
-		if tx.PaymentCurrency != usdCurrency || tx.AmountPaidCents >= 5000 {
+		if tx.PaymentCurrency != usdCurrency || tx.AmountPaid >= 50.0 {
 			continue
 		}
 
@@ -59,7 +59,7 @@ func Query1Rows(transactions []transaction.Transaction) []string {
 			tx.FromAccount,
 			strconv.FormatUint(uint64(tx.ToBank), 10),
 			tx.ToAccount,
-			formatAmount(tx.AmountPaidCents),
+			formatAmount(tx.AmountPaid),
 		}
 		rows = append(rows, strings.Join(row, ","))
 	}
@@ -69,7 +69,7 @@ func Query1Rows(transactions []transaction.Transaction) []string {
 func Query2Rows(transactions []transaction.Transaction, accounts []account.Account) []string {
 	type bankMax struct {
 		Account string
-		Amount  uint64
+		Amount  float64
 	}
 
 	bankNameByID := make(map[uint32]string)
@@ -89,10 +89,10 @@ func Query2Rows(transactions []transaction.Transaction, accounts []account.Accou
 		}
 
 		current, exists := maxByBank[tx.FromBank]
-		if !exists || tx.AmountPaidCents > current.Amount {
+		if !exists || tx.AmountPaid > current.Amount {
 			maxByBank[tx.FromBank] = bankMax{
 				Account: tx.FromAccount,
-				Amount:  tx.AmountPaidCents,
+				Amount:  tx.AmountPaid,
 			}
 		}
 	}
@@ -124,7 +124,7 @@ func Query2Rows(transactions []transaction.Transaction, accounts []account.Accou
 
 func Query3Rows(transactions []transaction.Transaction) []string {
 	type agg struct {
-		Sum   uint64
+		Sum   float64
 		Count uint64
 	}
 
@@ -134,7 +134,7 @@ func Query3Rows(transactions []transaction.Transaction) []string {
 			continue
 		}
 		current := avgByPaymentFormat[tx.PaymentFormat]
-		current.Sum += tx.AmountPaidCents
+		current.Sum += tx.AmountPaid
 		current.Count++
 		avgByPaymentFormat[tx.PaymentFormat] = current
 	}
@@ -150,9 +150,9 @@ func Query3Rows(transactions []transaction.Transaction) []string {
 			continue
 		}
 
-		avgCents := float64(avg.Sum) / float64(avg.Count)
-		threshold := avgCents * 0.01
-		if float64(tx.AmountPaidCents) >= threshold {
+		avgAmount := avg.Sum / float64(avg.Count)
+		threshold := avgAmount * 0.01
+		if tx.AmountPaid >= threshold {
 			continue
 		}
 
@@ -160,7 +160,7 @@ func Query3Rows(transactions []transaction.Transaction) []string {
 			strconv.FormatUint(uint64(tx.FromBank), 10),
 			tx.FromAccount,
 			tx.PaymentFormat,
-			formatAmount(tx.AmountPaidCents),
+			formatAmount(tx.AmountPaid),
 		}
 		rows = append(rows, strings.Join(row, ","))
 	}
@@ -253,7 +253,7 @@ func Query5Rows(transactions []transaction.Transaction) []string {
 			continue
 		}
 
-		amountUSD := (float64(tx.AmountPaidCents) / 100.0) * rate
+		amountUSD := tx.AmountPaid * rate
 		if amountUSD < 1.0 {
 			count++
 		}
@@ -262,8 +262,6 @@ func Query5Rows(transactions []transaction.Transaction) []string {
 	return []string{strconv.Itoa(count)}
 }
 
-func formatAmount(amountCents uint64) string {
-	units := amountCents / 100
-	decimals := amountCents % 100
-	return fmt.Sprintf("%d.%02d", units, decimals)
+func formatAmount(amount float64) string {
+	return fmt.Sprintf("%.2f", amount)
 }

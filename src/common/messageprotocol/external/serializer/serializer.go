@@ -3,6 +3,7 @@ package serializer
 import (
 	"encoding/binary"
 	"errors"
+	"math"
 )
 
 const (
@@ -50,6 +51,14 @@ func SerializeUint64(value uint64) []byte {
 
 func DeserializeUint64(bytes []byte) uint64 {
 	return binary.BigEndian.Uint64(bytes)
+}
+
+func SerializeFloat64(value float64) []byte {
+	return SerializeUint64(math.Float64bits(value))
+}
+
+func DeserializeFloat64(bytes []byte) float64 {
+	return math.Float64frombits(DeserializeUint64(bytes))
 }
 
 // SerializeShortString encodes a string prefixed by a uint8 length (0..255).

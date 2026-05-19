@@ -33,7 +33,7 @@ func serializeTransaction(tx *transaction.Transaction) ([]byte, error) {
 	buf = append(buf, fromAccount...)
 	buf = append(buf, serializer.SerializeUint32(tx.ToBank)...)
 	buf = append(buf, toAccount...)
-	buf = append(buf, serializer.SerializeUint64(tx.AmountPaidCents)...)
+	buf = append(buf, serializer.SerializeFloat64(tx.AmountPaid)...)
 	buf = append(buf, currency...)
 	buf = append(buf, format...)
 	return buf, nil
@@ -79,7 +79,7 @@ func deserializeTransaction(reader io.Reader) (*transaction.Transaction, error) 
 		FromAccount:     fromAccount,
 		ToBank:          serializer.DeserializeUint32(toBankBuf),
 		ToAccount:       toAccount,
-		AmountPaidCents: serializer.DeserializeUint64(amountBuf),
+		AmountPaid:      serializer.DeserializeFloat64(amountBuf),
 		PaymentCurrency: currency,
 		PaymentFormat:   format,
 	}, nil

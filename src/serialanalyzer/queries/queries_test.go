@@ -10,9 +10,9 @@ import (
 
 func TestQuery1Rows(t *testing.T) {
 	txs := []transaction.Transaction{
-		{FromBank: 10, FromAccount: "A1", ToBank: 20, ToAccount: "B1", AmountPaidCents: 4999, PaymentCurrency: "US Dollar"},
-		{FromBank: 11, FromAccount: "A2", ToBank: 21, ToAccount: "B2", AmountPaidCents: 5000, PaymentCurrency: "US Dollar"},
-		{FromBank: 12, FromAccount: "A3", ToBank: 22, ToAccount: "B3", AmountPaidCents: 1000, PaymentCurrency: "Euro"},
+		{FromBank: 10, FromAccount: "A1", ToBank: 20, ToAccount: "B1", AmountPaid: 49.99, PaymentCurrency: "US Dollar"},
+		{FromBank: 11, FromAccount: "A2", ToBank: 21, ToAccount: "B2", AmountPaid: 50.00, PaymentCurrency: "US Dollar"},
+		{FromBank: 12, FromAccount: "A3", ToBank: 22, ToAccount: "B3", AmountPaid: 10.00, PaymentCurrency: "Euro"},
 	}
 
 	got := Query1Rows(txs)
@@ -25,9 +25,9 @@ func TestQuery1Rows(t *testing.T) {
 
 func TestQuery2Rows(t *testing.T) {
 	txs := []transaction.Transaction{
-		{FromBank: 20, FromAccount: "A1", AmountPaidCents: 1000, PaymentCurrency: "US Dollar"},
-		{FromBank: 20, FromAccount: "A2", AmountPaidCents: 3000, PaymentCurrency: "US Dollar"},
-		{FromBank: 31, FromAccount: "X1", AmountPaidCents: 2500, PaymentCurrency: "US Dollar"},
+		{FromBank: 20, FromAccount: "A1", AmountPaid: 10.00, PaymentCurrency: "US Dollar"},
+		{FromBank: 20, FromAccount: "A2", AmountPaid: 30.00, PaymentCurrency: "US Dollar"},
+		{FromBank: 31, FromAccount: "X1", AmountPaid: 25.00, PaymentCurrency: "US Dollar"},
 	}
 	accs := []account.Account{
 		{BankID: 20, BankName: "Bank 20"},
@@ -46,10 +46,10 @@ func TestQuery2Rows(t *testing.T) {
 
 func TestQuery3Rows(t *testing.T) {
 	txs := []transaction.Transaction{
-		{Date: 20220901, FromBank: 1, FromAccount: "B1", AmountPaidCents: 10000, PaymentCurrency: "US Dollar", PaymentFormat: "Wire"},
-		{Date: 20220902, FromBank: 1, FromAccount: "B2", AmountPaidCents: 30000, PaymentCurrency: "US Dollar", PaymentFormat: "Wire"},
-		{Date: 20220906, FromBank: 9, FromAccount: "X1", AmountPaidCents: 199, PaymentCurrency: "US Dollar", PaymentFormat: "Wire"},
-		{Date: 20220907, FromBank: 9, FromAccount: "X2", AmountPaidCents: 200, PaymentCurrency: "US Dollar", PaymentFormat: "Wire"},
+		{Date: 20220901, FromBank: 1, FromAccount: "B1", AmountPaid: 100.00, PaymentCurrency: "US Dollar", PaymentFormat: "Wire"},
+		{Date: 20220902, FromBank: 1, FromAccount: "B2", AmountPaid: 300.00, PaymentCurrency: "US Dollar", PaymentFormat: "Wire"},
+		{Date: 20220906, FromBank: 9, FromAccount: "X1", AmountPaid: 1.99, PaymentCurrency: "US Dollar", PaymentFormat: "Wire"},
+		{Date: 20220907, FromBank: 9, FromAccount: "X2", AmountPaid: 2.00, PaymentCurrency: "US Dollar", PaymentFormat: "Wire"},
 	}
 
 	got := Query3Rows(txs)
@@ -87,11 +87,11 @@ func TestQuery4Rows(t *testing.T) {
 
 func TestQuery5Rows(t *testing.T) {
 	txs := []transaction.Transaction{
-		{Date: 20220901, AmountPaidCents: 50, PaymentCurrency: "US Dollar", PaymentFormat: "Wire"},
-		{Date: 20220902, AmountPaidCents: 1000, PaymentCurrency: "Yen", PaymentFormat: "ACH"},
-		{Date: 20220902, AmountPaidCents: 1000, PaymentCurrency: "Euro", PaymentFormat: "ACH"},
-		{Date: 20220910, AmountPaidCents: 50, PaymentCurrency: "US Dollar", PaymentFormat: "Wire"},
-		{Date: 20220901, AmountPaidCents: 50, PaymentCurrency: "US Dollar", PaymentFormat: "Cheque"},
+		{Date: 20220901, AmountPaid: 0.50, PaymentCurrency: "US Dollar", PaymentFormat: "Wire"},
+		{Date: 20220902, AmountPaid: 10.00, PaymentCurrency: "Yen", PaymentFormat: "ACH"},
+		{Date: 20220902, AmountPaid: 10.00, PaymentCurrency: "Euro", PaymentFormat: "ACH"},
+		{Date: 20220910, AmountPaid: 0.50, PaymentCurrency: "US Dollar", PaymentFormat: "Wire"},
+		{Date: 20220901, AmountPaid: 0.50, PaymentCurrency: "US Dollar", PaymentFormat: "Cheque"},
 	}
 
 	got := Query5Rows(txs)

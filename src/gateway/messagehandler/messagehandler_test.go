@@ -20,7 +20,7 @@ func TestSerializeBatchesToInnerEnvelope(t *testing.T) {
 		FromAccount:     "A",
 		ToBank:          2,
 		ToAccount:       "B",
-		AmountPaidCents: 1234,
+		AmountPaid:      12.34,
 		PaymentCurrency: "USD",
 		PaymentFormat:   "WIRE",
 	}}
@@ -143,10 +143,10 @@ func TestDeserializeFinalMessageMalformed(t *testing.T) {
 func TestEOFTotalsAccumulateAcrossBatches(t *testing.T) {
 	handler := NewMessageHandler("gw-acc", "client-acc")
 
-	txBatch1 := []transaction.Transaction{{Date: 20220101, FromBank: 1, FromAccount: "a", ToBank: 2, ToAccount: "b", AmountPaidCents: 1, PaymentCurrency: "USD", PaymentFormat: "WIRE"}}
+	txBatch1 := []transaction.Transaction{{Date: 20220101, FromBank: 1, FromAccount: "a", ToBank: 2, ToAccount: "b", AmountPaid: 0.01, PaymentCurrency: "USD", PaymentFormat: "WIRE"}}
 	txBatch2 := []transaction.Transaction{
-		{Date: 20220102, FromBank: 1, FromAccount: "a", ToBank: 2, ToAccount: "c", AmountPaidCents: 2, PaymentCurrency: "USD", PaymentFormat: "ACH"},
-		{Date: 20220103, FromBank: 1, FromAccount: "a", ToBank: 2, ToAccount: "d", AmountPaidCents: 3, PaymentCurrency: "USD", PaymentFormat: "ACH"},
+		{Date: 20220102, FromBank: 1, FromAccount: "a", ToBank: 2, ToAccount: "c", AmountPaid: 0.02, PaymentCurrency: "USD", PaymentFormat: "ACH"},
+		{Date: 20220103, FromBank: 1, FromAccount: "a", ToBank: 2, ToAccount: "d", AmountPaid: 0.03, PaymentCurrency: "USD", PaymentFormat: "ACH"},
 	}
 
 	if _, err := handler.SerializeTransactionBatchMessage(txBatch1); err != nil {

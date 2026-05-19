@@ -36,9 +36,7 @@ const (
 
 // Parsing constants.
 const (
-	dateStrLength      = 10
-	centsDecimalPlaces = 2
-	centsPerUnit       = 100
+	dateStrLength = 10
 )
 
 func parseTransactionRow(row []string) (transaction.Transaction, error) {
@@ -54,7 +52,7 @@ func parseTransactionRow(row []string) (transaction.Transaction, error) {
 	if err != nil {
 		return transaction.Transaction{}, fmt.Errorf("to bank: %w", err)
 	}
-	amountCents, err := parseAmountCents(row[txColAmountPaid])
+	amountPaid, err := parseAmount(row[txColAmountPaid])
 	if err != nil {
 		return transaction.Transaction{}, fmt.Errorf("amount paid: %w", err)
 	}
@@ -65,7 +63,7 @@ func parseTransactionRow(row []string) (transaction.Transaction, error) {
 		FromAccount:     row[txColFromAccount],
 		ToBank:          toBank,
 		ToAccount:       row[txColToAccount],
-		AmountPaidCents: amountCents,
+		AmountPaid:      amountPaid,
 		PaymentCurrency: row[txColPaymentCurrency],
 		PaymentFormat:   row[txColPaymentFormat],
 	}, nil
@@ -112,31 +110,11 @@ func parseDate(timestamp string) (uint32, error) {
 	return uint32(year*10000 + month*100 + day), nil
 }
 
-// parseAmountCents converts a decimal string like "6794.63" into 679463 cents
-// without going through float64.
-func parseAmountCents(amount string) (uint64, error) {
+func parseAmount(amount string) (float64, error) {
 	if amount == "" {
 		return 0, errors.New("empty amount")
 	}
-	parts := strings.SplitN(amount, ".", 2)
-	whole, err := strconv.ParseUint(parts[0], 10, 64)
-	if err != nil {
-		return 0, err
-	}
-	var frac uint64
-	if len(parts) == 2 {
-		fracStr := parts[1]
-		if len(fracStr) >= centsDecimalPlaces {
-			fracStr = fracStr[:centsDecimalPlaces]
-		} else {
-			fracStr = fracStr + strings.Repeat("0", centsDecimalPlaces-len(fracStr))
-		}
-		frac, err = strconv.ParseUint(fracStr, 10, 64)
-		if err != nil {
-			return 0, err
-		}
-	}
-	return whole*centsPerUnit + frac, nil
+	return strconv.ParseFloat(strings.TrimSpace(amount), 64)
 }
 
 func parseBankID(s string) (uint32, error) {

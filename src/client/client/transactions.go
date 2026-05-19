@@ -92,7 +92,7 @@ func transactionSize(tx transaction.Transaction) int {
 		1 + len(tx.FromAccount) +
 		4 + // ToBank
 		1 + len(tx.ToAccount) +
-		8 + // AmountPaidCents
+		8 + // AmountPaid (float64)
 		1 + len(tx.PaymentCurrency) +
 		1 + len(tx.PaymentFormat)
 }

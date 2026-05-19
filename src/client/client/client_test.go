@@ -59,7 +59,7 @@ func TestTransactionSize(t *testing.T) {
 		FromAccount:     "abc",
 		ToBank:          2,
 		ToAccount:       "xyz",
-		AmountPaidCents: 100,
+		AmountPaid:      1.00,
 		PaymentCurrency: "USD",
 		PaymentFormat:   "WIRE",
 	}
