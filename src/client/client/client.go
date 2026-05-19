@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -30,6 +31,11 @@ type ClientConfig struct {
 	ConnectTimeout     time.Duration
 }
 
+type writeRequest struct {
+	write func(conn net.Conn) error
+	done  chan error
+}
+
 type Client struct {
 	conn         net.Conn
 	clientID     string
@@ -38,6 +44,16 @@ type Client struct {
 	gatewayAddrs []string
 	rand         *rand.Rand
 	results      *resultsCollector
+
+	writeRequests chan writeRequest
+	ingestAckCh   chan struct{}
+	allQueryEOFCh chan struct{}
+	ioStopCh      chan struct{}
+	ioErrCh       chan struct{}
+
+	ioStopOnce sync.Once
+	ioErrMu    sync.Mutex
+	ioErr      error
 }
 
 func NewClient(config ClientConfig) (*Client, error) {
@@ -171,8 +187,8 @@ func computeBackoffCap(base, max time.Duration, attempt int) time.Duration {
 }
 
 func (client *Client) Run() error {
-	defer client.conn.Close()
 	go client.handleSignals()
+	defer client.stopIO()
 
 	if err := client.initResultsCollector(); err != nil {
 		return err
@@ -182,6 +198,8 @@ func (client *Client) Run() error {
 			slog.Warn("While closing result files", "client_id", client.clientID, "err", err)
 		}
 	}()
+
+	client.startIOLoops()
 
 	if err := client.sendTransactions(); err != nil {
 		if client.running.Load() {
@@ -197,7 +215,7 @@ func (client *Client) Run() error {
 		return nil
 	}
 
-	if err := client.receiveResults(); err != nil {
+	if err := client.waitForAllQueryEOFs(); err != nil {
 		if client.running.Load() {
 			return err
 		}
@@ -207,34 +225,181 @@ func (client *Client) Run() error {
 	return nil
 }
 
+func (client *Client) startIOLoops() {
+	client.writeRequests = make(chan writeRequest)
+	client.ingestAckCh = make(chan struct{}, 1)
+	client.allQueryEOFCh = make(chan struct{})
+	client.ioStopCh = make(chan struct{})
+	client.ioErrCh = make(chan struct{})
+
+	go client.writerLoop()
+	go client.readerLoop()
+}
+
+func (client *Client) writerLoop() {
+	for {
+		select {
+		case <-client.ioStopCh:
+			return
+		case request := <-client.writeRequests:
+			err := request.write(client.conn)
+			request.done <- err
+			if err != nil {
+				client.setIOError(err)
+				return
+			}
+		}
+	}
+}
+
+func (client *Client) readerLoop() {
+	for {
+		msgType, err := external.ReadMsgType(client.conn)
+		if err != nil {
+			client.setIOError(err)
+			return
+		}
+
+		switch msgType {
+		case external.IngestAck:
+			client.pushIngestAck()
+		case external.ResultBatch:
+			items, err := external.ReadResultBatch(client.conn)
+			if err != nil {
+				client.setIOError(err)
+				return
+			}
+
+			if err := client.consumeResultBatch(items); err != nil {
+				client.setIOError(err)
+				return
+			}
+
+			if err := client.sendWrite(func(conn net.Conn) error {
+				return external.WriteResultBatchAck(conn)
+			}); err != nil {
+				client.setIOError(err)
+				return
+			}
+		default:
+			client.setIOError(fmt.Errorf("unexpected message type from gateway: %d", msgType))
+			return
+		}
+	}
+}
+
+func (client *Client) sendWrite(writeAction func(conn net.Conn) error) error {
+	request := writeRequest{
+		write: writeAction,
+		done:  make(chan error, 1),
+	}
+
+	select {
+	case <-client.ioStopCh:
+		return client.ioErrorOrStopped()
+	case <-client.ioErrCh:
+		return client.ioErrorOrStopped()
+	case client.writeRequests <- request:
+	}
+
+	select {
+	case err := <-request.done:
+		return err
+	case <-client.ioErrCh:
+		return client.ioErrorOrStopped()
+	case <-client.ioStopCh:
+		return client.ioErrorOrStopped()
+	}
+}
+
+func (client *Client) sendIngestMessage(writeAction func(conn net.Conn) error) error {
+	if err := client.sendWrite(writeAction); err != nil {
+		return err
+	}
+	return client.waitForIngestAck()
+}
+
+func (client *Client) waitForIngestAck() error {
+	select {
+	case <-client.ingestAckCh:
+		return nil
+	case <-client.ioErrCh:
+		return client.ioErrorOrStopped()
+	case <-client.ioStopCh:
+		return client.ioErrorOrStopped()
+	}
+}
+
+func (client *Client) waitForAllQueryEOFs() error {
+	select {
+	case <-client.allQueryEOFCh:
+		return nil
+	case <-client.ioErrCh:
+		return client.ioErrorOrStopped()
+	case <-client.ioStopCh:
+		return client.ioErrorOrStopped()
+	}
+}
+
+func (client *Client) pushIngestAck() {
+	select {
+	case client.ingestAckCh <- struct{}{}:
+	default:
+		client.setIOError(errors.New("received unexpected extra ingest ack"))
+	}
+}
+
+func (client *Client) signalAllQueryEOFs() {
+	select {
+	case <-client.allQueryEOFCh:
+	default:
+		close(client.allQueryEOFCh)
+	}
+}
+
+func (client *Client) setIOError(err error) {
+	if err == nil {
+		return
+	}
+
+	client.ioErrMu.Lock()
+	if client.ioErr == nil {
+		client.ioErr = err
+		close(client.ioErrCh)
+		client.ioErrMu.Unlock()
+		client.stopIO()
+		return
+	}
+	client.ioErrMu.Unlock()
+}
+
+func (client *Client) ioErrorOrStopped() error {
+	client.ioErrMu.Lock()
+	defer client.ioErrMu.Unlock()
+	if client.ioErr != nil {
+		return client.ioErr
+	}
+	return errors.New("client stopped")
+}
+
+func (client *Client) stopIO() {
+	client.ioStopOnce.Do(func() {
+		if client.ioStopCh != nil {
+			close(client.ioStopCh)
+		}
+		if client.conn != nil {
+			_ = client.conn.Close()
+		}
+	})
+}
+
 func (client *Client) handleSignals() {
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
 	defer signal.Stop(signals)
+
 	<-signals
 	slog.Info("SIGTERM signal received")
 	client.running.Store(false)
-	_ = client.conn.Close()
-}
-
-func (client *Client) expectMsgType(expectedMsgType external.MsgType) error {
-	for {
-		msgType, err := external.ReadMsgType(client.conn)
-		if err != nil {
-			slog.Debug("Error while reading message type", "err", err)
-			return err
-		}
-		if msgType == expectedMsgType {
-			return nil
-		}
-
-		if msgType == external.QueryResult {
-			if err := client.consumeQueryResultFromConn(); err != nil {
-				return err
-			}
-			continue
-		}
-
-		return fmt.Errorf("unexpected message type: got %d expected %d", msgType, expectedMsgType)
-	}
+	client.stopIO()
 }

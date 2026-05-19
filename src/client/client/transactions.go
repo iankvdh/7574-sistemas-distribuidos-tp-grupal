@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/messageprotocol/external"
@@ -73,17 +74,15 @@ func (client *Client) sendTransactions() error {
 		}
 	}
 
-	if err := external.WriteEndOfTransactions(client.conn); err != nil {
-		return err
-	}
-	return client.expectMsgType(external.Ack)
+	return client.sendIngestMessage(func(conn net.Conn) error {
+		return external.WriteEndOfTransactions(conn)
+	})
 }
 
 func (client *Client) flushTransactionBatch(batch []transaction.Transaction) error {
-	if err := external.WriteTransactionBatch(client.conn, batch); err != nil {
-		return err
-	}
-	return client.expectMsgType(external.Ack)
+	return client.sendIngestMessage(func(conn net.Conn) error {
+		return external.WriteTransactionBatch(conn, batch)
+	})
 }
 
 func transactionSize(tx transaction.Transaction) int {

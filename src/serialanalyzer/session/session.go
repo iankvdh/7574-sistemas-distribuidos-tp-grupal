@@ -40,16 +40,20 @@ func NewProcessor() *Processor {
 
 func (processor *Processor) AddTransactions(gatewayID inner.GatewayID, clientID inner.ClientID, batch []transaction.Transaction) []QueryOutput {
 	state := processor.getOrCreateState(gatewayID, clientID)
-	if state.completed {
+	if state.completed || state.txEOF {
 		return nil
 	}
 	state.transactions = append(state.transactions, batch...)
-	return nil
+
+	if state.emittedEOF[queries.Query1ID] {
+		return nil
+	}
+	return emitQueryRows(queries.Query1ID, queries.Query1Rows(batch))
 }
 
 func (processor *Processor) AddAccounts(gatewayID inner.GatewayID, clientID inner.ClientID, batch []account.Account) []QueryOutput {
 	state := processor.getOrCreateState(gatewayID, clientID)
-	if state.completed {
+	if state.completed || state.accEOF {
 		return nil
 	}
 	state.accounts = append(state.accounts, batch...)
@@ -94,7 +98,7 @@ func (processor *Processor) emitReadyQueries(state *clientState) []QueryOutput {
 	outputs := make([]QueryOutput, 0)
 
 	if state.txEOF {
-		outputs = append(outputs, emitQuery(state, queries.Query1ID, queries.Query1Rows(state.transactions))...)
+		outputs = append(outputs, emitQueryEOF(state, queries.Query1ID)...)
 		outputs = append(outputs, emitQuery(state, queries.Query3ID, queries.Query3Rows(state.transactions))...)
 		outputs = append(outputs, emitQuery(state, queries.Query4ID, queries.Query4Rows(state.transactions))...)
 		outputs = append(outputs, emitQuery(state, queries.Query5ID, queries.Query5Rows(state.transactions))...)
@@ -116,16 +120,30 @@ func (processor *Processor) emitReadyQueries(state *clientState) []QueryOutput {
 	return outputs
 }
 
+func emitQueryRows(queryID uint8, rows []string) []QueryOutput {
+	result := make([]QueryOutput, 0, len(rows))
+	for _, row := range rows {
+		result = append(result, QueryOutput{QueryID: queryID, Status: row})
+	}
+	return result
+}
+
 func emitQuery(state *clientState, queryID uint8, rows []string) []QueryOutput {
 	if state.emittedEOF[queryID] {
 		return nil
 	}
 
-	result := make([]QueryOutput, 0, len(rows)+1)
-	for _, row := range rows {
-		result = append(result, QueryOutput{QueryID: queryID, Status: row})
-	}
+	result := emitQueryRows(queryID, rows)
 	result = append(result, QueryOutput{QueryID: queryID, Status: EOFStatus})
+	state.emittedEOF[queryID] = true
+	return result
+}
+
+func emitQueryEOF(state *clientState, queryID uint8) []QueryOutput {
+	if state.emittedEOF[queryID] {
+		return nil
+	}
+	result := []QueryOutput{{QueryID: queryID, Status: EOFStatus}}
 	state.emittedEOF[queryID] = true
 	return result
 }

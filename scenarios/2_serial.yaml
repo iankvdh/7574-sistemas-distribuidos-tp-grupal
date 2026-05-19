@@ -65,6 +65,7 @@ services:
       - ALL_ACCOUNTS_QUEUE=all_accounts
       - FINAL_QUEUE=final
       - GATEWAY_ID=1
+      - RESULT_BATCH_MAX_BYTES=8192
       - MOM_HOST=rabbitmq
       - MOM_PORT=5672
       - SERVER_HOST=0.0.0.0
@@ -82,6 +83,7 @@ services:
       - ALL_ACCOUNTS_QUEUE=all_accounts
       - FINAL_QUEUE=final
       - GATEWAY_ID=2
+      - RESULT_BATCH_MAX_BYTES=8192
       - MOM_HOST=rabbitmq
       - MOM_PORT=5672
       - SERVER_HOST=0.0.0.0
