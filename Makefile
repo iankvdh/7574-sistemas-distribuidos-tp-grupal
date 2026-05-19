@@ -5,12 +5,7 @@ COMPOSE_PROJECT_NAME := tp_grupal
 compose = COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT_NAME) docker compose -f $(COMPOSE_FILE)
 
 up:
-	@replicas=$$(awk -F= '/- GATEWAY_AMOUNT=/{gsub(/ /, "", $$2); print $$2; exit}' $(COMPOSE_FILE)); \
-	if [ -z "$$replicas" ]; then \
-		echo "No se encontró GATEWAY_AMOUNT en $(COMPOSE_FILE)"; \
-		exit 1; \
-	fi; \
-	COMPOSE_HTTP_TIMEOUT=300 COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT_NAME) docker compose -f $(COMPOSE_FILE) up --build --remove-orphans --detach --scale gateway=$$replicas
+	@COMPOSE_HTTP_TIMEOUT=300 COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT_NAME) docker compose -f $(COMPOSE_FILE) up --build --remove-orphans --detach
 	@$(compose) logs --follow
 .PHONY: up
 

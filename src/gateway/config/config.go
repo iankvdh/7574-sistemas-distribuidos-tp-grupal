@@ -18,6 +18,7 @@ type GatewayConfig struct {
 	AllTransactionsQueue string
 	AllAccountsQueue     string
 	FinalQueue           string
+	GatewayID            int
 	ServerHost           string
 	ServerPort           string
 	MomHost              string
@@ -33,6 +34,15 @@ func Load() (GatewayConfig, error) {
 	serverPort := os.Getenv("SERVER_PORT")
 	if serverPort == "" {
 		return GatewayConfig{}, errors.New("SERVER_PORT environment variable is required")
+	}
+
+	rawGatewayID := os.Getenv("GATEWAY_ID")
+	if rawGatewayID == "" {
+		return GatewayConfig{}, errors.New("GATEWAY_ID environment variable is required")
+	}
+	gatewayID, err := strconv.Atoi(rawGatewayID)
+	if err != nil || gatewayID <= 0 {
+		return GatewayConfig{}, errors.New("GATEWAY_ID must be a positive integer")
 	}
 
 	momHost := os.Getenv("MOM_HOST")
@@ -57,6 +67,7 @@ func Load() (GatewayConfig, error) {
 		AllTransactionsQueue: allTransactionsQueue,
 		AllAccountsQueue:     allAccountsQueue,
 		FinalQueue:           finalQueue,
+		GatewayID:            gatewayID,
 		ServerHost:           serverHost,
 		ServerPort:           serverPort,
 		MomHost:              momHost,

@@ -9,7 +9,7 @@ import (
 
 func TestSerializeDeserializeEnvelope(t *testing.T) {
 	payload := []byte{1, 2, 3, 4}
-	msg, err := SerializeEnvelope(AllTransactionsBatch, "gw-1", "client-77", 0, payload)
+	msg, err := SerializeEnvelope(AllTransactionsBatch, 1, "client-77", 0, payload)
 	if err != nil {
 		t.Fatalf("SerializeEnvelope returned error: %v", err)
 	}
@@ -24,8 +24,8 @@ func TestSerializeDeserializeEnvelope(t *testing.T) {
 	if envelope.ClientID != "client-77" {
 		t.Fatalf("unexpected client id: got %s", envelope.ClientID)
 	}
-	if envelope.GatewayID != "gw-1" {
-		t.Fatalf("unexpected gateway id: got %s", envelope.GatewayID)
+	if envelope.GatewayID != 1 {
+		t.Fatalf("unexpected gateway id: got %d", envelope.GatewayID)
 	}
 	if len(envelope.Payload) != len(payload) {
 		t.Fatalf("unexpected payload len: got %d expected %d", len(envelope.Payload), len(payload))
@@ -38,7 +38,7 @@ func TestSerializeDeserializeEnvelope(t *testing.T) {
 }
 
 func TestFinalQueryResultRoundTrip(t *testing.T) {
-	msg, err := SerializeFinalQueryResult("gw-2", "client-10", 3, "ACK")
+	msg, err := SerializeFinalQueryResult(2, "client-10", 3, "ACK")
 	if err != nil {
 		t.Fatalf("SerializeFinalQueryResult returned error: %v", err)
 	}
@@ -53,8 +53,8 @@ func TestFinalQueryResultRoundTrip(t *testing.T) {
 	if envelope.ClientID != "client-10" {
 		t.Fatalf("unexpected client id: got %s", envelope.ClientID)
 	}
-	if envelope.GatewayID != "gw-2" {
-		t.Fatalf("unexpected gateway id: got %s", envelope.GatewayID)
+	if envelope.GatewayID != 2 {
+		t.Fatalf("unexpected gateway id: got %d", envelope.GatewayID)
 	}
 
 	if envelope.QueryID != 3 {
@@ -69,7 +69,7 @@ func TestSerializeDeserializeEnvelopeBinaryPayload(t *testing.T) {
 	// Payload intentionally includes bytes that are not valid UTF-8.
 	payload := []byte{0x00, 0x01, 0x7F, 0x80, 0xFE, 0xFF}
 
-	msg, err := SerializeAllTransactionsBatch("gw-bin", "client-bin", payload)
+	msg, err := SerializeAllTransactionsBatch(7, "client-bin", payload)
 	if err != nil {
 		t.Fatalf("SerializeAllTransactionsBatch returned error: %v", err)
 	}
@@ -84,8 +84,8 @@ func TestSerializeDeserializeEnvelopeBinaryPayload(t *testing.T) {
 	if envelope.ClientID != "client-bin" {
 		t.Fatalf("unexpected client id: got %s", envelope.ClientID)
 	}
-	if envelope.GatewayID != "gw-bin" {
-		t.Fatalf("unexpected gateway id: got %s", envelope.GatewayID)
+	if envelope.GatewayID != 7 {
+		t.Fatalf("unexpected gateway id: got %d", envelope.GatewayID)
 	}
 	if len(envelope.Payload) != len(payload) {
 		t.Fatalf("unexpected payload len: got %d expected %d", len(envelope.Payload), len(payload))
@@ -98,7 +98,7 @@ func TestSerializeDeserializeEnvelopeBinaryPayload(t *testing.T) {
 }
 
 func TestSerializeDeserializeEOFRoundTrip(t *testing.T) {
-	msg, err := SerializeAllAccountsEOF("gw-eof", "client-eof", 123)
+	msg, err := SerializeAllAccountsEOF(9, "client-eof", 123)
 	if err != nil {
 		t.Fatalf("SerializeAllAccountsEOF returned error: %v", err)
 	}
@@ -113,8 +113,8 @@ func TestSerializeDeserializeEOFRoundTrip(t *testing.T) {
 	if envelope.ClientID != "client-eof" {
 		t.Fatalf("unexpected client id: got %s", envelope.ClientID)
 	}
-	if envelope.GatewayID != "gw-eof" {
-		t.Fatalf("unexpected gateway id: got %s", envelope.GatewayID)
+	if envelope.GatewayID != 9 {
+		t.Fatalf("unexpected gateway id: got %d", envelope.GatewayID)
 	}
 	if envelope.Total != 123 {
 		t.Fatalf("unexpected total: got %d", envelope.Total)
@@ -132,9 +132,9 @@ func TestDeserializeEnvelopeMalformedCases(t *testing.T) {
 		{name: "nil message", msg: nil},
 		{name: "empty body", msg: &middleware.Message{Body: ""}},
 		{name: "invalid json", msg: &middleware.Message{Body: "{not-json"}},
-		{name: "missing client", msg: &middleware.Message{Body: `{"g":"gw","k":1}`}},
+		{name: "missing client", msg: &middleware.Message{Body: `{"g":1,"k":1}`}},
 		{name: "missing gateway", msg: &middleware.Message{Body: `{"c":"abc","k":1}`}},
-		{name: "missing kind", msg: &middleware.Message{Body: `{"g":"gw","c":"abc"}`}},
+		{name: "missing kind", msg: &middleware.Message{Body: `{"g":1,"c":"abc"}`}},
 	}
 
 	for _, tc := range tests {

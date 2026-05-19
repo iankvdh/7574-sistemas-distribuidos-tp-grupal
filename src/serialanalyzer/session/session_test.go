@@ -11,7 +11,7 @@ import (
 
 func TestQueryReadinessAndEOFByClient(t *testing.T) {
 	processor := NewProcessor()
-	gatewayID := inner.GatewayID("gw-a")
+	gatewayID := inner.GatewayID(1)
 	clientID := inner.ClientID("client-a")
 
 	txs := []transaction.Transaction{
@@ -48,8 +48,8 @@ func TestQueryReadinessAndEOFByClient(t *testing.T) {
 func TestClientIsolation(t *testing.T) {
 	processor := NewProcessor()
 
-	gatewayA := inner.GatewayID("gw-a")
-	gatewayB := inner.GatewayID("gw-b")
+	gatewayA := inner.GatewayID(1)
+	gatewayB := inner.GatewayID(2)
 	clientA := inner.ClientID("same-client-id")
 	clientB := inner.ClientID("same-client-id")
 

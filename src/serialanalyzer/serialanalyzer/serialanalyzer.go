@@ -225,10 +225,10 @@ func (serialAnalyzer *SerialAnalyzer) publishOutputs(gatewayID inner.GatewayID, 
 }
 
 func (serialAnalyzer *SerialAnalyzer) getFinalQueueForGateway(gatewayID inner.GatewayID) (middleware.Middleware, error) {
-	if gatewayID == "" {
+	if gatewayID <= 0 {
 		return nil, errors.New("gateway id is empty")
 	}
-	queueName := fmt.Sprintf("%s_%s", serialAnalyzer.finalQueuePrefix, gatewayID)
+	queueName := fmt.Sprintf("%s_%d", serialAnalyzer.finalQueuePrefix, gatewayID)
 
 	queue, exists := serialAnalyzer.finalQueues[queueName]
 	if exists {

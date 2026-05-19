@@ -12,7 +12,7 @@ import (
 )
 
 func TestSerializeBatchesToInnerEnvelope(t *testing.T) {
-	handler := NewMessageHandler("gw-1", "client-15")
+	handler := NewMessageHandler(1, "client-15")
 
 	txs := []transaction.Transaction{{
 		Date:            20220912,
@@ -36,8 +36,8 @@ func TestSerializeBatchesToInnerEnvelope(t *testing.T) {
 	if txEnvelope.Kind != inner.AllTransactionsBatch {
 		t.Fatalf("unexpected tx kind: %d", txEnvelope.Kind)
 	}
-	if txEnvelope.GatewayID != "gw-1" {
-		t.Fatalf("unexpected gateway id in tx envelope: %s", txEnvelope.GatewayID)
+	if txEnvelope.GatewayID != 1 {
+		t.Fatalf("unexpected gateway id in tx envelope: %d", txEnvelope.GatewayID)
 	}
 
 	deserializedTxs, err := external.DeserializeTransactionBatchPayload(txEnvelope.Payload)
@@ -59,8 +59,8 @@ func TestSerializeBatchesToInnerEnvelope(t *testing.T) {
 	if txEOFEnvelope.Total != 1 {
 		t.Fatalf("unexpected transaction total: %d", txEOFEnvelope.Total)
 	}
-	if txEOFEnvelope.GatewayID != "gw-1" {
-		t.Fatalf("unexpected gateway id in tx EOF envelope: %s", txEOFEnvelope.GatewayID)
+	if txEOFEnvelope.GatewayID != 1 {
+		t.Fatalf("unexpected gateway id in tx EOF envelope: %d", txEOFEnvelope.GatewayID)
 	}
 
 	accounts := []account.Account{{
@@ -81,8 +81,8 @@ func TestSerializeBatchesToInnerEnvelope(t *testing.T) {
 	if accEnvelope.Kind != inner.AllAccountsBatch {
 		t.Fatalf("unexpected account kind: %d", accEnvelope.Kind)
 	}
-	if accEnvelope.GatewayID != "gw-1" {
-		t.Fatalf("unexpected gateway id in account envelope: %s", accEnvelope.GatewayID)
+	if accEnvelope.GatewayID != 1 {
+		t.Fatalf("unexpected gateway id in account envelope: %d", accEnvelope.GatewayID)
 	}
 	if _, err := external.DeserializeAccountBatchPayload(accEnvelope.Payload); err != nil {
 		t.Fatalf("DeserializeAccountBatchPayload returned error: %v", err)
@@ -99,13 +99,13 @@ func TestSerializeBatchesToInnerEnvelope(t *testing.T) {
 	if accEOFEnvelope.Total != 1 {
 		t.Fatalf("unexpected account total: %d", accEOFEnvelope.Total)
 	}
-	if accEOFEnvelope.GatewayID != "gw-1" {
-		t.Fatalf("unexpected gateway id in account EOF envelope: %s", accEOFEnvelope.GatewayID)
+	if accEOFEnvelope.GatewayID != 1 {
+		t.Fatalf("unexpected gateway id in account EOF envelope: %d", accEOFEnvelope.GatewayID)
 	}
 }
 
 func TestDeserializeFinalMessage(t *testing.T) {
-	message, err := inner.SerializeFinalQueryResult("gw-4", "client-4", 2, "ACK")
+	message, err := inner.SerializeFinalQueryResult(4, "client-4", 2, "ACK")
 	if err != nil {
 		t.Fatalf("SerializeFinalQueryResult returned error: %v", err)
 	}
@@ -114,13 +114,13 @@ func TestDeserializeFinalMessage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DeserializeFinalMessage returned error: %v", err)
 	}
-	if parsed.GatewayID != "gw-4" || parsed.ClientID != "client-4" || parsed.QueryID != 2 || parsed.Status != "ACK" {
+	if parsed.GatewayID != 4 || parsed.ClientID != "client-4" || parsed.QueryID != 2 || parsed.Status != "ACK" {
 		t.Fatalf("unexpected parsed final message: %+v", parsed)
 	}
 }
 
 func TestDeserializeFinalMessageUnexpectedKind(t *testing.T) {
-	msg, err := inner.SerializeAllTransactionsEOF("gw-5", "client-5", 10)
+	msg, err := inner.SerializeAllTransactionsEOF(5, "client-5", 10)
 	if err != nil {
 		t.Fatalf("SerializeAllTransactionsEOF returned error: %v", err)
 	}
@@ -141,7 +141,7 @@ func TestDeserializeFinalMessageMalformed(t *testing.T) {
 }
 
 func TestEOFTotalsAccumulateAcrossBatches(t *testing.T) {
-	handler := NewMessageHandler("gw-acc", "client-acc")
+	handler := NewMessageHandler(11, "client-acc")
 
 	txBatch1 := []transaction.Transaction{{Date: 20220101, FromBank: 1, FromAccount: "a", ToBank: 2, ToAccount: "b", AmountPaid: 0.01, PaymentCurrency: "USD", PaymentFormat: "WIRE"}}
 	txBatch2 := []transaction.Transaction{
