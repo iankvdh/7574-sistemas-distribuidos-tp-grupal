@@ -2,7 +2,7 @@
 //
 // Wire framing: every message starts with a single byte MsgType. Batch
 // messages then carry a uint32 N (record count) followed by N records.
-// Control messages (Ack, EndOfAccounts, EndOfTransactions, EndOfResults) carry no payload.
+// Control messages (Ack, EndOfAccounts, EndOfTransactions) carry no payload.
 //
 // All multi-byte integers are BigEndian. Short strings use a uint8 length
 // prefix (max 255 bytes).
@@ -29,7 +29,6 @@ import (
 //	EndOfTransactions  = 0x06
 //	Ack                = 0x07
 //	QueryResult        = 0x08
-//	EndOfResults       = 0x09
 type MsgType uint8
 
 const (
@@ -41,7 +40,6 @@ const (
 	EndOfTransactions
 	Ack
 	QueryResult
-	EndOfResults
 )
 
 func writeMsgType(writer io.Writer, msgType MsgType) error {
@@ -70,8 +68,4 @@ func WriteEndOfAccounts(writer io.Writer) error {
 
 func WriteEndOfTransactions(writer io.Writer) error {
 	return writeMsgType(writer, EndOfTransactions)
-}
-
-func WriteEndOfResults(writer io.Writer) error {
-	return writeMsgType(writer, EndOfResults)
 }

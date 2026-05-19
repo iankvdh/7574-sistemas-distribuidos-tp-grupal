@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"os"
@@ -24,6 +25,7 @@ type Gateway struct {
 	allTransactionsQueue middleware.Middleware
 	allAccountsQueue     middleware.Middleware
 	finalQueue           middleware.Middleware
+	gatewayID            string
 	listener             net.Listener
 	running              atomic.Bool
 	shutdownOnce         sync.Once
@@ -45,7 +47,15 @@ func NewGateway(config gatewayconfig.GatewayConfig) (*Gateway, error) {
 		return nil, err
 	}
 
-	finalQueue, err := middleware.CreateQueueMiddleware(config.FinalQueue, connSettings)
+	gatewayID, err := os.Hostname()
+	if err != nil {
+		_ = allTransactionsQueue.Close()
+		_ = allAccountsQueue.Close()
+		return nil, err
+	}
+
+	finalQueueName := fmt.Sprintf("%s_%s", config.FinalQueue, gatewayID)
+	finalQueue, err := middleware.CreateQueueMiddleware(finalQueueName, connSettings)
 	if err != nil {
 		_ = allTransactionsQueue.Close()
 		_ = allAccountsQueue.Close()
@@ -64,6 +74,7 @@ func NewGateway(config gatewayconfig.GatewayConfig) (*Gateway, error) {
 		allTransactionsQueue: allTransactionsQueue,
 		allAccountsQueue:     allAccountsQueue,
 		finalQueue:           finalQueue,
+		gatewayID:            gatewayID,
 		listener:             listener,
 		shutdownCh:           make(chan struct{}),
 	}
@@ -92,8 +103,9 @@ func (gateway *Gateway) Run() error {
 			return err
 		}
 
+		// TODO: implement idempotency/recovery strategy for reconnecting clients.
 		clientID := inner.ClientID(uuid.NewString())
-		handler := messagehandler.NewMessageHandler(clientID)
+		handler := messagehandler.NewMessageHandler(inner.GatewayID(gateway.gatewayID), clientID)
 		state := gateway.registry.Add(clientID, conn)
 
 		gateway.waiting_group.Add(1)
@@ -131,7 +143,7 @@ func (gateway *Gateway) consumeFinalQueue() {
 	}
 }
 
-func (gateway *Gateway) forwardFinalMessage(msg middleware.Message, ack func(), nack func()) {
+func (gateway *Gateway) forwardFinalMessage(msg middleware.Message, ack func(), _ func()) {
 	finalMsg, err := messagehandler.DeserializeFinalMessage(&msg)
 	if err != nil {
 		slog.Error("Invalid message from FINAL queue", "err", err)
@@ -147,9 +159,6 @@ func (gateway *Gateway) forwardFinalMessage(msg middleware.Message, ack func(), 
 	}
 
 	err = state.WriteWithLock(func(conn net.Conn) error {
-		if finalMsg.EndOfResults {
-			return external.WriteEndOfResults(conn)
-		}
 		return external.WriteQueryResult(conn, finalMsg.QueryID, finalMsg.Status)
 	})
 	if err != nil {
@@ -159,9 +168,6 @@ func (gateway *Gateway) forwardFinalMessage(msg middleware.Message, ack func(), 
 		return
 	}
 
-	if finalMsg.EndOfResults {
-		gateway.registry.RemoveAndClose(finalMsg.ClientID)
-	}
 	ack()
 }
 
@@ -246,7 +252,10 @@ func (gateway *Gateway) handleTransactionBatch(state *clientregistry.ClientState
 }
 
 func (gateway *Gateway) handleEndOfTransactions(state *clientregistry.ClientState, handler *messagehandler.MessageHandler) error {
-	message := handler.SerializeTransactionEOFMessage()
+	message, err := handler.SerializeTransactionEOFMessage()
+	if err != nil {
+		return err
+	}
 	if err := gateway.allTransactionsQueue.Send(*message); err != nil {
 		return err
 	}
@@ -276,7 +285,10 @@ func (gateway *Gateway) handleAccountBatch(state *clientregistry.ClientState, ha
 }
 
 func (gateway *Gateway) handleEndOfAccounts(state *clientregistry.ClientState, handler *messagehandler.MessageHandler) error {
-	message := handler.SerializeAccountEOFMessage()
+	message, err := handler.SerializeAccountEOFMessage()
+	if err != nil {
+		return err
+	}
 	if err := gateway.allAccountsQueue.Send(*message); err != nil {
 		return err
 	}

@@ -30,6 +30,11 @@ test:
 switch:
 	@echo Escenarios de prueba:
 	@echo "1) Un cliente, gateway + rabbitmq"
-	@read -p "Selecciona uno [1]: " option; \
-	cp ./scenarios/$${option}.yaml $(COMPOSE_FILE)
+	@echo "2) Prueba serial (2 clientes, 2 gateways, serial-analyzer)"
+	@read -p "Selecciona uno [1/2]: " option; \
+	if [ "$$option" = "2" ]; then \
+		cp ./scenarios/2_serial.yaml $(COMPOSE_FILE); \
+	else \
+		cp ./scenarios/1.yaml $(COMPOSE_FILE); \
+	fi
 .PHONY: switch

@@ -16,6 +16,7 @@ const (
 	defaultConnectTimeoutMs   = 800
 	defaultQueryTimeoutMs     = 30000
 	defaultBatchMaxBytes      = 8192
+	defaultResultsDir         = "results"
 )
 
 func Load() (client.ClientConfig, error) {
@@ -80,6 +81,7 @@ func Load() (client.ClientConfig, error) {
 		GatewayPort:        gatewayPort,
 		InputTransactions:  inputTransactions,
 		InputAccounts:      inputAccounts,
+		ResultsDir:         envOrDefault("RESULTS_DIR", defaultResultsDir),
 		BatchMaxBytes:      batchMaxBytes,
 		ConnectMaxAttempts: connectMaxAttempts,
 		BackoffBase:        time.Duration(backoffBaseMs) * time.Millisecond,
@@ -99,4 +101,12 @@ func parsePositiveIntWithDefault(envName string, defaultValue int) (int, error) 
 		return 0, errors.New(envName + " must be a positive integer")
 	}
 	return value, nil
+}
+
+func envOrDefault(key, fallback string) string {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback
+	}
+	return value
 }
