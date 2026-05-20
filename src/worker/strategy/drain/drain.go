@@ -1,6 +1,8 @@
-// Package drain is a sink that writes each transaction and a per-client EOF
-// marker to DRAIN_OUTPUT_FILE. One drain per terminal queue gives an
-// end-to-end check that data and EOF totals reach every final destination.
+// Package drain is a sink that counts the transactions it receives per client
+// and writes a single EOF marker line per client to DRAIN_OUTPUT_FILE when the
+// upstream EOF arrives. One drain per terminal queue gives an end-to-end check
+// that the right number of items reaches every final destination, without
+// dumping the full payload to disk.
 package drain
 
 import (
@@ -10,7 +12,6 @@ import (
 	"sync"
 
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/eof"
-	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/messageprotocol/external"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/messageprotocol/inner"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy"
 )
@@ -41,10 +42,6 @@ func (s *Strategy) Init(ctx strategy.Context) error {
 	if err != nil {
 		return fmt.Errorf("open drain output: %w", err)
 	}
-	if _, err := fmt.Fprintln(f, "client_id,date,from_acc,to_acc,amount,currency,format"); err != nil {
-		_ = f.Close()
-		return err
-	}
 	s.ctx = ctx
 	s.file = f
 	return nil
@@ -54,20 +51,9 @@ func (s *Strategy) ProcessMessage(env *inner.Envelope) ([]strategy.Decision, str
 	if env.Kind != inner.TransactionMessage {
 		return nil, strategy.LocalCounts{Processed: 1}, nil
 	}
-	tx, err := external.DeserializeTransaction(env.Payload)
-	if err != nil {
-		return nil, strategy.LocalCounts{}, fmt.Errorf("deserialize: %w", err)
-	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.count[env.ClientID]++
-	if _, err := fmt.Fprintf(
-		s.file,
-		"%s,%d,%s,%s,%.2f,%s,%s\n",
-		env.ClientID, tx.Date, tx.FromAccount, tx.ToAccount, tx.AmountPaid, tx.PaymentCurrency, tx.PaymentFormat,
-	); err != nil {
-		return nil, strategy.LocalCounts{}, err
-	}
+	s.mu.Unlock()
 	return nil, strategy.LocalCounts{Processed: 1}, nil
 }
 
