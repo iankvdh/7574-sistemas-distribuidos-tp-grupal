@@ -38,6 +38,10 @@ func newExchangeMiddleware(exchange string, keys []string, settings ConnSettings
 		return nil, closeChannelAndConnection(ch, conn, err)
 	}
 
+	if err := ch.Qos(PrefetchCount, 0, false); err != nil {
+		return nil, closeChannelAndConnection(ch, conn, err)
+	}
+
 	return &exchangeMiddleware{
 		conn:        conn,
 		channel:     ch,

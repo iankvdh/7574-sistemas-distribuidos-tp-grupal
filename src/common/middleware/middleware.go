@@ -8,6 +8,8 @@ var (
 	ErrMessageMiddlewareClose        = errors.New("message middleware: close error")
 )
 
+const PrefetchCount = 512
+
 type Message struct {
 	Body string
 }
