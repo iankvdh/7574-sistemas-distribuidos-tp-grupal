@@ -1,10 +1,6 @@
-// Package joiner contains strategies that merge multiple upstream branches into
-// a single downstream stream by accumulating their EOFs.
-//
-// joiner_usd is the only joiner so far: it forwards every transaction it receives
-// to its single output (1:1) and waits for N upstream EOFs per client before
-// emitting one unified EOF downstream. This isolates the rest of the pipeline
-// from the fan-in fact that USD transactions come from three different periods.
+// Package joiner merges multiple upstream branches into a single downstream
+// stream by accumulating their EOFs. joiner_usd forwards each transaction 1:1
+// and emits one unified EOF per client after EXPECTED_EOFS upstream EOFs.
 package joiner
 
 import (
@@ -19,7 +15,6 @@ import (
 
 const defaultExpectedEOFs = 3 // period1, period2, other_periods
 
-// EOFJoiner implements the strategy contract for joiner_usd.
 type EOFJoiner struct {
 	name         string
 	ctx          strategy.Context
@@ -53,9 +48,6 @@ func (j *EOFJoiner) Init(ctx strategy.Context) error {
 	return nil
 }
 
-// ProcessMessage forwards each transaction 1:1 to the single output, attaching
-// the client_id for sharding if the output happens to be sharded (it usually isn't
-// in this strategy, but the runtime will ignore the routing key otherwise).
 func (j *EOFJoiner) ProcessMessage(env *inner.Envelope) ([]strategy.Decision, strategy.LocalCounts, error) {
 	if env.Kind != inner.TransactionMessage {
 		return nil, strategy.LocalCounts{}, fmt.Errorf("joiner_usd expects TransactionMessage, got kind=%d", env.Kind)
@@ -77,7 +69,6 @@ func (j *EOFJoiner) OnUpstreamEOF(env *inner.Envelope) (strategy.EOFOutcome, err
 }
 
 func (j *EOFJoiner) OnRingToken(_ *eof.Token) (strategy.EOFOutcome, error) {
-	// joiner_usd does not participate in a ring.
 	return strategy.EOFOutcome{Action: eof.Action{Kind: eof.ActionNone}}, nil
 }
 

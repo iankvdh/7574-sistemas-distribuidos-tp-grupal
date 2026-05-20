@@ -18,14 +18,12 @@ import (
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/topology"
 )
 
-// Worker drives the lifecycle of a single STRATEGY: connects input/outputs/ring queues,
-// consumes messages, dispatches them to the strategy, and publishes the results.
 type Worker struct {
 	cfg          config.WorkerConfig
 	strategy     strategy.Strategy
 	input        middleware.Middleware
-	ringIn       middleware.Middleware // nil if no ring is configured
-	ringOut      middleware.Middleware // nil if no ring is configured
+	ringIn       middleware.Middleware
+	ringOut      middleware.Middleware
 	outputs      []topology.OutputSink
 	logger       *slog.Logger
 	running      atomic.Bool
@@ -33,14 +31,11 @@ type Worker struct {
 	shutdownCh   chan struct{}
 	wg           sync.WaitGroup
 
-	// strategyMu serializes every call into the Strategy. The input consumer and
-	// the ring consumer run on different goroutines, but neither the Strategy nor
-	// its EOF coordinator are safe for concurrent access — keeping a single mutex
-	// here is simpler than asking every strategy implementation to be thread-safe.
+	// strategyMu serializes Strategy calls. The input consumer and the ring
+	// consumer run on different goroutines and neither the Strategy nor its EOF
+	// coordinator is safe for concurrent access.
 	strategyMu sync.Mutex
 
-	// upstreamEOFs caches the upstream EOF envelope per clientID so we can re-enqueue it
-	// when the ring fails to converge.
 	mu           sync.Mutex
 	upstreamEOFs map[inner.ClientID]middleware.Message
 }
@@ -236,8 +231,6 @@ func (w *Worker) handleRingMessage(msg middleware.Message, ack func(), nack func
 		return
 	}
 
-	// Synthesize an envelope with the ClientID from the token (and the original
-	// gateway id) so applyOutcome can publish EOFs without re-reading the upstream cache.
 	pseudoEnv := &inner.Envelope{GatewayID: envelope.GatewayID, ClientID: token.ClientID}
 	if err := w.applyOutcome(pseudoEnv, outcome); err != nil {
 		w.logger.Error("Applying ring outcome failed", "client_id", token.ClientID, "err", err)
@@ -311,9 +304,6 @@ func (w *Worker) publishEOFs(env *inner.Envelope, emits []eof.EOFEmit) error {
 	return nil
 }
 
-// sendToSink dispatches a message to the right middleware inside a sink. For
-// sharded sinks, the destination queue is chosen by hashing the client_id so
-// the same client always lands on the same downstream replica.
 func (w *Worker) sendToSink(sink topology.OutputSink, clientID inner.ClientID, msg middleware.Message) error {
 	switch sink.Kind {
 	case topology.KindShardedQueues:

@@ -1,8 +1,6 @@
-// Package drain provides a sink strategy that persists every transaction it
-// consumes into a CSV file, plus a marker line per client EOF. It is meant as
-// an end-to-end validation tool: by attaching one drain per terminal queue you
-// can confirm that the right transactions arrive and that the EOF total each
-// upstream ring computed matches what is delivered.
+// Package drain is a sink that writes each transaction and a per-client EOF
+// marker to DRAIN_OUTPUT_FILE. One drain per terminal queue gives an
+// end-to-end check that data and EOF totals reach every final destination.
 package drain
 
 import (
@@ -19,8 +17,6 @@ import (
 
 const name = "drain"
 
-// Strategy writes one CSV row per transaction received and a "# EOF" marker on
-// upstream EOF. There are no outputs.
 type Strategy struct {
 	ctx   strategy.Context
 	mu    sync.Mutex
@@ -56,8 +52,6 @@ func (s *Strategy) Init(ctx strategy.Context) error {
 
 func (s *Strategy) ProcessMessage(env *inner.Envelope) ([]strategy.Decision, strategy.LocalCounts, error) {
 	if env.Kind != inner.TransactionMessage {
-		// Drain only knows how to deserialize transactions; anything else gets
-		// counted but not written (the EOF path handles InternalEOF separately).
 		return nil, strategy.LocalCounts{Processed: 1}, nil
 	}
 	tx, err := external.DeserializeTransaction(env.Payload)

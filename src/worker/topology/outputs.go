@@ -10,29 +10,21 @@ import (
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/middleware"
 )
 
-// OutputKind enumerates the supported destination types for a strategy output.
 type OutputKind int
 
 const (
 	KindQueue OutputKind = iota + 1
-	// KindDirectExchange: a RabbitMQ direct exchange. Producers publish with the
-	// configured routing key (empty by default). Multiple consumers can each bind
-	// their own private queue to the same exchange and receive a copy.
 	KindDirectExchange
-	// KindShardedQueues: K named queues (Target_0 ... Target_{K-1}). The producer
-	// publishes each message to the queue chosen by hashing the client_id, so that
-	// the consumer indexed by that shard receives all data and EOFs for that
-	// client. Consumers consume directly from queue:Target_i (resolved by the
-	// generator from REPLICA_ID).
+	// KindShardedQueues fans messages out to K named queues (PREFIX_0..PREFIX_{K-1}),
+	// choosing the destination by hashing client_id so each client sticks to one shard.
 	KindShardedQueues
 )
 
-// OutputBinding describes one publishing target declared by the worker.
+// Spec syntax:
 //
-//	queue:NAME                       → KindQueue
-//	direct_exchange:NAME             → KindDirectExchange, routing key ""
-//	direct_exchange:NAME:KEY         → KindDirectExchange, routing key KEY
-//	sharded_queues:PREFIX:K          → KindShardedQueues, K named queues PREFIX_0..PREFIX_{K-1}
+//	queue:NAME
+//	direct_exchange:NAME[:KEY]
+//	sharded_queues:PREFIX:K
 type OutputBinding struct {
 	Name       string
 	Kind       OutputKind
@@ -41,10 +33,9 @@ type OutputBinding struct {
 	ShardCount int
 }
 
-// OutputSink groups the binding with the live middlewares that implement it.
-// For KindQueue and KindDirectExchange Middlewares has exactly 1 entry; for
-// KindShardedQueues it has ShardCount entries (Middlewares[i] corresponds to
-// queue PREFIX_i).
+// OutputSink couples a binding with its live middlewares. Non-sharded sinks
+// hold exactly one middleware; sharded sinks hold ShardCount of them, where
+// Middlewares[i] is the queue PREFIX_i.
 type OutputSink struct {
 	Name        string
 	Kind        OutputKind
@@ -52,8 +43,8 @@ type OutputSink struct {
 	Middlewares []middleware.Middleware
 }
 
-// ParseOutputs reads OUTPUT_0, OUTPUT_1, ... env vars in order and returns the parsed bindings.
-// It stops at the first index that is absent.
+// ParseOutputs reads OUTPUT_0, OUTPUT_1, ... env vars in order, stopping at the
+// first missing index.
 func ParseOutputs() ([]OutputBinding, error) {
 	indices := collectOutputIndices()
 	if len(indices) == 0 {
@@ -91,7 +82,6 @@ func parseBinding(raw string, idx int) (OutputBinding, error) {
 		}
 		return OutputBinding{Name: exchangeName, Kind: KindDirectExchange, Target: exchangeName, Key: key}, nil
 	case "sharded_queues":
-		// sharded_queues:PREFIX:K
 		subParts := strings.SplitN(rest, ":", 2)
 		if len(subParts) != 2 || subParts[0] == "" || subParts[1] == "" {
 			return OutputBinding{}, fmt.Errorf("OUTPUT_%d invalid sharded_queues binding: %q (expected sharded_queues:PREFIX:K)", idx, raw)
@@ -133,10 +123,8 @@ func collectOutputIndices() []int {
 	return indices
 }
 
-// ParseInput parses the INPUT env var into an OutputBinding-shaped descriptor.
-// Inputs are always single queues or direct exchanges; the generator resolves a
-// joiner replica's shard by setting INPUT=queue:PREFIX_{REPLICA_ID} so the
-// sharded-queues kind does not appear here.
+// ParseInput parses the INPUT env var. Sharded consumers are wired by the
+// generator as queue:PREFIX_{REPLICA_ID}, so sharded_queues is not accepted here.
 func ParseInput(raw string) (OutputBinding, error) {
 	if raw == "" {
 		return OutputBinding{}, fmt.Errorf("INPUT environment variable is required")
@@ -151,7 +139,6 @@ func ParseInput(raw string) (OutputBinding, error) {
 	return b, nil
 }
 
-// BuildInputMiddleware opens the middleware the worker will consume from.
 func BuildInputMiddleware(binding OutputBinding, conn middleware.ConnSettings) (middleware.Middleware, error) {
 	switch binding.Kind {
 	case KindQueue:
@@ -163,7 +150,6 @@ func BuildInputMiddleware(binding OutputBinding, conn middleware.ConnSettings) (
 	}
 }
 
-// BuildOutputSinks opens the middleware(s) backing each binding.
 func BuildOutputSinks(bindings []OutputBinding, conn middleware.ConnSettings) ([]OutputSink, error) {
 	sinks := make([]OutputSink, 0, len(bindings))
 	closeAll := func() {

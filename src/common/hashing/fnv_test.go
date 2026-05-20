@@ -11,7 +11,7 @@ func TestShard_Deterministic(t *testing.T) {
 		got1 := Shard(c, 4)
 		got2 := Shard(c, 4)
 		if got1 != got2 {
-			t.Fatalf("Shard(%q,4) no es determinístico: %d vs %d", c, got1, got2)
+			t.Fatalf("Shard(%q,4) not deterministic: %d vs %d", c, got1, got2)
 		}
 	}
 }
@@ -21,7 +21,7 @@ func TestShard_InRange(t *testing.T) {
 		for i := 0; i < 1000; i++ {
 			s := Shard(fmt.Sprintf("client-%d", i), K)
 			if s < 0 || s >= K {
-				t.Fatalf("Shard fuera de rango para K=%d: %d", K, s)
+				t.Fatalf("Shard out of range for K=%d: %d", K, s)
 			}
 		}
 	}
@@ -29,10 +29,10 @@ func TestShard_InRange(t *testing.T) {
 
 func TestShard_KLessOrEqualOne(t *testing.T) {
 	if Shard("anything", 1) != 0 {
-		t.Fatalf("Shard con K=1 debería devolver 0")
+		t.Fatalf("Shard with K=1 must return 0")
 	}
 	if Shard("anything", 0) != 0 {
-		t.Fatalf("Shard con K=0 debería devolver 0 (fallback defensivo)")
+		t.Fatalf("Shard with K=0 must return 0")
 	}
 }
 
@@ -43,13 +43,10 @@ func TestShard_BasicDistribution(t *testing.T) {
 	for i := 0; i < N; i++ {
 		counts[Shard(fmt.Sprintf("client-%d", i), K)]++
 	}
-	// Cada bucket debería tener al menos N/K/2 elementos. No es un
-	// test de uniformidad estricto, solo descartar que toda la masa
-	// caiga en un solo bucket por un bug obvio.
 	min := N / K / 2
 	for i, c := range counts {
 		if c < min {
-			t.Fatalf("distribución degenerada: bucket %d con %d elementos (esperado ≥ %d)", i, c, min)
+			t.Fatalf("degenerate distribution: bucket %d got %d (expected >= %d)", i, c, min)
 		}
 	}
 }
