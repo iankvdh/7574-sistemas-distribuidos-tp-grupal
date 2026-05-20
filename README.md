@@ -5,10 +5,10 @@
 ```
 scenarios/
   1.yaml, 2_serial.yaml     # composes legacy (hand-written)
-  3_pipeline.yaml           # compose generado desde specs/3_pipeline.yaml
+  default.yaml              # compose generado desde specs/default.yaml
   4_scaled.yaml             # compose generado desde specs/4_scaled.yaml
   specs/
-    3_pipeline.yaml         # spec declarativo (fuente de verdad)
+    default.yaml            # spec declarativo (fuente de verdad)
     4_scaled.yaml
 scripts/switch.sh           # picker interactivo
 src/                        # código Go (client, gateway, worker, common, tools)
@@ -21,7 +21,7 @@ Cada `scenarios/specs/*.yaml` es la fuente declarativa; `compose-gen` lo expande
 
 | Target                              | Qué hace |
 |-------------------------------------|----------|
-| `make gen [SPEC=name]`              | Regenera `scenarios/<name>.yaml` desde `scenarios/specs/<name>.yaml`. Default `SPEC=3_pipeline`. |
+| `make gen [SPEC=name]`              | Regenera `scenarios/<name>.yaml` desde `scenarios/specs/<name>.yaml`. Default `SPEC=default`. |
 | `make gen-all`                      | Regenera todos los `scenarios/*.yaml` que tengan spec. |
 | `make switch`                       | Picker interactivo: lista escenarios, regenera si tiene spec, copia el elegido a `docker-compose.yaml`. |
 | `make up`                           | `docker compose up --build -d` y sigue logs del `docker-compose.yaml` actual. |

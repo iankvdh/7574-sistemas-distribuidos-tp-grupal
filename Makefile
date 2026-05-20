@@ -7,7 +7,7 @@ compose = COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT_NAME) docker compose -f $(COMPO
 # Every scenarios/specs/*.yaml is a declarative spec that compose-gen expands
 # into scenarios/<name>.yaml (the compose docker actually runs).
 SPECS := $(patsubst %.yaml,%,$(notdir $(wildcard scenarios/specs/*.yaml)))
-SPEC ?= 3_pipeline
+SPEC ?= default
 
 # --- Compose lifecycle -----------------------------------------------------
 
