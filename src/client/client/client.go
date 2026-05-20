@@ -42,7 +42,6 @@ type Client struct {
 	running      atomic.Bool
 	config       ClientConfig
 	gatewayAddrs []string
-	rand         *rand.Rand
 	results      *resultsCollector
 
 	writeRequests chan writeRequest
@@ -65,8 +64,8 @@ func NewClient(config ClientConfig) (*Client, error) {
 	client := &Client{
 		config:       config,
 		gatewayAddrs: gatewayAddrs,
-		rand:         rand.New(rand.NewSource(time.Now().UnixNano())),
 	}
+	client.initIOChannels()
 	client.running.Store(true)
 
 	conn, clientID, err := client.connectToGateway()
@@ -148,7 +147,7 @@ func (client *Client) performHandshake(conn net.Conn) (string, error) {
 }
 
 func (client *Client) pickRandomGatewayAddr() string {
-	idx := client.rand.Intn(len(client.gatewayAddrs))
+	idx := rand.Intn(len(client.gatewayAddrs))
 	return client.gatewayAddrs[idx]
 }
 
@@ -159,7 +158,7 @@ func (client *Client) sleepBackoff(attempt int) {
 
 	delay := computeBackoffCap(client.config.BackoffBase, client.config.BackoffMax, attempt)
 
-	jitter := time.Duration(client.rand.Int63n(int64(delay) + 1))
+	jitter := time.Duration(rand.Int63n(int64(delay) + 1))
 	if jitter > 0 {
 		time.Sleep(jitter)
 	}
@@ -225,13 +224,15 @@ func (client *Client) Run() error {
 	return nil
 }
 
-func (client *Client) startIOLoops() {
+func (client *Client) initIOChannels() {
 	client.writeRequests = make(chan writeRequest)
 	client.ingestAckCh = make(chan struct{}, 1)
 	client.allQueryEOFCh = make(chan struct{})
 	client.ioStopCh = make(chan struct{})
 	client.ioErrCh = make(chan struct{})
+}
 
+func (client *Client) startIOLoops() {
 	go client.writerLoop()
 	go client.readerLoop()
 }
@@ -384,9 +385,7 @@ func (client *Client) ioErrorOrStopped() error {
 
 func (client *Client) stopIO() {
 	client.ioStopOnce.Do(func() {
-		if client.ioStopCh != nil {
 			close(client.ioStopCh)
-		}
 		if client.conn != nil {
 			_ = client.conn.Close()
 		}
