@@ -23,7 +23,7 @@ func TestHandleClientResultOutputAcksAfterResultBatchAck(t *testing.T) {
 	var ackCount atomic.Int32
 	var nackCount atomic.Int32
 
-	gateway.waiting_group.Add(1)
+	gateway.waitingGroup.Add(1)
 	go gateway.handleClientResultOutput(state, inner.ClientID("client-1"))
 
 	state.EnqueueResult(clientregistry.ResultDelivery{
@@ -67,7 +67,7 @@ func TestHandleClientResultOutputAcksAfterResultBatchAck(t *testing.T) {
 	}
 
 	state.Close()
-	gateway.waiting_group.Wait()
+	gateway.waitingGroup.Wait()
 }
 
 func TestHandleClientResultOutputNacksWhenClientClosesBeforeAck(t *testing.T) {
@@ -82,7 +82,7 @@ func TestHandleClientResultOutputNacksWhenClientClosesBeforeAck(t *testing.T) {
 	var ackCount atomic.Int32
 	var nackCount atomic.Int32
 
-	gateway.waiting_group.Add(1)
+	gateway.waitingGroup.Add(1)
 	go gateway.handleClientResultOutput(state, inner.ClientID("client-2"))
 
 	state.EnqueueResult(clientregistry.ResultDelivery{
@@ -110,7 +110,7 @@ func TestHandleClientResultOutputNacksWhenClientClosesBeforeAck(t *testing.T) {
 		t.Fatalf("unexpected acks: %d", ackCount.Load())
 	}
 
-	gateway.waiting_group.Wait()
+	gateway.waitingGroup.Wait()
 }
 
 func TestHandleClientResultOutputNacksOversizedRow(t *testing.T) {
@@ -125,7 +125,7 @@ func TestHandleClientResultOutputNacksOversizedRow(t *testing.T) {
 	var ackCount atomic.Int32
 	var nackCount atomic.Int32
 
-	gateway.waiting_group.Add(1)
+	gateway.waitingGroup.Add(1)
 	go gateway.handleClientResultOutput(state, inner.ClientID("client-3"))
 
 	state.EnqueueResult(clientregistry.ResultDelivery{
@@ -141,7 +141,7 @@ func TestHandleClientResultOutputNacksOversizedRow(t *testing.T) {
 	}
 
 	state.Close()
-	gateway.waiting_group.Wait()
+	gateway.waitingGroup.Wait()
 }
 
 func waitForCondition(t *testing.T, condition func() bool) {

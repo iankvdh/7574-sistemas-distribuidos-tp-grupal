@@ -282,6 +282,11 @@ func (client *Client) readerLoop() {
 				client.setIOError(err)
 				return
 			}
+
+			if client.hasAllQueryEOFs() {
+				slog.Info("Received all query EOF markers", "client_id", client.clientID)
+				client.signalAllQueryEOFs()
+			}
 		default:
 			client.setIOError(fmt.Errorf("unexpected message type from gateway: %d", msgType))
 			return
@@ -385,7 +390,7 @@ func (client *Client) ioErrorOrStopped() error {
 
 func (client *Client) stopIO() {
 	client.ioStopOnce.Do(func() {
-			close(client.ioStopCh)
+		close(client.ioStopCh)
 		if client.conn != nil {
 			_ = client.conn.Close()
 		}
@@ -397,8 +402,8 @@ func (client *Client) handleSignals() {
 	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
 	defer signal.Stop(signals)
 
-	<-signals
-	slog.Info("SIGTERM signal received")
+	sig := <-signals
+	slog.Info("Signal received, shutting down client", "signal", sig.String())
 	client.running.Store(false)
 	client.stopIO()
 }

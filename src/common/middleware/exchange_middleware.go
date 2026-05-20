@@ -29,7 +29,7 @@ func newExchangeMiddleware(exchange string, keys []string, settings ConnSettings
 	if err := ch.ExchangeDeclare(
 		exchange, // nombre del exchange
 		"direct", // direct porque queremos rutear por routing key
-		true,     // durable
+		false,    // durable
 		false,    // auto-delete
 		false,    // internal
 		false,    // no-wait
