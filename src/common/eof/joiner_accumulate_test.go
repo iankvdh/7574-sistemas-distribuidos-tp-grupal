@@ -3,7 +3,7 @@ package eof
 import "testing"
 
 func TestJoinerAccumulateWaitsUntilExpected(t *testing.T) {
-	j := NewJoinerAccumulateCoordinator(3)
+	j := NewJoinerAccumulateCoordinator(3, 1)
 
 	if a := j.OnUpstreamEOF("client-x", 10); a.Kind != ActionNone {
 		t.Fatalf("first EOF should be Wait, got %v", a.Kind)
@@ -21,7 +21,7 @@ func TestJoinerAccumulateWaitsUntilExpected(t *testing.T) {
 }
 
 func TestJoinerAccumulateIndependentPerClient(t *testing.T) {
-	j := NewJoinerAccumulateCoordinator(2)
+	j := NewJoinerAccumulateCoordinator(2, 1)
 
 	_ = j.OnUpstreamEOF("client-a", 5)
 	_ = j.OnUpstreamEOF("client-b", 7)
@@ -30,9 +30,26 @@ func TestJoinerAccumulateIndependentPerClient(t *testing.T) {
 	if a.Kind != ActionEmitEOFs || a.EOFs[0].Total != 14 {
 		t.Fatalf("client-a aggregation wrong: %+v", a)
 	}
-	// client-b still pending (only saw 1 of 2 EOFs).
 	a = j.OnUpstreamEOF("client-b", 13)
 	if a.Kind != ActionEmitEOFs || a.EOFs[0].Total != 20 {
 		t.Fatalf("client-b aggregation wrong: %+v", a)
+	}
+}
+
+func TestJoinerAccumulateFansOutToEveryOutput(t *testing.T) {
+	j := NewJoinerAccumulateCoordinator(2, 3)
+
+	_ = j.OnUpstreamEOF("client-x", 4)
+	a := j.OnUpstreamEOF("client-x", 6)
+	if a.Kind != ActionEmitEOFs {
+		t.Fatalf("expected emit, got %v", a.Kind)
+	}
+	if len(a.EOFs) != 3 {
+		t.Fatalf("expected 3 EOFs, got %d", len(a.EOFs))
+	}
+	for i, e := range a.EOFs {
+		if e.OutputIndex != i || e.Total != 10 {
+			t.Fatalf("emit %d wrong: %+v", i, e)
+		}
 	}
 }

@@ -31,8 +31,8 @@ func init() {
 func (j *EOFJoiner) Name() string { return j.name }
 
 func (j *EOFJoiner) Init(ctx strategy.Context) error {
-	if ctx.OutputCount != 1 {
-		return fmt.Errorf("joiner_usd requires exactly 1 output, got %d", ctx.OutputCount)
+	if ctx.OutputCount < 1 {
+		return fmt.Errorf("joiner_usd requires at least 1 output, got %d", ctx.OutputCount)
 	}
 	expected := defaultExpectedEOFs
 	if raw := os.Getenv("EXPECTED_EOFS"); raw != "" {
@@ -44,7 +44,7 @@ func (j *EOFJoiner) Init(ctx strategy.Context) error {
 	}
 	j.ctx = ctx
 	j.expectedEOFs = expected
-	j.coordinator = eof.NewJoinerAccumulateCoordinator(expected)
+	j.coordinator = eof.NewJoinerAccumulateCoordinator(expected, ctx.OutputCount)
 	return nil
 }
 
@@ -56,8 +56,12 @@ func (j *EOFJoiner) ProcessMessage(env *inner.Envelope) ([]strategy.Decision, st
 	if err != nil {
 		return nil, strategy.LocalCounts{}, err
 	}
+	indices := make([]int, j.ctx.OutputCount)
+	for i := range indices {
+		indices[i] = i
+	}
 	return []strategy.Decision{{
-		OutputIndices: []int{0},
+		OutputIndices: indices,
 		Body:          body,
 		ClientID:      env.ClientID,
 	}}, strategy.LocalCounts{Processed: 1}, nil
