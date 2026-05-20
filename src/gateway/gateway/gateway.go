@@ -385,12 +385,14 @@ func (gateway *Gateway) handleTransactionBatch(state *clientregistry.ClientState
 		return err
 	}
 
-	message, err := handler.SerializeTransactionBatchMessage(batch)
+	messages, err := handler.SerializeTransactionMessages(batch)
 	if err != nil {
 		return err
 	}
-	if err := gateway.allTransactionsQueue.Send(*message); err != nil {
-		return err
+	for i := range messages {
+		if err := gateway.allTransactionsQueue.Send(messages[i]); err != nil {
+			return err
+		}
 	}
 
 	return state.WriteWithLock(func(conn net.Conn) error {
@@ -418,12 +420,14 @@ func (gateway *Gateway) handleAccountBatch(state *clientregistry.ClientState, ha
 		return err
 	}
 
-	message, err := handler.SerializeAccountBatchMessage(batch)
+	messages, err := handler.SerializeAccountMessages(batch)
 	if err != nil {
 		return err
 	}
-	if err := gateway.allAccountsQueue.Send(*message); err != nil {
-		return err
+	for i := range messages {
+		if err := gateway.allAccountsQueue.Send(messages[i]); err != nil {
+			return err
+		}
 	}
 
 	return state.WriteWithLock(func(conn net.Conn) error {
