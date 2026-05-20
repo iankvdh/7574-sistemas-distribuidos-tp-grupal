@@ -28,6 +28,7 @@ func (client *Client) consumeQueryResult(queryID uint8, status string) error {
 		return fmt.Errorf("unexpected query id: %d", queryID)
 	}
 
+	// innit result collector if needed
 	if err := client.initResultsCollector(); err != nil {
 		return err
 	}

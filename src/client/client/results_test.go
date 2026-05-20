@@ -24,6 +24,7 @@ func TestSendIngestMessageHandlesInterleavedResultBatch(t *testing.T) {
 			ResultsDir: t.TempDir(),
 		},
 	}
+	c.initIOChannels()
 	c.running.Store(true)
 	if err := c.initResultsCollector(); err != nil {
 		t.Fatalf("initResultsCollector failed: %v", err)
@@ -110,6 +111,7 @@ func TestWaitForAllQueryEOFs(t *testing.T) {
 			ResultsDir: t.TempDir(),
 		},
 	}
+	c.initIOChannels()
 	c.running.Store(true)
 	if err := c.initResultsCollector(); err != nil {
 		t.Fatalf("initResultsCollector failed: %v", err)
