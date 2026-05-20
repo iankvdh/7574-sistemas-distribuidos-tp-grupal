@@ -33,6 +33,12 @@ type Worker struct {
 	shutdownCh   chan struct{}
 	wg           sync.WaitGroup
 
+	// strategyMu serializes every call into the Strategy. The input consumer and
+	// the ring consumer run on different goroutines, but neither the Strategy nor
+	// its EOF coordinator are safe for concurrent access — keeping a single mutex
+	// here is simpler than asking every strategy implementation to be thread-safe.
+	strategyMu sync.Mutex
+
 	// upstreamEOFs caches the upstream EOF envelope per clientID so we can re-enqueue it
 	// when the ring fails to converge.
 	mu           sync.Mutex
@@ -168,7 +174,9 @@ func (w *Worker) handleInputMessage(msg middleware.Message, ack func(), nack fun
 
 	if isEOFKind(envelope.Kind) {
 		w.cacheUpstreamEOF(envelope.ClientID, msg)
+		w.strategyMu.Lock()
 		outcome, err := w.strategy.OnUpstreamEOF(envelope)
+		w.strategyMu.Unlock()
 		if err != nil {
 			w.logger.Error("Strategy OnUpstreamEOF failed", "client_id", envelope.ClientID, "err", err)
 			nack()
@@ -183,7 +191,9 @@ func (w *Worker) handleInputMessage(msg middleware.Message, ack func(), nack fun
 		return
 	}
 
+	w.strategyMu.Lock()
 	decisions, _, err := w.strategy.ProcessMessage(envelope)
+	w.strategyMu.Unlock()
 	if err != nil {
 		w.logger.Error("Strategy ProcessMessage failed", "client_id", envelope.ClientID, "err", err)
 		nack()
@@ -217,7 +227,9 @@ func (w *Worker) handleRingMessage(msg middleware.Message, ack func(), nack func
 		return
 	}
 
+	w.strategyMu.Lock()
 	outcome, err := w.strategy.OnRingToken(token)
+	w.strategyMu.Unlock()
 	if err != nil {
 		w.logger.Error("Strategy OnRingToken failed", "client_id", token.ClientID, "err", err)
 		nack()
