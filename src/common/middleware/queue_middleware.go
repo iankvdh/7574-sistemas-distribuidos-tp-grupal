@@ -36,6 +36,10 @@ func newQueueMiddleware(queueName string, connectionSettings ConnSettings) (*que
 		return nil, closeChannelAndConnection(ch, conn, err)
 	}
 
+	if err := ch.Qos(PrefetchCount, 0, false); err != nil {
+		return nil, closeChannelAndConnection(ch, conn, err)
+	}
+
 	return &queueMiddleware{
 		conn:      conn,
 		channel:   ch,
