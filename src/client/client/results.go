@@ -42,16 +42,12 @@ func (client *Client) consumeQueryResult(queryID uint8, status string) error {
 			client.results.eofByQuery[queryID] = struct{}{}
 			slog.Info("Received query EOF", "client_id", client.clientID, "query", queryID, "received", len(client.results.eofByQuery))
 		}
-		if client.hasAllQueryEOFs() {
-			slog.Info("Received all query EOF markers", "client_id", client.clientID)
-			client.signalAllQueryEOFs()
-		}
 		return nil
 	}
 
 	if err := client.results.writer.WriteRow(queryID, status); err != nil {
 		return err
 	}
-	slog.Info("Received query row", "client_id", client.clientID, "query", queryID, "row", status)
+	slog.Debug("Received query row", "client_id", client.clientID, "query", queryID, "row", status)
 	return nil
 }

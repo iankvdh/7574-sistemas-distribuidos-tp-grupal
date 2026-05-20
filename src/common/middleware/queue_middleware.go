@@ -27,13 +27,11 @@ func newQueueMiddleware(queueName string, connectionSettings ConnSettings) (*que
 
 	if _, err := ch.QueueDeclare(
 		queueName,
-		true,  // durable
+		false, // durable
 		false, // auto-delete
 		false, // exclusive
 		false, // no-wait
-		amqp.Table{
-			amqp.QueueTypeArg: amqp.QueueTypeQuorum,
-		},
+		nil,
 	); err != nil {
 		return nil, closeChannelAndConnection(ch, conn, err)
 	}

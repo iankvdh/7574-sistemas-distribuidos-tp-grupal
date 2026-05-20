@@ -20,6 +20,8 @@ import (
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/gateway/messagehandler"
 )
 
+const requiredQueryEOFs = 5
+
 type Gateway struct {
 	registry             clientregistry.ClientRegistry
 	allTransactionsQueue middleware.Middleware
@@ -31,7 +33,7 @@ type Gateway struct {
 	running              atomic.Bool
 	shutdownOnce         sync.Once
 	shutdownCh           chan struct{}
-	waiting_group        sync.WaitGroup
+	waitingGroup        sync.WaitGroup
 }
 
 func NewGateway(config gatewayconfig.GatewayConfig) (*Gateway, error) {
@@ -83,10 +85,10 @@ func NewGateway(config gatewayconfig.GatewayConfig) (*Gateway, error) {
 func (gateway *Gateway) Run() error {
 	defer gateway.shutdown()
 
-	gateway.waiting_group.Add(1)
+	gateway.waitingGroup.Add(1)
 	go gateway.consumeFinalQueue()
 
-	gateway.waiting_group.Add(1)
+	gateway.waitingGroup.Add(1)
 	go gateway.handleSignals()
 
 	slog.Info("Gateway accepting client connections")
@@ -105,16 +107,16 @@ func (gateway *Gateway) Run() error {
 		handler := messagehandler.NewMessageHandler(gateway.gatewayID, clientID)
 		state := gateway.registry.Add(clientID, conn)
 
-		gateway.waiting_group.Add(1)
+		gateway.waitingGroup.Add(1)
 		go gateway.handleClientSession(state, &handler)
 	}
 
-	gateway.waiting_group.Wait()
+	gateway.waitingGroup.Wait()
 	return nil
 }
 
 func (gateway *Gateway) handleSignals() {
-	defer gateway.waiting_group.Done()
+	defer gateway.waitingGroup.Done()
 
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
@@ -129,7 +131,7 @@ func (gateway *Gateway) handleSignals() {
 }
 
 func (gateway *Gateway) consumeFinalQueue() {
-	defer gateway.waiting_group.Done()
+	defer gateway.waitingGroup.Done()
 
 	err := gateway.finalQueue.StartConsuming(func(msg middleware.Message, ack func(), nack func()) {
 		gateway.forwardFinalMessage(msg, ack, nack)
@@ -149,13 +151,14 @@ func (gateway *Gateway) forwardFinalMessage(msg middleware.Message, ack func(), 
 	}
 
 	if finalMsg.GatewayID != gateway.gatewayID {
-		slog.Warn(
-			"Received FINAL message addressed to another gateway",
+		slog.Error(
+			"Received FINAL message addressed to another gateway — this is a routing bug, shutting down",
 			"expected_gateway_id", gateway.gatewayID,
 			"received_gateway_id", finalMsg.GatewayID,
 			"client_id", finalMsg.ClientID,
 		)
-		nack()
+		ack()
+		gateway.shutdown()
 		return
 	}
 
@@ -179,7 +182,7 @@ func (gateway *Gateway) forwardFinalMessage(msg middleware.Message, ack func(), 
 }
 
 func (gateway *Gateway) handleClientSession(state *clientregistry.ClientState, handler *messagehandler.MessageHandler) {
-	defer gateway.waiting_group.Done()
+	defer gateway.waitingGroup.Done()
 	defer gateway.registry.Remove(handler.ClientID())
 	defer state.Close()
 
@@ -188,7 +191,7 @@ func (gateway *Gateway) handleClientSession(state *clientregistry.ClientState, h
 		return
 	}
 
-	gateway.waiting_group.Add(1)
+	gateway.waitingGroup.Add(1)
 	go gateway.handleClientResultOutput(state, handler.ClientID())
 
 	for {
@@ -233,7 +236,7 @@ func (gateway *Gateway) handleClientSession(state *clientregistry.ClientState, h
 }
 
 func (gateway *Gateway) handleClientResultOutput(state *clientregistry.ClientState, clientID inner.ClientID) {
-	defer gateway.waiting_group.Done()
+	defer gateway.waitingGroup.Done()
 
 	pendingDeliveries := make([]clientregistry.ResultDelivery, 0, 16)
 	pendingItems := make([]external.ResultBatchItem, 0, 16)
@@ -300,6 +303,8 @@ func (gateway *Gateway) handleClientResultOutput(state *clientregistry.ClientSta
 		return nil
 	}
 
+	eofsSent := 0
+
 	for {
 		delivery, ok := state.DequeueResult()
 		if !ok {
@@ -315,8 +320,7 @@ func (gateway *Gateway) handleClientResultOutput(state *clientregistry.ClientSta
 			return
 		}
 
-		shouldFlush := delivery.Status == "EOF"
-		if !shouldFlush {
+		if delivery.Status != "EOF" {
 			for currentBatchBytes < gateway.resultBatchMaxBytes {
 				nextDelivery, exists := state.TryDequeueResult()
 				if !exists {
@@ -338,27 +342,29 @@ func (gateway *Gateway) handleClientResultOutput(state *clientregistry.ClientSta
 				}
 
 				if nextDelivery.Status == "EOF" {
-					shouldFlush = true
 					break
 				}
 			}
 		}
 
-		if shouldFlush || currentBatchBytes >= gateway.resultBatchMaxBytes {
-			if err := flush(); err != nil {
-				if gateway.running.Load() {
-					slog.Warn("While flushing result batch to client", "client_id", clientID, "err", err)
-				}
-				gateway.registry.RemoveAndClose(clientID)
-				return
+		eofCountInBatch := 0
+		for _, d := range pendingDeliveries {
+			if d.Status == "EOF" {
+				eofCountInBatch++
 			}
-			continue
 		}
 
 		if err := flush(); err != nil {
 			if gateway.running.Load() {
 				slog.Warn("While flushing result batch to client", "client_id", clientID, "err", err)
 			}
+			gateway.registry.RemoveAndClose(clientID)
+			return
+		}
+
+		eofsSent += eofCountInBatch
+		if eofsSent >= requiredQueryEOFs {
+			slog.Info("All query EOFs delivered to client, closing session", "client_id", clientID)
 			gateway.registry.RemoveAndClose(clientID)
 			return
 		}

@@ -61,21 +61,31 @@ func (processor *Processor) AddAccounts(gatewayID inner.GatewayID, clientID inne
 }
 
 func (processor *Processor) MarkTransactionsEOF(gatewayID inner.GatewayID, clientID inner.ClientID, _ uint32) []QueryOutput {
-	state := processor.getOrCreateState(gatewayID, clientID)
-	if state.completed {
+	key := sessionKey{GatewayID: gatewayID, ClientID: clientID}
+	state, exists := processor.sessions[key]
+	if !exists || state.completed {
 		return nil
 	}
 	state.txEOF = true
-	return processor.emitReadyQueries(state)
+	outputs := processor.emitReadyQueries(state)
+	if state.completed {
+		delete(processor.sessions, key)
+	}
+	return outputs
 }
 
 func (processor *Processor) MarkAccountsEOF(gatewayID inner.GatewayID, clientID inner.ClientID, _ uint32) []QueryOutput {
-	state := processor.getOrCreateState(gatewayID, clientID)
-	if state.completed {
+	key := sessionKey{GatewayID: gatewayID, ClientID: clientID}
+	state, exists := processor.sessions[key]
+	if !exists || state.completed {
 		return nil
 	}
 	state.accEOF = true
-	return processor.emitReadyQueries(state)
+	outputs := processor.emitReadyQueries(state)
+	if state.completed {
+		delete(processor.sessions, key)
+	}
+	return outputs
 }
 
 func (processor *Processor) getOrCreateState(gatewayID inner.GatewayID, clientID inner.ClientID) *clientState {
