@@ -1,15 +1,5 @@
-# Declarative pipeline spec. `make gen` (SPEC=default) expands this into
-# scenarios/default.yaml.
-#
-# The spec is family-agnostic: every worker has the same shape regardless of
-# whether it is a filter, joiner, drain, etc. The runtime decides what to do
-# based on its STRATEGY env var. Per-strategy extras (EXPECTED_EOFS, paths, ...)
-# go under `env:`.
-#
-# Each terminal queue is observed by a `drain` worker that persists its
-# transactions + the EOF marker into results/drain_<name>.csv. That gives us
-# an end-to-end check that the right data and the right EOF totals reach every
-# final destination.
+# Base mínima: 1 cliente, 1 gateway, 1 réplica por strategy.
+# Sirve como sanity check end-to-end antes de implementar Q1..Q5.
 
 clients: 1
 gateways: 1
@@ -17,12 +7,9 @@ transactions: /datasets/LI-Small_Trans.csv
 accounts: /datasets/LI-Small_accounts.csv
 
 workers:
-  # --- Filters --------------------------------------------------------------
-  # filter_period1 demonstrates the ring topology: with replicas > 1 the
-  # generator wires up RING_QUEUE_IN/OUT automatically as ring_<name>_<i>.
   - name: filter_period1
     strategy: filter_period1
-    replicas: 2
+    replicas: 1
     input: queue:all_transactions
     match_count: 1
     outputs:
@@ -48,7 +35,7 @@ workers:
 
   - name: filter_period2
     strategy: filter_period2
-    replicas: 2
+    replicas: 1
     input: queue:non_period1_transactions
     match_count: 1
     outputs:
@@ -89,7 +76,6 @@ workers:
     outputs:
       - queue:q1_input
 
-  # --- Drains: one sink per terminal queue, for end-to-end validation ------
   - name: drain_q1_input
     strategy: drain
     replicas: 1
