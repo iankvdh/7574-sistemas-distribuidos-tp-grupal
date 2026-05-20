@@ -28,26 +28,45 @@ func (handler *MessageHandler) ClientID() inner.ClientID {
 	return handler.clientID
 }
 
-func (handler *MessageHandler) SerializeTransactionBatchMessage(batch []transaction.Transaction) (*middleware.Message, error) {
-	payload, err := external.SerializeTransactionBatchPayload(batch)
-	if err != nil {
-		return nil, err
+// SerializeTransactionMessages produces one inner Message per transaction in the batch.
+// Internal queues carry elements one-by-one (granularidad de elemento individual).
+func (handler *MessageHandler) SerializeTransactionMessages(batch []transaction.Transaction) ([]middleware.Message, error) {
+	messages := make([]middleware.Message, 0, len(batch))
+	for i := range batch {
+		payload, err := external.SerializeTransaction(&batch[i])
+		if err != nil {
+			return nil, err
+		}
+		msg, err := inner.SerializeTransactionMessage(handler.gatewayID, handler.clientID, payload)
+		if err != nil {
+			return nil, err
+		}
+		messages = append(messages, *msg)
 	}
 	handler.transactionAmount += uint32(len(batch))
-	return inner.SerializeAllTransactionsBatch(handler.gatewayID, handler.clientID, payload)
+	return messages, nil
 }
 
 func (handler *MessageHandler) SerializeTransactionEOFMessage() (*middleware.Message, error) {
 	return inner.SerializeAllTransactionsEOF(handler.gatewayID, handler.clientID, handler.transactionAmount)
 }
 
-func (handler *MessageHandler) SerializeAccountBatchMessage(batch []account.Account) (*middleware.Message, error) {
-	payload, err := external.SerializeAccountBatchPayload(batch)
-	if err != nil {
-		return nil, err
+// SerializeAccountMessages produces one inner Message per account in the batch.
+func (handler *MessageHandler) SerializeAccountMessages(batch []account.Account) ([]middleware.Message, error) {
+	messages := make([]middleware.Message, 0, len(batch))
+	for i := range batch {
+		payload, err := external.SerializeAccount(&batch[i])
+		if err != nil {
+			return nil, err
+		}
+		msg, err := inner.SerializeAccountMessage(handler.gatewayID, handler.clientID, payload)
+		if err != nil {
+			return nil, err
+		}
+		messages = append(messages, *msg)
 	}
 	handler.accountAmount += uint32(len(batch))
-	return inner.SerializeAllAccountsBatch(handler.gatewayID, handler.clientID, payload)
+	return messages, nil
 }
 
 func (handler *MessageHandler) SerializeAccountEOFMessage() (*middleware.Message, error) {

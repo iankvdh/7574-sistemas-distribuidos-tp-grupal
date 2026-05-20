@@ -18,6 +18,17 @@ const (
 	AllAccountsBatch
 	AllAccountsEOF
 	FinalQueryResult
+	// TransactionMessage carries a single transaction (Payload = SerializeTransaction(tx)).
+	// Used in internal pipeline queues after the gateway unpacks the external batch.
+	TransactionMessage
+	// AccountMessage carries a single account (Payload = SerializeAccount(acc)).
+	AccountMessage
+	// InternalEOF: EOF entre stages internas del pipeline; Total = items publicados por
+	// el iniciador del anillo a la output queue correspondiente.
+	InternalEOF
+	// RingTokenMessage transporta el token del anillo entre réplicas de una misma strategy.
+	// Payload = JSON del RingToken.
+	RingTokenMessage
 )
 
 var (
@@ -84,6 +95,26 @@ func SerializeAllAccountsBatch(gatewayID GatewayID, clientID ClientID, payload [
 
 func SerializeAllAccountsEOF(gatewayID GatewayID, clientID ClientID, total uint32) (*middleware.Message, error) {
 	return SerializeEnvelope(AllAccountsEOF, gatewayID, clientID, total, nil)
+}
+
+// SerializeTransactionMessage envuelve una transaction serializada en un envelope con Kind=TransactionMessage.
+func SerializeTransactionMessage(gatewayID GatewayID, clientID ClientID, payload []byte) (*middleware.Message, error) {
+	return SerializeEnvelope(TransactionMessage, gatewayID, clientID, 0, payload)
+}
+
+// SerializeAccountMessage envuelve un account serializado en un envelope con Kind=AccountMessage.
+func SerializeAccountMessage(gatewayID GatewayID, clientID ClientID, payload []byte) (*middleware.Message, error) {
+	return SerializeEnvelope(AccountMessage, gatewayID, clientID, 0, payload)
+}
+
+// SerializeInternalEOF emite un EOF interno con total agregado (count emitido a la output).
+func SerializeInternalEOF(gatewayID GatewayID, clientID ClientID, total uint32) (*middleware.Message, error) {
+	return SerializeEnvelope(InternalEOF, gatewayID, clientID, total, nil)
+}
+
+// SerializeRingToken envuelve el token JSON del anillo en un envelope.
+func SerializeRingToken(gatewayID GatewayID, clientID ClientID, tokenJSON []byte) (*middleware.Message, error) {
+	return SerializeEnvelope(RingTokenMessage, gatewayID, clientID, 0, tokenJSON)
 }
 
 func SerializeFinalQueryResult(gatewayID GatewayID, clientID ClientID, queryID uint8, status string) (*middleware.Message, error) {

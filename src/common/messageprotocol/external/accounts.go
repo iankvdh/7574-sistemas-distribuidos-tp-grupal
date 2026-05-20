@@ -9,6 +9,17 @@ import (
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/messageprotocol/external/serializer"
 )
 
+// SerializeAccount returns the binary representation of a single account.
+// Useful for internal queues that carry one element per message.
+func SerializeAccount(acc *account.Account) ([]byte, error) {
+	return serializeAccount(acc)
+}
+
+// DeserializeAccount reconstructs an account from the byte slice produced by SerializeAccount.
+func DeserializeAccount(payload []byte) (*account.Account, error) {
+	return deserializeAccount(bytes.NewReader(payload))
+}
+
 func serializeAccount(acc *account.Account) ([]byte, error) {
 	bankName, err := serializer.SerializeShortString(acc.BankName)
 	if err != nil {

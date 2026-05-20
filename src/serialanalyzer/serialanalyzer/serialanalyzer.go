@@ -10,9 +10,11 @@ import (
 	"sync/atomic"
 	"syscall"
 
+	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/account"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/messageprotocol/external"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/messageprotocol/inner"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/middleware"
+	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/transaction"
 	analyzerconfig "github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/serialanalyzer/config"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/serialanalyzer/session"
 )
@@ -129,14 +131,14 @@ func (serialAnalyzer *SerialAnalyzer) handleTransactionsMessage(message middlewa
 
 	var outputs []session.QueryOutput
 	switch envelope.Kind {
-	case inner.AllTransactionsBatch:
-		batch, err := external.DeserializeTransactionBatchPayload(envelope.Payload)
+	case inner.TransactionMessage:
+		tx, err := external.DeserializeTransaction(envelope.Payload)
 		if err != nil {
-			slog.Error("Invalid transactions batch payload", "client_id", envelope.ClientID, "err", err)
+			slog.Error("Invalid transaction payload", "client_id", envelope.ClientID, "err", err)
 			ack()
 			return
 		}
-		outputs = serialAnalyzer.processor.AddTransactions(envelope.GatewayID, envelope.ClientID, batch)
+		outputs = serialAnalyzer.processor.AddTransactions(envelope.GatewayID, envelope.ClientID, []transaction.Transaction{*tx})
 	case inner.AllTransactionsEOF:
 		outputs = serialAnalyzer.processor.MarkTransactionsEOF(envelope.GatewayID, envelope.ClientID, envelope.Total)
 	default:
@@ -172,14 +174,14 @@ func (serialAnalyzer *SerialAnalyzer) handleAccountsMessage(message middleware.M
 
 	var outputs []session.QueryOutput
 	switch envelope.Kind {
-	case inner.AllAccountsBatch:
-		batch, err := external.DeserializeAccountBatchPayload(envelope.Payload)
+	case inner.AccountMessage:
+		acc, err := external.DeserializeAccount(envelope.Payload)
 		if err != nil {
-			slog.Error("Invalid accounts batch payload", "client_id", envelope.ClientID, "err", err)
+			slog.Error("Invalid account payload", "client_id", envelope.ClientID, "err", err)
 			ack()
 			return
 		}
-		outputs = serialAnalyzer.processor.AddAccounts(envelope.GatewayID, envelope.ClientID, batch)
+		outputs = serialAnalyzer.processor.AddAccounts(envelope.GatewayID, envelope.ClientID, []account.Account{*acc})
 	case inner.AllAccountsEOF:
 		outputs = serialAnalyzer.processor.MarkAccountsEOF(envelope.GatewayID, envelope.ClientID, envelope.Total)
 	default:
