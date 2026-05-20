@@ -1,10 +1,7 @@
-// Package filter contains all filter strategies. A filter applies a boolean
-// predicate to each transaction it consumes and routes it to either the "match"
-// outputs or the "no-match" outputs (which may be empty, meaning discard).
-//
-// All filters share the same base struct (Filter) and differ only in the predicate
-// they register. Per-client counts are kept locally; coordination across replicas
-// is delegated to a ring EOF coordinator.
+// Package filter contains all filter strategies. A filter routes each
+// transaction to the match outputs [0, MatchCount) or the no-match outputs
+// [MatchCount, OutputCount). EOF coordination across replicas is handled by a
+// ring coordinator.
 package filter
 
 import (
@@ -17,10 +14,8 @@ import (
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy"
 )
 
-// Predicate decides whether a transaction matches the filter.
 type Predicate func(transaction.Transaction) bool
 
-// Filter is the shared implementation for every concrete filter strategy.
 type Filter struct {
 	name        string
 	predicate   Predicate
@@ -35,7 +30,6 @@ type filterState struct {
 	notMatched uint64
 }
 
-// New builds a Filter with the given identifier and predicate.
 func New(name string, predicate Predicate) *Filter {
 	return &Filter{
 		name:      name,
@@ -56,10 +50,9 @@ func (f *Filter) Init(ctx strategy.Context) error {
 	return nil
 }
 
-// ProcessMessage parses one transaction, evaluates the predicate, and routes it.
-// Matches go to outputs[0:MatchCount]; no-matches go to outputs[MatchCount:].
-// If there are no no-match outputs configured, the no-match path is a discard:
-// the message is dropped but the local counter still grows so the ring totals stay correct.
+// ProcessMessage routes the transaction to match or no-match outputs. When no
+// no-match outputs are configured the message is dropped, but the local counter
+// still grows so ring totals stay correct.
 func (f *Filter) ProcessMessage(env *inner.Envelope) ([]strategy.Decision, strategy.LocalCounts, error) {
 	if env.Kind != inner.TransactionMessage {
 		return nil, strategy.LocalCounts{}, fmt.Errorf("filter %s expects TransactionMessage, got kind=%d", f.name, env.Kind)
@@ -101,9 +94,6 @@ func (f *Filter) ProcessMessage(env *inner.Envelope) ([]strategy.Decision, strat
 	}}, strategy.LocalCounts{Processed: 1, NotMatched: 1}, nil
 }
 
-// OnUpstreamEOF delegates to the ring coordinator. With N=1 the coordinator will
-// usually emit the EOFs immediately; with N>1 it returns a Forward action with the
-// token to send around the ring.
 func (f *Filter) OnUpstreamEOF(env *inner.Envelope) (strategy.EOFOutcome, error) {
 	state := f.stateFor(env.ClientID)
 	action, result := f.coordinator.OnUpstreamEOF(env.ClientID, env.Total, state.matched, state.notMatched)
@@ -115,8 +105,6 @@ func (f *Filter) OnUpstreamEOF(env *inner.Envelope) (strategy.EOFOutcome, error)
 	return outcome, nil
 }
 
-// OnRingToken delegates to the ring coordinator. Non-initiator replicas forward the
-// token after summing their local counts; the initiator finalizes or re-enqueues.
 func (f *Filter) OnRingToken(token *eof.Token) (strategy.EOFOutcome, error) {
 	state := f.stateFor(token.ClientID)
 	action, result := f.coordinator.OnRingToken(token, state.matched, state.notMatched)

@@ -8,8 +8,7 @@ import (
 
 const name = "noop"
 
-// Strategy forwards every message it receives to all configured outputs unchanged.
-// Used in Phase 0 to validate the worker scaffolding end-to-end. No ring topology.
+// Strategy forwards every message to all configured outputs unchanged.
 type Strategy struct {
 	ctx    strategy.Context
 	counts map[inner.ClientID]uint64
@@ -51,7 +50,6 @@ func (s *Strategy) OnUpstreamEOF(env *inner.Envelope) (strategy.EOFOutcome, erro
 }
 
 func (s *Strategy) OnRingToken(_ *eof.Token) (strategy.EOFOutcome, error) {
-	// noop strategy does not participate in a ring.
 	return strategy.EOFOutcome{Action: eof.Action{Kind: eof.ActionNone}}, nil
 }
 
