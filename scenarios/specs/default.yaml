@@ -1,5 +1,5 @@
-# Declarative pipeline spec. Use `make gen` (default SPEC=3_pipeline) to expand
-# into scenarios/3_pipeline.yaml.
+# Declarative pipeline spec. `make gen` (SPEC=default) expands this into
+# scenarios/default.yaml.
 #
 # The spec is family-agnostic: every worker has the same shape regardless of
 # whether it is a filter, joiner, drain, etc. The runtime decides what to do
