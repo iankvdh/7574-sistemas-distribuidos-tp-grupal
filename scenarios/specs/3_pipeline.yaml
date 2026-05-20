@@ -1,0 +1,136 @@
+# Declarative pipeline spec. Use `make gen` (default SPEC=3_pipeline) to expand
+# into scenarios/3_pipeline.yaml.
+#
+# The spec is family-agnostic: every worker has the same shape regardless of
+# whether it is a filter, joiner, drain, etc. The runtime decides what to do
+# based on its STRATEGY env var. Per-strategy extras (EXPECTED_EOFS, paths, ...)
+# go under `env:`.
+#
+# Each terminal queue is observed by a `drain` worker that persists its
+# transactions + the EOF marker into results/drain_<name>.csv. That gives us
+# an end-to-end check that the right data and the right EOF totals reach every
+# final destination.
+
+clients: 1
+gateways: 1
+transactions: /datasets/LI-Small_Trans.csv
+accounts: /datasets/LI-Small_accounts.csv
+
+workers:
+  # --- Filters --------------------------------------------------------------
+  # filter_period1 demonstrates the ring topology: with replicas > 1 the
+  # generator wires up RING_QUEUE_IN/OUT automatically as ring_<name>_<i>.
+  - name: filter_period1
+    strategy: filter_period1
+    replicas: 2
+    input: queue:all_transactions
+    match_count: 1
+    outputs:
+      - direct_exchange:period1_transactions
+      - queue:non_period1_transactions
+
+  - name: filter_wire_ach
+    strategy: filter_wire_ach
+    replicas: 1
+    input: direct_exchange:period1_transactions
+    match_count: 1
+    outputs:
+      - queue:period1_wire_ach
+
+  - name: filter_currency_usd_p1
+    strategy: filter_currency_usd_p1
+    replicas: 1
+    input: direct_exchange:period1_transactions
+    match_count: 2
+    outputs:
+      - direct_exchange:period1_usd_direct_exchange
+      - sharded_queues:joiner_usd_input:1
+
+  - name: filter_period2
+    strategy: filter_period2
+    replicas: 2
+    input: queue:non_period1_transactions
+    match_count: 1
+    outputs:
+      - queue:period2_transactions
+      - queue:other_dates_transactions
+
+  - name: filter_currency_usd_p2
+    strategy: filter_currency_usd_p2
+    replicas: 1
+    input: queue:period2_transactions
+    match_count: 2
+    outputs:
+      - direct_exchange:period2_usd_direct_exchange
+      - sharded_queues:joiner_usd_input:1
+
+  - name: filter_currency_usd_other_periods
+    strategy: filter_currency_usd_other_periods
+    replicas: 1
+    input: queue:other_dates_transactions
+    match_count: 1
+    outputs:
+      - sharded_queues:joiner_usd_input:1
+
+  - name: joiner_usd
+    strategy: joiner_usd
+    replicas: 1
+    input: queue:joiner_usd_input_0
+    outputs:
+      - direct_exchange:usd
+    env:
+      EXPECTED_EOFS: "3"
+
+  - name: filter_amount_lt_50
+    strategy: filter_amount_lt_50
+    replicas: 1
+    input: direct_exchange:usd
+    match_count: 1
+    outputs:
+      - queue:q1_input
+
+  # --- Drains: one sink per terminal queue, for end-to-end validation ------
+  - name: drain_q1_input
+    strategy: drain
+    replicas: 1
+    input: queue:q1_input
+    env:
+      DRAIN_OUTPUT_FILE: /results/drain_q1_input.csv
+    volumes:
+      - ./results:/results
+
+  - name: drain_period1_wire_ach
+    strategy: drain
+    replicas: 1
+    input: queue:period1_wire_ach
+    env:
+      DRAIN_OUTPUT_FILE: /results/drain_period1_wire_ach.csv
+    volumes:
+      - ./results:/results
+
+  - name: drain_period1_usd
+    strategy: drain
+    replicas: 1
+    input: direct_exchange:period1_usd_direct_exchange
+    env:
+      DRAIN_OUTPUT_FILE: /results/drain_period1_usd.csv
+    volumes:
+      - ./results:/results
+
+  - name: drain_period2_usd
+    strategy: drain
+    replicas: 1
+    input: direct_exchange:period2_usd_direct_exchange
+    env:
+      DRAIN_OUTPUT_FILE: /results/drain_period2_usd.csv
+    volumes:
+      - ./results:/results
+
+  - name: drain_usd_joined
+    strategy: drain
+    replicas: 1
+    input: direct_exchange:usd
+    env:
+      DRAIN_OUTPUT_FILE: /results/drain_usd_joined.csv
+    volumes:
+      - ./results:/results

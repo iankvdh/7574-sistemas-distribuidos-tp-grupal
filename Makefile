@@ -4,6 +4,13 @@ COMPOSE_PROJECT_NAME := tp_grupal
 
 compose = COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT_NAME) docker compose -f $(COMPOSE_FILE)
 
+# Every scenarios/specs/*.yaml is a declarative spec that compose-gen expands
+# into scenarios/<name>.yaml (the compose docker actually runs).
+SPECS := $(patsubst %.yaml,%,$(notdir $(wildcard scenarios/specs/*.yaml)))
+SPEC ?= 3_pipeline
+
+# --- Compose lifecycle -----------------------------------------------------
+
 up:
 	@COMPOSE_HTTP_TIMEOUT=300 COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT_NAME) docker compose -f $(COMPOSE_FILE) up --build --remove-orphans --detach
 	@$(compose) logs --follow
@@ -22,14 +29,35 @@ test:
 	@cd src && go test ./...
 .PHONY: test
 
+# --- Spec → compose generation --------------------------------------------
+
+gen:
+	@cd src && go run ./tools/compose-gen ../scenarios/specs/$(SPEC).yaml > ../scenarios/$(SPEC).yaml
+	@echo "Wrote scenarios/$(SPEC).yaml from scenarios/specs/$(SPEC).yaml"
+.PHONY: gen
+
+gen-all:
+	@for spec in $(SPECS); do \
+		echo "Generating $$spec.yaml from specs/$$spec.yaml..."; \
+		(cd src && go run ./tools/compose-gen ../scenarios/specs/$$spec.yaml > ../scenarios/$$spec.yaml); \
+	done
+.PHONY: gen-all
+
+# --- Scenario selection ----------------------------------------------------
+
 switch:
-	@echo Escenarios de prueba:
-	@echo "1) Un cliente, gateway + rabbitmq"
-	@echo "2) Prueba serial (2 clientes, 2 gateways, serial-analyzer)"
-	@read -p "Selecciona uno [1/2]: " option; \
-	if [ "$$option" = "2" ]; then \
-		cp ./scenarios/2_serial.yaml $(COMPOSE_FILE); \
-	else \
-		cp ./scenarios/1.yaml $(COMPOSE_FILE); \
-	fi
+	@bash ./scripts/switch.sh
 .PHONY: switch
+
+# --- One-shot helpers ------------------------------------------------------
+
+up-legacy:
+	@cp ./scenarios/2_serial.yaml $(COMPOSE_FILE)
+	@$(MAKE) up
+.PHONY: up-legacy
+
+up-pipeline:
+	@$(MAKE) gen SPEC=$(SPEC)
+	@cp ./scenarios/$(SPEC).yaml $(COMPOSE_FILE)
+	@$(MAKE) up
+.PHONY: up-pipeline
