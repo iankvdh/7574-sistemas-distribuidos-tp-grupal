@@ -64,11 +64,7 @@ func (f *Filter) ProcessMessage(env *inner.Envelope) ([]strategy.Decision, strat
 
 	state := f.stateFor(env.ClientID)
 	matched := f.predicate(*tx)
-
-	body, err := encodeEnvelope(env)
-	if err != nil {
-		return nil, strategy.LocalCounts{}, err
-	}
+	body := string(env.Payload)
 
 	if matched {
 		state.matched++
@@ -138,14 +134,6 @@ func (f *Filter) stateFor(clientID inner.ClientID) *filterState {
 		f.state[clientID] = state
 	}
 	return state
-}
-
-func encodeEnvelope(env *inner.Envelope) (string, error) {
-	msg, err := inner.SerializeEnvelope(env.Kind, env.GatewayID, env.ClientID, env.Total, env.Payload)
-	if err != nil {
-		return "", err
-	}
-	return msg.Body, nil
 }
 
 func rangeIndices(start, end int) []int {

@@ -32,12 +32,8 @@ func (s *Strategy) ProcessMessage(env *inner.Envelope) ([]strategy.Decision, str
 	for i := 0; i < s.ctx.OutputCount; i++ {
 		indices = append(indices, i)
 	}
-	body, err := encodeEnvelope(env)
-	if err != nil {
-		return nil, strategy.LocalCounts{}, err
-	}
 	s.counts[env.ClientID]++
-	return []strategy.Decision{{OutputIndices: indices, Body: body, ClientID: env.ClientID}}, strategy.LocalCounts{Processed: 1, Matched: 1}, nil
+	return []strategy.Decision{{OutputIndices: indices, Body: string(env.Payload), ClientID: env.ClientID}}, strategy.LocalCounts{Processed: 1, Matched: 1}, nil
 }
 
 func (s *Strategy) OnUpstreamEOF(env *inner.Envelope) (strategy.EOFOutcome, error) {
@@ -53,10 +49,3 @@ func (s *Strategy) OnRingToken(_ *eof.Token) (strategy.EOFOutcome, error) {
 	return strategy.EOFOutcome{Action: eof.Action{Kind: eof.ActionNone}}, nil
 }
 
-func encodeEnvelope(env *inner.Envelope) (string, error) {
-	msg, err := inner.SerializeEnvelope(env.Kind, env.GatewayID, env.ClientID, env.Total, env.Payload)
-	if err != nil {
-		return "", err
-	}
-	return msg.Body, nil
-}

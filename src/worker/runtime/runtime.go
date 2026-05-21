@@ -18,26 +18,49 @@ import (
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/topology"
 )
 
-type Worker struct {
-	cfg          config.WorkerConfig
-	strategy     strategy.Strategy
-	input        middleware.Middleware
-	ringIn       middleware.Middleware
-	ringOut      middleware.Middleware
-	outputs      []topology.OutputSink
-	logger       *slog.Logger
-	running      atomic.Bool
-	shutdownOnce sync.Once
-	shutdownCh   chan struct{}
-	wg           sync.WaitGroup
+// Producer-side batching thresholds. A pending batch flushes when either limit
+// is hit, when an EOF for that client arrives, or on shutdown. 512 items / 64 KB
+// keeps each AMQP body under frame_max (128 KB) while cutting broker ops ~4x
+// vs 128 items.
+const (
+	batchMaxItems = 512
+	batchMaxBytes = 64 * 1024
+)
 
-	// strategyMu serializes Strategy calls. The input consumer and the ring
-	// consumer run on different goroutines and neither the Strategy nor its EOF
-	// coordinator is safe for concurrent access.
+type Worker struct {
+	cfg           config.WorkerConfig
+	strategy      strategy.Strategy
+	input         middleware.Middleware
+	ringIn        middleware.Middleware
+	ringOut       middleware.Middleware
+	outputs       []topology.OutputSink
+	outputBuffers []*outputBuffer
+	logger        *slog.Logger
+	running       atomic.Bool
+	shutdownOnce  sync.Once
+	shutdownCh    chan struct{}
+	wg            sync.WaitGroup
+
+	// strategyMu serializes Strategy calls and output flushes. The input
+	// consumer and the ring consumer run on different goroutines and neither
+	// the Strategy nor the output buffers are safe for concurrent access.
 	strategyMu sync.Mutex
 
 	mu           sync.Mutex
 	upstreamEOFs map[inner.ClientID]middleware.Message
+}
+
+// outputBuffer holds pending batches per shard, per client. A non-sharded sink
+// has 1 shard.
+type outputBuffer struct {
+	sink     topology.OutputSink
+	perShard []map[inner.ClientID]*pendingBatch
+}
+
+type pendingBatch struct {
+	gatewayID inner.GatewayID
+	items     [][]byte
+	bytes     int
 }
 
 func New(cfg config.WorkerConfig, logger *slog.Logger) (*Worker, error) {
@@ -106,16 +129,30 @@ func New(cfg config.WorkerConfig, logger *slog.Logger) (*Worker, error) {
 		return nil, err
 	}
 
+	buffers := make([]*outputBuffer, len(outputs))
+	for i, sink := range outputs {
+		shards := 1
+		if sink.Kind == topology.KindShardedQueues {
+			shards = sink.ShardCount
+		}
+		perShard := make([]map[inner.ClientID]*pendingBatch, shards)
+		for s := range perShard {
+			perShard[s] = map[inner.ClientID]*pendingBatch{}
+		}
+		buffers[i] = &outputBuffer{sink: sink, perShard: perShard}
+	}
+
 	w := &Worker{
-		cfg:          cfg,
-		strategy:     strat,
-		input:        input,
-		ringIn:       ringIn,
-		ringOut:      ringOut,
-		outputs:      outputs,
-		logger:       logger,
-		shutdownCh:   make(chan struct{}),
-		upstreamEOFs: map[inner.ClientID]middleware.Message{},
+		cfg:           cfg,
+		strategy:      strat,
+		input:         input,
+		ringIn:        ringIn,
+		ringOut:       ringOut,
+		outputs:       outputs,
+		outputBuffers: buffers,
+		logger:        logger,
+		shutdownCh:    make(chan struct{}),
+		upstreamEOFs:  map[inner.ClientID]middleware.Message{},
 	}
 	w.running.Store(true)
 	return w, nil
@@ -171,35 +208,64 @@ func (w *Worker) handleInputMessage(msg middleware.Message, ack func(), nack fun
 		w.cacheUpstreamEOF(envelope.ClientID, msg)
 		w.strategyMu.Lock()
 		outcome, err := w.strategy.OnUpstreamEOF(envelope)
-		w.strategyMu.Unlock()
 		if err != nil {
+			w.strategyMu.Unlock()
 			w.logger.Error("Strategy OnUpstreamEOF failed", "client_id", envelope.ClientID, "err", err)
 			nack()
 			return
 		}
 		if err := w.applyOutcome(envelope, outcome); err != nil {
+			w.strategyMu.Unlock()
 			w.logger.Error("Applying EOF outcome failed", "client_id", envelope.ClientID, "err", err)
 			nack()
 			return
 		}
+		w.strategyMu.Unlock()
 		ack()
 		return
 	}
 
 	w.strategyMu.Lock()
-	decisions, _, err := w.strategy.ProcessMessage(envelope)
+	if envelope.Kind == inner.InnerBatch {
+		itemKind, items, err := inner.DeserializeInnerBatch(envelope)
+		if err != nil {
+			w.strategyMu.Unlock()
+			w.logger.Error("Malformed InnerBatch envelope", "err", err)
+			ack()
+			return
+		}
+		for _, payload := range items {
+			item := &inner.Envelope{
+				Kind:      itemKind,
+				GatewayID: envelope.GatewayID,
+				ClientID:  envelope.ClientID,
+				Payload:   payload,
+			}
+			if err := w.processSingleItem(item); err != nil {
+				w.strategyMu.Unlock()
+				w.logger.Error("Strategy ProcessMessage failed", "client_id", envelope.ClientID, "err", err)
+				nack()
+				return
+			}
+		}
+	} else {
+		if err := w.processSingleItem(envelope); err != nil {
+			w.strategyMu.Unlock()
+			w.logger.Error("Strategy ProcessMessage failed", "client_id", envelope.ClientID, "err", err)
+			nack()
+			return
+		}
+	}
 	w.strategyMu.Unlock()
-	if err != nil {
-		w.logger.Error("Strategy ProcessMessage failed", "client_id", envelope.ClientID, "err", err)
-		nack()
-		return
-	}
-	if err := w.publishDecisions(decisions); err != nil {
-		w.logger.Error("Publishing decision failed", "client_id", envelope.ClientID, "err", err)
-		nack()
-		return
-	}
 	ack()
+}
+
+func (w *Worker) processSingleItem(env *inner.Envelope) error {
+	decisions, _, err := w.strategy.ProcessMessage(env)
+	if err != nil {
+		return err
+	}
+	return w.appendDecisions(env.GatewayID, decisions)
 }
 
 func (w *Worker) handleRingMessage(msg middleware.Message, ack func(), nack func()) {
@@ -224,8 +290,8 @@ func (w *Worker) handleRingMessage(msg middleware.Message, ack func(), nack func
 
 	w.strategyMu.Lock()
 	outcome, err := w.strategy.OnRingToken(token)
-	w.strategyMu.Unlock()
 	if err != nil {
+		w.strategyMu.Unlock()
 		w.logger.Error("Strategy OnRingToken failed", "client_id", token.ClientID, "err", err)
 		nack()
 		return
@@ -233,10 +299,12 @@ func (w *Worker) handleRingMessage(msg middleware.Message, ack func(), nack func
 
 	pseudoEnv := &inner.Envelope{GatewayID: envelope.GatewayID, ClientID: token.ClientID}
 	if err := w.applyOutcome(pseudoEnv, outcome); err != nil {
+		w.strategyMu.Unlock()
 		w.logger.Error("Applying ring outcome failed", "client_id", token.ClientID, "err", err)
 		nack()
 		return
 	}
+	w.strategyMu.Unlock()
 	ack()
 }
 
@@ -245,6 +313,13 @@ func (w *Worker) applyOutcome(env *inner.Envelope, outcome strategy.EOFOutcome) 
 	case eof.ActionNone:
 		return nil
 	case eof.ActionForwardToken:
+		// Every replica must flush its pending output batches for this client
+		// before its counts ride the ring token. Otherwise the aggregated total
+		// the initiator computes will exceed what downstream actually received,
+		// the ring fails the check, and re-enqueues the upstream EOF forever.
+		if err := w.flushClient(env.ClientID); err != nil {
+			return err
+		}
 		return w.forwardToken(env, outcome.Action.Token)
 	case eof.ActionEmitEOFs:
 		w.clearUpstreamEOF(env.ClientID)
@@ -274,13 +349,13 @@ func (w *Worker) forwardToken(env *inner.Envelope, token *eof.Token) error {
 	return w.ringOut.Send(*msg)
 }
 
-func (w *Worker) publishDecisions(decisions []strategy.Decision) error {
+func (w *Worker) appendDecisions(gatewayID inner.GatewayID, decisions []strategy.Decision) error {
 	for _, d := range decisions {
 		for _, idx := range d.OutputIndices {
-			if idx < 0 || idx >= len(w.outputs) {
+			if idx < 0 || idx >= len(w.outputBuffers) {
 				return errors.New("strategy returned invalid output index")
 			}
-			if err := w.sendToSink(w.outputs[idx], d.ClientID, middleware.Message{Body: d.Body}); err != nil {
+			if err := w.appendToShard(idx, d.ClientID, gatewayID, []byte(d.Body)); err != nil {
 				return err
 			}
 		}
@@ -288,7 +363,80 @@ func (w *Worker) publishDecisions(decisions []strategy.Decision) error {
 	return nil
 }
 
+func (w *Worker) appendToShard(idx int, clientID inner.ClientID, gatewayID inner.GatewayID, payload []byte) error {
+	buf := w.outputBuffers[idx]
+	shard := w.shardFor(buf.sink, clientID)
+	bucket := buf.perShard[shard]
+	pending, ok := bucket[clientID]
+	if !ok {
+		pending = &pendingBatch{gatewayID: gatewayID}
+		bucket[clientID] = pending
+	}
+	pending.items = append(pending.items, payload)
+	pending.bytes += len(payload)
+	if len(pending.items) >= batchMaxItems || pending.bytes >= batchMaxBytes {
+		return w.flushShard(idx, shard, clientID)
+	}
+	return nil
+}
+
+func (w *Worker) flushShard(idx, shard int, clientID inner.ClientID) error {
+	buf := w.outputBuffers[idx]
+	pending := buf.perShard[shard][clientID]
+	if pending == nil || len(pending.items) == 0 {
+		return nil
+	}
+	msg, err := inner.SerializeInnerBatch(inner.TransactionMessage, pending.gatewayID, clientID, pending.items)
+	if err != nil {
+		return err
+	}
+	if err := buf.sink.Middlewares[shard].Send(*msg); err != nil {
+		return err
+	}
+	delete(buf.perShard[shard], clientID)
+	return nil
+}
+
+// flushClient flushes every output buffer (across all sinks and shards) that
+// currently holds pending items for clientID. Called before publishing EOFs to
+// keep downstream count==upstream_total invariants.
+func (w *Worker) flushClient(clientID inner.ClientID) error {
+	for idx, buf := range w.outputBuffers {
+		for shard := range buf.perShard {
+			if _, ok := buf.perShard[shard][clientID]; !ok {
+				continue
+			}
+			if err := w.flushShard(idx, shard, clientID); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (w *Worker) flushAll() {
+	for idx, buf := range w.outputBuffers {
+		for shard := range buf.perShard {
+			for clientID := range buf.perShard[shard] {
+				if err := w.flushShard(idx, shard, clientID); err != nil {
+					w.logger.Error("Flush on shutdown failed", "client_id", clientID, "output", idx, "shard", shard, "err", err)
+				}
+			}
+		}
+	}
+}
+
+func (w *Worker) shardFor(sink topology.OutputSink, clientID inner.ClientID) int {
+	if sink.Kind == topology.KindShardedQueues {
+		return hashing.Shard(string(clientID), sink.ShardCount)
+	}
+	return 0
+}
+
 func (w *Worker) publishEOFs(env *inner.Envelope, emits []eof.EOFEmit) error {
+	if err := w.flushClient(env.ClientID); err != nil {
+		return err
+	}
 	for _, e := range emits {
 		if e.OutputIndex < 0 || e.OutputIndex >= len(w.outputs) {
 			return errors.New("strategy returned invalid output index for EOF")
@@ -297,27 +445,16 @@ func (w *Worker) publishEOFs(env *inner.Envelope, emits []eof.EOFEmit) error {
 		if err != nil {
 			return err
 		}
-		if err := w.sendToSink(w.outputs[e.OutputIndex], env.ClientID, *msg); err != nil {
+		sink := w.outputs[e.OutputIndex]
+		shard := w.shardFor(sink, env.ClientID)
+		if shard >= len(sink.Middlewares) {
+			return errors.New("misconfigured sink: shard index out of range")
+		}
+		if err := sink.Middlewares[shard].Send(*msg); err != nil {
 			return err
 		}
 	}
 	return nil
-}
-
-func (w *Worker) sendToSink(sink topology.OutputSink, clientID inner.ClientID, msg middleware.Message) error {
-	switch sink.Kind {
-	case topology.KindShardedQueues:
-		if sink.ShardCount <= 0 || len(sink.Middlewares) != sink.ShardCount {
-			return errors.New("misconfigured sharded sink")
-		}
-		shard := hashing.Shard(string(clientID), sink.ShardCount)
-		return sink.Middlewares[shard].Send(msg)
-	default:
-		if len(sink.Middlewares) != 1 {
-			return errors.New("non-sharded sink expects exactly 1 middleware")
-		}
-		return sink.Middlewares[0].Send(msg)
-	}
 }
 
 func (w *Worker) reenqueueUpstreamEOF(clientID inner.ClientID) error {
@@ -362,6 +499,9 @@ func (w *Worker) shutdown() {
 	w.shutdownOnce.Do(func() {
 		w.running.Store(false)
 		close(w.shutdownCh)
+		w.strategyMu.Lock()
+		w.flushAll()
+		w.strategyMu.Unlock()
 		_ = w.input.StopConsuming()
 		_ = w.input.Close()
 		if w.ringIn != nil {
