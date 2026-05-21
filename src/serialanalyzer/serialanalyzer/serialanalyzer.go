@@ -139,6 +139,24 @@ func (serialAnalyzer *SerialAnalyzer) handleTransactionsMessage(message middlewa
 			return
 		}
 		outputs = serialAnalyzer.processor.AddTransactions(envelope.GatewayID, envelope.ClientID, []transaction.Transaction{*tx})
+	case inner.InnerBatch:
+		itemKind, items, err := inner.DeserializeInnerBatch(envelope)
+		if err != nil || itemKind != inner.TransactionMessage {
+			slog.Error("Invalid transactions InnerBatch", "client_id", envelope.ClientID, "err", err)
+			ack()
+			return
+		}
+		txs := make([]transaction.Transaction, 0, len(items))
+		for _, payload := range items {
+			tx, err := external.DeserializeTransaction(payload)
+			if err != nil {
+				slog.Error("Invalid transaction payload in batch", "client_id", envelope.ClientID, "err", err)
+				ack()
+				return
+			}
+			txs = append(txs, *tx)
+		}
+		outputs = serialAnalyzer.processor.AddTransactions(envelope.GatewayID, envelope.ClientID, txs)
 	case inner.AllTransactionsEOF:
 		outputs = serialAnalyzer.processor.MarkTransactionsEOF(envelope.GatewayID, envelope.ClientID, envelope.Total)
 	default:
@@ -182,6 +200,24 @@ func (serialAnalyzer *SerialAnalyzer) handleAccountsMessage(message middleware.M
 			return
 		}
 		outputs = serialAnalyzer.processor.AddAccounts(envelope.GatewayID, envelope.ClientID, []account.Account{*acc})
+	case inner.InnerBatch:
+		itemKind, items, err := inner.DeserializeInnerBatch(envelope)
+		if err != nil || itemKind != inner.AccountMessage {
+			slog.Error("Invalid accounts InnerBatch", "client_id", envelope.ClientID, "err", err)
+			ack()
+			return
+		}
+		accs := make([]account.Account, 0, len(items))
+		for _, payload := range items {
+			acc, err := external.DeserializeAccount(payload)
+			if err != nil {
+				slog.Error("Invalid account payload in batch", "client_id", envelope.ClientID, "err", err)
+				ack()
+				return
+			}
+			accs = append(accs, *acc)
+		}
+		outputs = serialAnalyzer.processor.AddAccounts(envelope.GatewayID, envelope.ClientID, accs)
 	case inner.AllAccountsEOF:
 		outputs = serialAnalyzer.processor.MarkAccountsEOF(envelope.GatewayID, envelope.ClientID, envelope.Total)
 	default:

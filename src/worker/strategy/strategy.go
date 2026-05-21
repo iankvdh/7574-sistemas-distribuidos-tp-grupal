@@ -7,9 +7,11 @@ import (
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/messageprotocol/inner"
 )
 
-// Decision is one payload the runtime must publish. OutputIndices reference
+// Decision is one item the runtime must publish. OutputIndices reference
 // Context outputs by position; ClientID picks the shard when an output is
-// sharded by client.
+// sharded by client. Body carries the raw payload bytes (e.g. the serialized
+// transaction). The runtime batches multiple Decisions into a single InnerBatch
+// envelope per (output, shard, client).
 type Decision struct {
 	OutputIndices []int
 	Body          string

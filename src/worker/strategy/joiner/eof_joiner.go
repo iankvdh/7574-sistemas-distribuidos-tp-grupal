@@ -52,17 +52,13 @@ func (j *EOFJoiner) ProcessMessage(env *inner.Envelope) ([]strategy.Decision, st
 	if env.Kind != inner.TransactionMessage {
 		return nil, strategy.LocalCounts{}, fmt.Errorf("joiner_usd expects TransactionMessage, got kind=%d", env.Kind)
 	}
-	body, err := encodeEnvelope(env)
-	if err != nil {
-		return nil, strategy.LocalCounts{}, err
-	}
 	indices := make([]int, j.ctx.OutputCount)
 	for i := range indices {
 		indices[i] = i
 	}
 	return []strategy.Decision{{
 		OutputIndices: indices,
-		Body:          body,
+		Body:          string(env.Payload),
 		ClientID:      env.ClientID,
 	}}, strategy.LocalCounts{Processed: 1}, nil
 }
@@ -76,10 +72,3 @@ func (j *EOFJoiner) OnRingToken(_ *eof.Token) (strategy.EOFOutcome, error) {
 	return strategy.EOFOutcome{Action: eof.Action{Kind: eof.ActionNone}}, nil
 }
 
-func encodeEnvelope(env *inner.Envelope) (string, error) {
-	msg, err := inner.SerializeEnvelope(env.Kind, env.GatewayID, env.ClientID, env.Total, env.Payload)
-	if err != nil {
-		return "", err
-	}
-	return msg.Body, nil
-}
