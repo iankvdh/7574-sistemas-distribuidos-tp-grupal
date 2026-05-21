@@ -8,7 +8,11 @@ var (
 	ErrMessageMiddlewareClose        = errors.New("message middleware: close error")
 )
 
-const PrefetchCount = 512
+// PrefetchCount caps how many unacknowledged AMQP messages the broker may push
+// to a single consumer. With batches of ~64 KB, 64 keeps ~4 MB unacked per
+// consumer — the broker's unacked-tracking stays cheap and round-robin between
+// replicas remains responsive.
+const PrefetchCount = 64
 
 type Message struct {
 	Body string
