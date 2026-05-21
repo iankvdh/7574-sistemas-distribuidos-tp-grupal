@@ -391,12 +391,12 @@ func (gateway *Gateway) handleTransactionBatch(state *clientregistry.ClientState
 		return err
 	}
 
-	messages, err := handler.SerializeTransactionMessages(batch)
+	msg, err := handler.SerializeTransactionBatch(batch)
 	if err != nil {
 		return err
 	}
-	for i := range messages {
-		if err := gateway.allTransactionsQueue.Send(messages[i]); err != nil {
+	if msg != nil {
+		if err := gateway.allTransactionsQueue.Send(*msg); err != nil {
 			return err
 		}
 	}
@@ -426,12 +426,12 @@ func (gateway *Gateway) handleAccountBatch(state *clientregistry.ClientState, ha
 		return err
 	}
 
-	messages, err := handler.SerializeAccountMessages(batch)
+	msg, err := handler.SerializeAccountBatch(batch)
 	if err != nil {
 		return err
 	}
-	for i := range messages {
-		if err := gateway.allAccountsQueue.Send(messages[i]); err != nil {
+	if msg != nil {
+		if err := gateway.allAccountsQueue.Send(*msg); err != nil {
 			return err
 		}
 	}

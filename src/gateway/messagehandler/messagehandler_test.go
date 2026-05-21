@@ -11,7 +11,7 @@ import (
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/transaction"
 )
 
-func TestSerializeIndividualMessagesToInnerEnvelope(t *testing.T) {
+func TestSerializeTransactionBatchToInnerBatch(t *testing.T) {
 	handler := NewMessageHandler(1, "client-15")
 
 	txs := []transaction.Transaction{{
@@ -25,46 +25,45 @@ func TestSerializeIndividualMessagesToInnerEnvelope(t *testing.T) {
 		PaymentFormat:   "WIRE",
 	}}
 
-	txMsgs, err := handler.SerializeTransactionMessages(txs)
+	msg, err := handler.SerializeTransactionBatch(txs)
 	if err != nil {
-		t.Fatalf("SerializeTransactionMessages returned error: %v", err)
+		t.Fatalf("SerializeTransactionBatch returned error: %v", err)
 	}
-	if len(txMsgs) != 1 {
-		t.Fatalf("expected 1 tx message, got %d", len(txMsgs))
+	if msg == nil {
+		t.Fatalf("expected non-nil batch message")
 	}
-	txEnvelope, err := inner.DeserializeEnvelope(&txMsgs[0])
+	envelope, err := inner.DeserializeEnvelope(msg)
 	if err != nil {
 		t.Fatalf("DeserializeEnvelope returned error: %v", err)
 	}
-	if txEnvelope.Kind != inner.TransactionMessage {
-		t.Fatalf("unexpected tx kind: %d", txEnvelope.Kind)
+	if envelope.Kind != inner.InnerBatch {
+		t.Fatalf("unexpected envelope kind: %d", envelope.Kind)
 	}
-	if txEnvelope.GatewayID != 1 {
-		t.Fatalf("unexpected gateway id in tx envelope: %d", txEnvelope.GatewayID)
+	if envelope.GatewayID != 1 || envelope.ClientID != "client-15" {
+		t.Fatalf("unexpected envelope header: gw=%d client=%q", envelope.GatewayID, envelope.ClientID)
 	}
 
-	deserializedTx, err := external.DeserializeTransaction(txEnvelope.Payload)
+	itemKind, items, err := inner.DeserializeInnerBatch(envelope)
+	if err != nil {
+		t.Fatalf("DeserializeInnerBatch returned error: %v", err)
+	}
+	if itemKind != inner.TransactionMessage {
+		t.Fatalf("unexpected item kind: %d", itemKind)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(items))
+	}
+	tx, err := external.DeserializeTransaction(items[0])
 	if err != nil {
 		t.Fatalf("DeserializeTransaction returned error: %v", err)
 	}
-	if deserializedTx.FromAccount != "A" || deserializedTx.ToAccount != "B" {
-		t.Fatalf("unexpected deserialized transaction: %+v", deserializedTx)
+	if tx.FromAccount != "A" || tx.ToAccount != "B" {
+		t.Fatalf("unexpected deserialized transaction: %+v", tx)
 	}
+}
 
-	txEOF, err := handler.SerializeTransactionEOFMessage()
-	if err != nil {
-		t.Fatalf("SerializeTransactionEOFMessage returned error: %v", err)
-	}
-	txEOFEnvelope, err := inner.DeserializeEnvelope(txEOF)
-	if err != nil {
-		t.Fatalf("DeserializeEnvelope for tx EOF returned error: %v", err)
-	}
-	if txEOFEnvelope.Total != 1 {
-		t.Fatalf("unexpected transaction total: %d", txEOFEnvelope.Total)
-	}
-	if txEOFEnvelope.GatewayID != 1 {
-		t.Fatalf("unexpected gateway id in tx EOF envelope: %d", txEOFEnvelope.GatewayID)
-	}
+func TestSerializeAccountBatchToInnerBatch(t *testing.T) {
+	handler := NewMessageHandler(2, "client-22")
 
 	accounts := []account.Account{{
 		BankName:      "Bank",
@@ -73,40 +72,39 @@ func TestSerializeIndividualMessagesToInnerEnvelope(t *testing.T) {
 		EntityID:      "E-1",
 		EntityName:    "Name",
 	}}
-	accMsgs, err := handler.SerializeAccountMessages(accounts)
+	msg, err := handler.SerializeAccountBatch(accounts)
 	if err != nil {
-		t.Fatalf("SerializeAccountMessages returned error: %v", err)
+		t.Fatalf("SerializeAccountBatch returned error: %v", err)
 	}
-	if len(accMsgs) != 1 {
-		t.Fatalf("expected 1 account message, got %d", len(accMsgs))
-	}
-	accEnvelope, err := inner.DeserializeEnvelope(&accMsgs[0])
+	envelope, err := inner.DeserializeEnvelope(msg)
 	if err != nil {
 		t.Fatalf("DeserializeEnvelope returned error: %v", err)
 	}
-	if accEnvelope.Kind != inner.AccountMessage {
-		t.Fatalf("unexpected account kind: %d", accEnvelope.Kind)
+	if envelope.Kind != inner.InnerBatch {
+		t.Fatalf("unexpected envelope kind: %d", envelope.Kind)
 	}
-	if accEnvelope.GatewayID != 1 {
-		t.Fatalf("unexpected gateway id in account envelope: %d", accEnvelope.GatewayID)
+	itemKind, items, err := inner.DeserializeInnerBatch(envelope)
+	if err != nil {
+		t.Fatalf("DeserializeInnerBatch returned error: %v", err)
 	}
-	if _, err := external.DeserializeAccount(accEnvelope.Payload); err != nil {
+	if itemKind != inner.AccountMessage {
+		t.Fatalf("unexpected item kind: %d", itemKind)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(items))
+	}
+	if _, err := external.DeserializeAccount(items[0]); err != nil {
 		t.Fatalf("DeserializeAccount returned error: %v", err)
 	}
+}
 
-	accEOF, err := handler.SerializeAccountEOFMessage()
-	if err != nil {
-		t.Fatalf("SerializeAccountEOFMessage returned error: %v", err)
+func TestSerializeEmptyBatchReturnsNil(t *testing.T) {
+	handler := NewMessageHandler(1, "client-x")
+	if msg, err := handler.SerializeTransactionBatch(nil); err != nil || msg != nil {
+		t.Fatalf("empty tx batch: msg=%v err=%v", msg, err)
 	}
-	accEOFEnvelope, err := inner.DeserializeEnvelope(accEOF)
-	if err != nil {
-		t.Fatalf("DeserializeEnvelope for account EOF returned error: %v", err)
-	}
-	if accEOFEnvelope.Total != 1 {
-		t.Fatalf("unexpected account total: %d", accEOFEnvelope.Total)
-	}
-	if accEOFEnvelope.GatewayID != 1 {
-		t.Fatalf("unexpected gateway id in account EOF envelope: %d", accEOFEnvelope.GatewayID)
+	if msg, err := handler.SerializeAccountBatch(nil); err != nil || msg != nil {
+		t.Fatalf("empty account batch: msg=%v err=%v", msg, err)
 	}
 }
 
@@ -155,11 +153,11 @@ func TestEOFTotalsAccumulateAcrossBatches(t *testing.T) {
 		{Date: 20220103, FromBank: 1, FromAccount: "a", ToBank: 2, ToAccount: "d", AmountPaid: 0.03, PaymentCurrency: "USD", PaymentFormat: "ACH"},
 	}
 
-	if _, err := handler.SerializeTransactionMessages(txBatch1); err != nil {
-		t.Fatalf("SerializeTransactionMessages batch1 returned error: %v", err)
+	if _, err := handler.SerializeTransactionBatch(txBatch1); err != nil {
+		t.Fatalf("SerializeTransactionBatch batch1 returned error: %v", err)
 	}
-	if _, err := handler.SerializeTransactionMessages(txBatch2); err != nil {
-		t.Fatalf("SerializeTransactionMessages batch2 returned error: %v", err)
+	if _, err := handler.SerializeTransactionBatch(txBatch2); err != nil {
+		t.Fatalf("SerializeTransactionBatch batch2 returned error: %v", err)
 	}
 
 	txEOF, err := handler.SerializeTransactionEOFMessage()
@@ -177,11 +175,11 @@ func TestEOFTotalsAccumulateAcrossBatches(t *testing.T) {
 	accBatch1 := []account.Account{{BankName: "B1", BankID: 1, AccountNumber: "1", EntityID: "E1", EntityName: "N1"}}
 	accBatch2 := []account.Account{{BankName: "B2", BankID: 2, AccountNumber: "2", EntityID: "E2", EntityName: "N2"}}
 
-	if _, err := handler.SerializeAccountMessages(accBatch1); err != nil {
-		t.Fatalf("SerializeAccountMessages batch1 returned error: %v", err)
+	if _, err := handler.SerializeAccountBatch(accBatch1); err != nil {
+		t.Fatalf("SerializeAccountBatch batch1 returned error: %v", err)
 	}
-	if _, err := handler.SerializeAccountMessages(accBatch2); err != nil {
-		t.Fatalf("SerializeAccountMessages batch2 returned error: %v", err)
+	if _, err := handler.SerializeAccountBatch(accBatch2); err != nil {
+		t.Fatalf("SerializeAccountBatch batch2 returned error: %v", err)
 	}
 
 	accEOF, err := handler.SerializeAccountEOFMessage()
