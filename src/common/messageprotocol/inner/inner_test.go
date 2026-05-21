@@ -146,3 +146,64 @@ func TestDeserializeEnvelopeMalformedCases(t *testing.T) {
 		})
 	}
 }
+
+func TestSerializeDeserializeInnerBatch(t *testing.T) {
+	items := [][]byte{
+		[]byte("first"),
+		[]byte("second-longer"),
+		{},
+		[]byte("\x00\x01\x02\x03"),
+	}
+	msg, err := SerializeInnerBatch(TransactionMessage, 7, "client-batch", items)
+	if err != nil {
+		t.Fatalf("SerializeInnerBatch returned error: %v", err)
+	}
+	envelope, err := DeserializeEnvelope(msg)
+	if err != nil {
+		t.Fatalf("DeserializeEnvelope returned error: %v", err)
+	}
+	if envelope.Kind != InnerBatch {
+		t.Fatalf("unexpected envelope kind: %d", envelope.Kind)
+	}
+	itemKind, got, err := DeserializeInnerBatch(envelope)
+	if err != nil {
+		t.Fatalf("DeserializeInnerBatch returned error: %v", err)
+	}
+	if itemKind != TransactionMessage {
+		t.Fatalf("unexpected item kind: %d", itemKind)
+	}
+	if len(got) != len(items) {
+		t.Fatalf("unexpected item count: got %d want %d", len(got), len(items))
+	}
+	for i := range items {
+		if string(got[i]) != string(items[i]) {
+			t.Fatalf("item %d mismatch: got %q want %q", i, got[i], items[i])
+		}
+	}
+}
+
+func TestInnerBatchEmpty(t *testing.T) {
+	if _, err := SerializeInnerBatch(TransactionMessage, 1, "c", nil); err == nil {
+		t.Fatalf("expected error for empty batch")
+	}
+}
+
+func TestInnerBatchInvalidItemKind(t *testing.T) {
+	if _, err := SerializeInnerBatch(InternalEOF, 1, "c", [][]byte{{1}}); err == nil {
+		t.Fatalf("expected error for non-payload item kind")
+	}
+}
+
+func TestDeserializeInnerBatchRejectsWrongEnvelope(t *testing.T) {
+	msg, err := SerializeAllTransactionsEOF(1, "c", 0)
+	if err != nil {
+		t.Fatalf("SerializeAllTransactionsEOF returned error: %v", err)
+	}
+	env, err := DeserializeEnvelope(msg)
+	if err != nil {
+		t.Fatalf("DeserializeEnvelope returned error: %v", err)
+	}
+	if _, _, err := DeserializeInnerBatch(env); !errors.Is(err, ErrUnexpectedKind) {
+		t.Fatalf("expected ErrUnexpectedKind, got %v", err)
+	}
+}
