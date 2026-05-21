@@ -4,22 +4,39 @@ services:
     depends_on:
       rabbitmq: { condition: service_healthy }
       gateway_1: { condition: service_started }
+      gateway_2: { condition: service_started }
       filter_period1_0: { condition: service_started }
       filter_period1_1: { condition: service_started }
+      filter_period1_2: { condition: service_started }
+      filter_period1_3: { condition: service_started }
       filter_wire_ach_0: { condition: service_started }
       filter_wire_ach_1: { condition: service_started }
+      filter_wire_ach_2: { condition: service_started }
+      filter_wire_ach_3: { condition: service_started }
       filter_currency_usd_p1_0: { condition: service_started }
       filter_currency_usd_p1_1: { condition: service_started }
+      filter_currency_usd_p1_2: { condition: service_started }
+      filter_currency_usd_p1_3: { condition: service_started }
       filter_period2_0: { condition: service_started }
       filter_period2_1: { condition: service_started }
+      filter_period2_2: { condition: service_started }
+      filter_period2_3: { condition: service_started }
       filter_currency_usd_p2_0: { condition: service_started }
       filter_currency_usd_p2_1: { condition: service_started }
+      filter_currency_usd_p2_2: { condition: service_started }
+      filter_currency_usd_p2_3: { condition: service_started }
       filter_currency_usd_other_periods_0: { condition: service_started }
       filter_currency_usd_other_periods_1: { condition: service_started }
+      filter_currency_usd_other_periods_2: { condition: service_started }
+      filter_currency_usd_other_periods_3: { condition: service_started }
       joiner_usd_0: { condition: service_started }
       joiner_usd_1: { condition: service_started }
+      joiner_usd_2: { condition: service_started }
+      joiner_usd_3: { condition: service_started }
       filter_amount_lt_50_0: { condition: service_started }
       filter_amount_lt_50_1: { condition: service_started }
+      filter_amount_lt_50_2: { condition: service_started }
+      filter_amount_lt_50_3: { condition: service_started }
       drain_q1_input: { condition: service_started }
       drain_period1_wire_ach: { condition: service_started }
       drain_period1_usd: { condition: service_started }
@@ -30,7 +47,7 @@ services:
       - INPUT_ACCOUNTS=/datasets/LI-Small_accounts.csv
       - BATCH_MAX_BYTES=8192
       - GATEWAY_PREFIX=gateway_
-      - GATEWAY_AMOUNT=1
+      - GATEWAY_AMOUNT=2
       - GATEWAY_PORT=5678
       - CONNECT_MAX_ATTEMPTS=6
       - CONNECT_TIMEOUT_MS=800
@@ -40,6 +57,64 @@ services:
     volumes:
       - ./datasets:/datasets
       - ./results/client_0:/results
+  client_1:
+    build: { context: ./src/, dockerfile: client/Dockerfile }
+    depends_on:
+      rabbitmq: { condition: service_healthy }
+      gateway_1: { condition: service_started }
+      gateway_2: { condition: service_started }
+      filter_period1_0: { condition: service_started }
+      filter_period1_1: { condition: service_started }
+      filter_period1_2: { condition: service_started }
+      filter_period1_3: { condition: service_started }
+      filter_wire_ach_0: { condition: service_started }
+      filter_wire_ach_1: { condition: service_started }
+      filter_wire_ach_2: { condition: service_started }
+      filter_wire_ach_3: { condition: service_started }
+      filter_currency_usd_p1_0: { condition: service_started }
+      filter_currency_usd_p1_1: { condition: service_started }
+      filter_currency_usd_p1_2: { condition: service_started }
+      filter_currency_usd_p1_3: { condition: service_started }
+      filter_period2_0: { condition: service_started }
+      filter_period2_1: { condition: service_started }
+      filter_period2_2: { condition: service_started }
+      filter_period2_3: { condition: service_started }
+      filter_currency_usd_p2_0: { condition: service_started }
+      filter_currency_usd_p2_1: { condition: service_started }
+      filter_currency_usd_p2_2: { condition: service_started }
+      filter_currency_usd_p2_3: { condition: service_started }
+      filter_currency_usd_other_periods_0: { condition: service_started }
+      filter_currency_usd_other_periods_1: { condition: service_started }
+      filter_currency_usd_other_periods_2: { condition: service_started }
+      filter_currency_usd_other_periods_3: { condition: service_started }
+      joiner_usd_0: { condition: service_started }
+      joiner_usd_1: { condition: service_started }
+      joiner_usd_2: { condition: service_started }
+      joiner_usd_3: { condition: service_started }
+      filter_amount_lt_50_0: { condition: service_started }
+      filter_amount_lt_50_1: { condition: service_started }
+      filter_amount_lt_50_2: { condition: service_started }
+      filter_amount_lt_50_3: { condition: service_started }
+      drain_q1_input: { condition: service_started }
+      drain_period1_wire_ach: { condition: service_started }
+      drain_period1_usd: { condition: service_started }
+      drain_period2_usd: { condition: service_started }
+      drain_usd_joined: { condition: service_started }
+    environment:
+      - INPUT_TRANSACTIONS=/datasets/LI-Small_Trans.csv
+      - INPUT_ACCOUNTS=/datasets/LI-Small_accounts.csv
+      - BATCH_MAX_BYTES=8192
+      - GATEWAY_PREFIX=gateway_
+      - GATEWAY_AMOUNT=2
+      - GATEWAY_PORT=5678
+      - CONNECT_MAX_ATTEMPTS=6
+      - CONNECT_TIMEOUT_MS=800
+      - BACKOFF_BASE_MS=200
+      - BACKOFF_MAX_MS=3000
+      - RESULTS_DIR=/results
+    volumes:
+      - ./datasets:/datasets
+      - ./results/client_1:/results
   gateway_1:
     build: { context: ./src/, dockerfile: gateway/Dockerfile }
     depends_on: { rabbitmq: { condition: service_healthy } }
@@ -53,13 +128,26 @@ services:
       - MOM_PORT=5672
       - SERVER_HOST=0.0.0.0
       - SERVER_PORT=5678
+  gateway_2:
+    build: { context: ./src/, dockerfile: gateway/Dockerfile }
+    depends_on: { rabbitmq: { condition: service_healthy } }
+    environment:
+      - ALL_TRANSACTIONS_QUEUE=all_transactions
+      - ALL_ACCOUNTS_QUEUE=all_accounts
+      - FINAL_QUEUE=final
+      - GATEWAY_ID=2
+      - RESULT_BATCH_MAX_BYTES=8192
+      - MOM_HOST=rabbitmq
+      - MOM_PORT=5672
+      - SERVER_HOST=0.0.0.0
+      - SERVER_PORT=5678
   filter_period1_0:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
     depends_on: { rabbitmq: { condition: service_healthy } }
     environment:
       - STRATEGY=filter_period1
       - REPLICA_ID=0
-      - N_REPLICAS=2
+      - N_REPLICAS=4
       - INPUT=queue:all_transactions
       - OUTPUTS_MATCH_COUNT=2
       - MOM_HOST=rabbitmq
@@ -75,7 +163,7 @@ services:
     environment:
       - STRATEGY=filter_period1
       - REPLICA_ID=1
-      - N_REPLICAS=2
+      - N_REPLICAS=4
       - INPUT=queue:all_transactions
       - OUTPUTS_MATCH_COUNT=2
       - MOM_HOST=rabbitmq
@@ -84,6 +172,38 @@ services:
       - OUTPUT_1=queue:period1_for_currency_usd_p1
       - OUTPUT_2=queue:non_period1_transactions
       - RING_QUEUE_IN=ring_filter_period1_1
+      - RING_QUEUE_OUT=ring_filter_period1_2
+  filter_period1_2:
+    build: { context: ./src/, dockerfile: worker/Dockerfile }
+    depends_on: { rabbitmq: { condition: service_healthy } }
+    environment:
+      - STRATEGY=filter_period1
+      - REPLICA_ID=2
+      - N_REPLICAS=4
+      - INPUT=queue:all_transactions
+      - OUTPUTS_MATCH_COUNT=2
+      - MOM_HOST=rabbitmq
+      - MOM_PORT=5672
+      - OUTPUT_0=queue:period1_for_wire_ach
+      - OUTPUT_1=queue:period1_for_currency_usd_p1
+      - OUTPUT_2=queue:non_period1_transactions
+      - RING_QUEUE_IN=ring_filter_period1_2
+      - RING_QUEUE_OUT=ring_filter_period1_3
+  filter_period1_3:
+    build: { context: ./src/, dockerfile: worker/Dockerfile }
+    depends_on: { rabbitmq: { condition: service_healthy } }
+    environment:
+      - STRATEGY=filter_period1
+      - REPLICA_ID=3
+      - N_REPLICAS=4
+      - INPUT=queue:all_transactions
+      - OUTPUTS_MATCH_COUNT=2
+      - MOM_HOST=rabbitmq
+      - MOM_PORT=5672
+      - OUTPUT_0=queue:period1_for_wire_ach
+      - OUTPUT_1=queue:period1_for_currency_usd_p1
+      - OUTPUT_2=queue:non_period1_transactions
+      - RING_QUEUE_IN=ring_filter_period1_3
       - RING_QUEUE_OUT=ring_filter_period1_0
   filter_wire_ach_0:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
@@ -91,7 +211,7 @@ services:
     environment:
       - STRATEGY=filter_wire_ach
       - REPLICA_ID=0
-      - N_REPLICAS=2
+      - N_REPLICAS=4
       - INPUT=queue:period1_for_wire_ach
       - OUTPUTS_MATCH_COUNT=1
       - MOM_HOST=rabbitmq
@@ -105,13 +225,41 @@ services:
     environment:
       - STRATEGY=filter_wire_ach
       - REPLICA_ID=1
-      - N_REPLICAS=2
+      - N_REPLICAS=4
       - INPUT=queue:period1_for_wire_ach
       - OUTPUTS_MATCH_COUNT=1
       - MOM_HOST=rabbitmq
       - MOM_PORT=5672
       - OUTPUT_0=queue:period1_wire_ach
       - RING_QUEUE_IN=ring_filter_wire_ach_1
+      - RING_QUEUE_OUT=ring_filter_wire_ach_2
+  filter_wire_ach_2:
+    build: { context: ./src/, dockerfile: worker/Dockerfile }
+    depends_on: { rabbitmq: { condition: service_healthy } }
+    environment:
+      - STRATEGY=filter_wire_ach
+      - REPLICA_ID=2
+      - N_REPLICAS=4
+      - INPUT=queue:period1_for_wire_ach
+      - OUTPUTS_MATCH_COUNT=1
+      - MOM_HOST=rabbitmq
+      - MOM_PORT=5672
+      - OUTPUT_0=queue:period1_wire_ach
+      - RING_QUEUE_IN=ring_filter_wire_ach_2
+      - RING_QUEUE_OUT=ring_filter_wire_ach_3
+  filter_wire_ach_3:
+    build: { context: ./src/, dockerfile: worker/Dockerfile }
+    depends_on: { rabbitmq: { condition: service_healthy } }
+    environment:
+      - STRATEGY=filter_wire_ach
+      - REPLICA_ID=3
+      - N_REPLICAS=4
+      - INPUT=queue:period1_for_wire_ach
+      - OUTPUTS_MATCH_COUNT=1
+      - MOM_HOST=rabbitmq
+      - MOM_PORT=5672
+      - OUTPUT_0=queue:period1_wire_ach
+      - RING_QUEUE_IN=ring_filter_wire_ach_3
       - RING_QUEUE_OUT=ring_filter_wire_ach_0
   filter_currency_usd_p1_0:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
@@ -119,13 +267,13 @@ services:
     environment:
       - STRATEGY=filter_currency_usd_p1
       - REPLICA_ID=0
-      - N_REPLICAS=2
+      - N_REPLICAS=4
       - INPUT=queue:period1_for_currency_usd_p1
       - OUTPUTS_MATCH_COUNT=2
       - MOM_HOST=rabbitmq
       - MOM_PORT=5672
       - OUTPUT_0=queue:period1_usd_for_drain
-      - OUTPUT_1=sharded_queues:joiner_usd_input:2
+      - OUTPUT_1=sharded_queues:joiner_usd_input:4
       - RING_QUEUE_IN=ring_filter_currency_usd_p1_0
       - RING_QUEUE_OUT=ring_filter_currency_usd_p1_1
   filter_currency_usd_p1_1:
@@ -134,14 +282,44 @@ services:
     environment:
       - STRATEGY=filter_currency_usd_p1
       - REPLICA_ID=1
-      - N_REPLICAS=2
+      - N_REPLICAS=4
       - INPUT=queue:period1_for_currency_usd_p1
       - OUTPUTS_MATCH_COUNT=2
       - MOM_HOST=rabbitmq
       - MOM_PORT=5672
       - OUTPUT_0=queue:period1_usd_for_drain
-      - OUTPUT_1=sharded_queues:joiner_usd_input:2
+      - OUTPUT_1=sharded_queues:joiner_usd_input:4
       - RING_QUEUE_IN=ring_filter_currency_usd_p1_1
+      - RING_QUEUE_OUT=ring_filter_currency_usd_p1_2
+  filter_currency_usd_p1_2:
+    build: { context: ./src/, dockerfile: worker/Dockerfile }
+    depends_on: { rabbitmq: { condition: service_healthy } }
+    environment:
+      - STRATEGY=filter_currency_usd_p1
+      - REPLICA_ID=2
+      - N_REPLICAS=4
+      - INPUT=queue:period1_for_currency_usd_p1
+      - OUTPUTS_MATCH_COUNT=2
+      - MOM_HOST=rabbitmq
+      - MOM_PORT=5672
+      - OUTPUT_0=queue:period1_usd_for_drain
+      - OUTPUT_1=sharded_queues:joiner_usd_input:4
+      - RING_QUEUE_IN=ring_filter_currency_usd_p1_2
+      - RING_QUEUE_OUT=ring_filter_currency_usd_p1_3
+  filter_currency_usd_p1_3:
+    build: { context: ./src/, dockerfile: worker/Dockerfile }
+    depends_on: { rabbitmq: { condition: service_healthy } }
+    environment:
+      - STRATEGY=filter_currency_usd_p1
+      - REPLICA_ID=3
+      - N_REPLICAS=4
+      - INPUT=queue:period1_for_currency_usd_p1
+      - OUTPUTS_MATCH_COUNT=2
+      - MOM_HOST=rabbitmq
+      - MOM_PORT=5672
+      - OUTPUT_0=queue:period1_usd_for_drain
+      - OUTPUT_1=sharded_queues:joiner_usd_input:4
+      - RING_QUEUE_IN=ring_filter_currency_usd_p1_3
       - RING_QUEUE_OUT=ring_filter_currency_usd_p1_0
   filter_period2_0:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
@@ -149,7 +327,7 @@ services:
     environment:
       - STRATEGY=filter_period2
       - REPLICA_ID=0
-      - N_REPLICAS=2
+      - N_REPLICAS=4
       - INPUT=queue:non_period1_transactions
       - OUTPUTS_MATCH_COUNT=1
       - MOM_HOST=rabbitmq
@@ -164,7 +342,7 @@ services:
     environment:
       - STRATEGY=filter_period2
       - REPLICA_ID=1
-      - N_REPLICAS=2
+      - N_REPLICAS=4
       - INPUT=queue:non_period1_transactions
       - OUTPUTS_MATCH_COUNT=1
       - MOM_HOST=rabbitmq
@@ -172,6 +350,36 @@ services:
       - OUTPUT_0=queue:period2_transactions
       - OUTPUT_1=queue:other_dates_transactions
       - RING_QUEUE_IN=ring_filter_period2_1
+      - RING_QUEUE_OUT=ring_filter_period2_2
+  filter_period2_2:
+    build: { context: ./src/, dockerfile: worker/Dockerfile }
+    depends_on: { rabbitmq: { condition: service_healthy } }
+    environment:
+      - STRATEGY=filter_period2
+      - REPLICA_ID=2
+      - N_REPLICAS=4
+      - INPUT=queue:non_period1_transactions
+      - OUTPUTS_MATCH_COUNT=1
+      - MOM_HOST=rabbitmq
+      - MOM_PORT=5672
+      - OUTPUT_0=queue:period2_transactions
+      - OUTPUT_1=queue:other_dates_transactions
+      - RING_QUEUE_IN=ring_filter_period2_2
+      - RING_QUEUE_OUT=ring_filter_period2_3
+  filter_period2_3:
+    build: { context: ./src/, dockerfile: worker/Dockerfile }
+    depends_on: { rabbitmq: { condition: service_healthy } }
+    environment:
+      - STRATEGY=filter_period2
+      - REPLICA_ID=3
+      - N_REPLICAS=4
+      - INPUT=queue:non_period1_transactions
+      - OUTPUTS_MATCH_COUNT=1
+      - MOM_HOST=rabbitmq
+      - MOM_PORT=5672
+      - OUTPUT_0=queue:period2_transactions
+      - OUTPUT_1=queue:other_dates_transactions
+      - RING_QUEUE_IN=ring_filter_period2_3
       - RING_QUEUE_OUT=ring_filter_period2_0
   filter_currency_usd_p2_0:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
@@ -179,13 +387,13 @@ services:
     environment:
       - STRATEGY=filter_currency_usd_p2
       - REPLICA_ID=0
-      - N_REPLICAS=2
+      - N_REPLICAS=4
       - INPUT=queue:period2_transactions
       - OUTPUTS_MATCH_COUNT=2
       - MOM_HOST=rabbitmq
       - MOM_PORT=5672
       - OUTPUT_0=queue:period2_usd_for_drain
-      - OUTPUT_1=sharded_queues:joiner_usd_input:2
+      - OUTPUT_1=sharded_queues:joiner_usd_input:4
       - RING_QUEUE_IN=ring_filter_currency_usd_p2_0
       - RING_QUEUE_OUT=ring_filter_currency_usd_p2_1
   filter_currency_usd_p2_1:
@@ -194,14 +402,44 @@ services:
     environment:
       - STRATEGY=filter_currency_usd_p2
       - REPLICA_ID=1
-      - N_REPLICAS=2
+      - N_REPLICAS=4
       - INPUT=queue:period2_transactions
       - OUTPUTS_MATCH_COUNT=2
       - MOM_HOST=rabbitmq
       - MOM_PORT=5672
       - OUTPUT_0=queue:period2_usd_for_drain
-      - OUTPUT_1=sharded_queues:joiner_usd_input:2
+      - OUTPUT_1=sharded_queues:joiner_usd_input:4
       - RING_QUEUE_IN=ring_filter_currency_usd_p2_1
+      - RING_QUEUE_OUT=ring_filter_currency_usd_p2_2
+  filter_currency_usd_p2_2:
+    build: { context: ./src/, dockerfile: worker/Dockerfile }
+    depends_on: { rabbitmq: { condition: service_healthy } }
+    environment:
+      - STRATEGY=filter_currency_usd_p2
+      - REPLICA_ID=2
+      - N_REPLICAS=4
+      - INPUT=queue:period2_transactions
+      - OUTPUTS_MATCH_COUNT=2
+      - MOM_HOST=rabbitmq
+      - MOM_PORT=5672
+      - OUTPUT_0=queue:period2_usd_for_drain
+      - OUTPUT_1=sharded_queues:joiner_usd_input:4
+      - RING_QUEUE_IN=ring_filter_currency_usd_p2_2
+      - RING_QUEUE_OUT=ring_filter_currency_usd_p2_3
+  filter_currency_usd_p2_3:
+    build: { context: ./src/, dockerfile: worker/Dockerfile }
+    depends_on: { rabbitmq: { condition: service_healthy } }
+    environment:
+      - STRATEGY=filter_currency_usd_p2
+      - REPLICA_ID=3
+      - N_REPLICAS=4
+      - INPUT=queue:period2_transactions
+      - OUTPUTS_MATCH_COUNT=2
+      - MOM_HOST=rabbitmq
+      - MOM_PORT=5672
+      - OUTPUT_0=queue:period2_usd_for_drain
+      - OUTPUT_1=sharded_queues:joiner_usd_input:4
+      - RING_QUEUE_IN=ring_filter_currency_usd_p2_3
       - RING_QUEUE_OUT=ring_filter_currency_usd_p2_0
   filter_currency_usd_other_periods_0:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
@@ -209,12 +447,12 @@ services:
     environment:
       - STRATEGY=filter_currency_usd_other_periods
       - REPLICA_ID=0
-      - N_REPLICAS=2
+      - N_REPLICAS=4
       - INPUT=queue:other_dates_transactions
       - OUTPUTS_MATCH_COUNT=1
       - MOM_HOST=rabbitmq
       - MOM_PORT=5672
-      - OUTPUT_0=sharded_queues:joiner_usd_input:2
+      - OUTPUT_0=sharded_queues:joiner_usd_input:4
       - RING_QUEUE_IN=ring_filter_currency_usd_other_periods_0
       - RING_QUEUE_OUT=ring_filter_currency_usd_other_periods_1
   filter_currency_usd_other_periods_1:
@@ -223,13 +461,41 @@ services:
     environment:
       - STRATEGY=filter_currency_usd_other_periods
       - REPLICA_ID=1
-      - N_REPLICAS=2
+      - N_REPLICAS=4
       - INPUT=queue:other_dates_transactions
       - OUTPUTS_MATCH_COUNT=1
       - MOM_HOST=rabbitmq
       - MOM_PORT=5672
-      - OUTPUT_0=sharded_queues:joiner_usd_input:2
+      - OUTPUT_0=sharded_queues:joiner_usd_input:4
       - RING_QUEUE_IN=ring_filter_currency_usd_other_periods_1
+      - RING_QUEUE_OUT=ring_filter_currency_usd_other_periods_2
+  filter_currency_usd_other_periods_2:
+    build: { context: ./src/, dockerfile: worker/Dockerfile }
+    depends_on: { rabbitmq: { condition: service_healthy } }
+    environment:
+      - STRATEGY=filter_currency_usd_other_periods
+      - REPLICA_ID=2
+      - N_REPLICAS=4
+      - INPUT=queue:other_dates_transactions
+      - OUTPUTS_MATCH_COUNT=1
+      - MOM_HOST=rabbitmq
+      - MOM_PORT=5672
+      - OUTPUT_0=sharded_queues:joiner_usd_input:4
+      - RING_QUEUE_IN=ring_filter_currency_usd_other_periods_2
+      - RING_QUEUE_OUT=ring_filter_currency_usd_other_periods_3
+  filter_currency_usd_other_periods_3:
+    build: { context: ./src/, dockerfile: worker/Dockerfile }
+    depends_on: { rabbitmq: { condition: service_healthy } }
+    environment:
+      - STRATEGY=filter_currency_usd_other_periods
+      - REPLICA_ID=3
+      - N_REPLICAS=4
+      - INPUT=queue:other_dates_transactions
+      - OUTPUTS_MATCH_COUNT=1
+      - MOM_HOST=rabbitmq
+      - MOM_PORT=5672
+      - OUTPUT_0=sharded_queues:joiner_usd_input:4
+      - RING_QUEUE_IN=ring_filter_currency_usd_other_periods_3
       - RING_QUEUE_OUT=ring_filter_currency_usd_other_periods_0
   joiner_usd_0:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
@@ -237,7 +503,7 @@ services:
     environment:
       - STRATEGY=joiner_usd
       - REPLICA_ID=0
-      - N_REPLICAS=2
+      - N_REPLICAS=4
       - INPUT=queue:joiner_usd_input_0
       - OUTPUTS_MATCH_COUNT=0
       - MOM_HOST=rabbitmq
@@ -253,7 +519,7 @@ services:
     environment:
       - STRATEGY=joiner_usd
       - REPLICA_ID=1
-      - N_REPLICAS=2
+      - N_REPLICAS=4
       - INPUT=queue:joiner_usd_input_1
       - OUTPUTS_MATCH_COUNT=0
       - MOM_HOST=rabbitmq
@@ -261,6 +527,38 @@ services:
       - OUTPUT_0=queue:usd_for_amount_lt_50
       - OUTPUT_1=queue:usd_for_drain
       - RING_QUEUE_IN=ring_joiner_usd_1
+      - RING_QUEUE_OUT=ring_joiner_usd_2
+      - EXPECTED_EOFS=3
+  joiner_usd_2:
+    build: { context: ./src/, dockerfile: worker/Dockerfile }
+    depends_on: { rabbitmq: { condition: service_healthy } }
+    environment:
+      - STRATEGY=joiner_usd
+      - REPLICA_ID=2
+      - N_REPLICAS=4
+      - INPUT=queue:joiner_usd_input_2
+      - OUTPUTS_MATCH_COUNT=0
+      - MOM_HOST=rabbitmq
+      - MOM_PORT=5672
+      - OUTPUT_0=queue:usd_for_amount_lt_50
+      - OUTPUT_1=queue:usd_for_drain
+      - RING_QUEUE_IN=ring_joiner_usd_2
+      - RING_QUEUE_OUT=ring_joiner_usd_3
+      - EXPECTED_EOFS=3
+  joiner_usd_3:
+    build: { context: ./src/, dockerfile: worker/Dockerfile }
+    depends_on: { rabbitmq: { condition: service_healthy } }
+    environment:
+      - STRATEGY=joiner_usd
+      - REPLICA_ID=3
+      - N_REPLICAS=4
+      - INPUT=queue:joiner_usd_input_3
+      - OUTPUTS_MATCH_COUNT=0
+      - MOM_HOST=rabbitmq
+      - MOM_PORT=5672
+      - OUTPUT_0=queue:usd_for_amount_lt_50
+      - OUTPUT_1=queue:usd_for_drain
+      - RING_QUEUE_IN=ring_joiner_usd_3
       - RING_QUEUE_OUT=ring_joiner_usd_0
       - EXPECTED_EOFS=3
   filter_amount_lt_50_0:
@@ -269,7 +567,7 @@ services:
     environment:
       - STRATEGY=filter_amount_lt_50
       - REPLICA_ID=0
-      - N_REPLICAS=2
+      - N_REPLICAS=4
       - INPUT=queue:usd_for_amount_lt_50
       - OUTPUTS_MATCH_COUNT=1
       - MOM_HOST=rabbitmq
@@ -283,13 +581,41 @@ services:
     environment:
       - STRATEGY=filter_amount_lt_50
       - REPLICA_ID=1
-      - N_REPLICAS=2
+      - N_REPLICAS=4
       - INPUT=queue:usd_for_amount_lt_50
       - OUTPUTS_MATCH_COUNT=1
       - MOM_HOST=rabbitmq
       - MOM_PORT=5672
       - OUTPUT_0=queue:q1_input
       - RING_QUEUE_IN=ring_filter_amount_lt_50_1
+      - RING_QUEUE_OUT=ring_filter_amount_lt_50_2
+  filter_amount_lt_50_2:
+    build: { context: ./src/, dockerfile: worker/Dockerfile }
+    depends_on: { rabbitmq: { condition: service_healthy } }
+    environment:
+      - STRATEGY=filter_amount_lt_50
+      - REPLICA_ID=2
+      - N_REPLICAS=4
+      - INPUT=queue:usd_for_amount_lt_50
+      - OUTPUTS_MATCH_COUNT=1
+      - MOM_HOST=rabbitmq
+      - MOM_PORT=5672
+      - OUTPUT_0=queue:q1_input
+      - RING_QUEUE_IN=ring_filter_amount_lt_50_2
+      - RING_QUEUE_OUT=ring_filter_amount_lt_50_3
+  filter_amount_lt_50_3:
+    build: { context: ./src/, dockerfile: worker/Dockerfile }
+    depends_on: { rabbitmq: { condition: service_healthy } }
+    environment:
+      - STRATEGY=filter_amount_lt_50
+      - REPLICA_ID=3
+      - N_REPLICAS=4
+      - INPUT=queue:usd_for_amount_lt_50
+      - OUTPUTS_MATCH_COUNT=1
+      - MOM_HOST=rabbitmq
+      - MOM_PORT=5672
+      - OUTPUT_0=queue:q1_input
+      - RING_QUEUE_IN=ring_filter_amount_lt_50_3
       - RING_QUEUE_OUT=ring_filter_amount_lt_50_0
   drain_q1_input:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
