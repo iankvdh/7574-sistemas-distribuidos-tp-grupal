@@ -9,18 +9,7 @@ import (
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/transaction"
 )
 
-// SerializeTransaction returns the binary representation of a single transaction.
-// Useful for internal queues that carry one element per message.
 func SerializeTransaction(tx *transaction.Transaction) ([]byte, error) {
-	return serializeTransaction(tx)
-}
-
-// DeserializeTransaction reconstructs a transaction from the byte slice produced by SerializeTransaction.
-func DeserializeTransaction(payload []byte) (*transaction.Transaction, error) {
-	return deserializeTransaction(bytes.NewReader(payload))
-}
-
-func serializeTransaction(tx *transaction.Transaction) ([]byte, error) {
 	fromAccount, err := serializer.SerializeShortString(tx.FromAccount)
 	if err != nil {
 		return nil, err
@@ -48,6 +37,10 @@ func serializeTransaction(tx *transaction.Transaction) ([]byte, error) {
 	buf = append(buf, currency...)
 	buf = append(buf, format...)
 	return buf, nil
+}
+
+func DeserializeTransaction(payload []byte) (*transaction.Transaction, error) {
+	return deserializeTransaction(bytes.NewReader(payload))
 }
 
 func deserializeTransaction(reader io.Reader) (*transaction.Transaction, error) {
@@ -111,7 +104,7 @@ func WriteTransactionBatch(writer io.Writer, txs []transaction.Transaction) erro
 func SerializeTransactionBatchPayload(txs []transaction.Transaction) ([]byte, error) {
 	msg := serializer.SerializeUint32(uint32(len(txs)))
 	for i := range txs {
-		serialized, err := serializeTransaction(&txs[i])
+		serialized, err := SerializeTransaction(&txs[i])
 		if err != nil {
 			return nil, err
 		}
