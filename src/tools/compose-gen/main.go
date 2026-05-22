@@ -5,18 +5,21 @@
 //
 // Spec format (whitespace-significant, YAML-subset; no external deps):
 //
-//   clients: <int>           how many client_N services to declare
-//   gateways: <int>          how many gateway_N services to declare
-//   workers:
-//     - name: <prefix>                   docker-compose service name (suffixed by replica index if replicas>1)
-//       strategy: <STRATEGY env value>   which strategy this worker runs
-//       replicas: <int>                  how many replicas; ring queues are auto-derived when >1
-//       input: <kind>:<target>[:<key>]   queue:NAME | direct_exchange:NAME[:KEY]
-//       match_count: <int>               optional; how many of `outputs` are "match" (filters use it; others omit)
-//       outputs:                         ordered list; first match_count are match, rest are no-match
-//         - <kind>:<target>[:<key>]
-//       env:                             optional arbitrary env vars (EXPECTED_EOFS, WINDOW_SIZE, ...)
-//         KEY: value
+//	clients: <int>           how many client_N services to declare
+//	gateways: <int>          how many gateway_N services to declare
+//	workers:
+//	  - name: <prefix>                   docker-compose service name (suffixed by replica index if replicas>1)
+//	    strategy: <STRATEGY env value>   which strategy this worker runs
+//	    replicas: <int>                  how many replicas; ring queues are auto-derived when >1
+//	    input: <kind>:<target>[:<key>]   queue:NAME | direct_exchange:NAME[:KEY]
+//	    match_count: <int>               optional; how many of `outputs` are "match" (filters use it; others omit)
+//	    outputs:                         ordered list; first match_count are match, rest are no-match
+//	      - <kind>:<target>[:<key>]
+//	    env:                             optional arbitrary env vars (EXPECTED_EOFS, WINDOW_SIZE, ...)
+//	      KEY: value
+//
+// All worker and gateway services automatically load .env (repo root) so that
+// shared variables (MOM_HOST, MOM_PORT, PERIOD1_START, …) are defined once.
 //
 // New worker families (reducer, aggregator, joiner, ...) plug in by simply
 // registering a STRATEGY in the worker binary and adding a block here — the
@@ -76,11 +79,12 @@ func main() {
 // It handles indentation-based scoping but only the constructs the spec uses.
 //
 // Indentation contract (whitespace-significant):
-//   0 :  top-level scalars + "workers:"
-//   2 :  "- name: ..." starts a new worker
-//   4 :  worker fields (strategy, replicas, input, match_count) and the
-//        section headers "outputs:" / "env:"
-//   6 :  "- <value>" items of outputs, "KEY: value" entries of env
+//
+//	0 :  top-level scalars + "workers:"
+//	2 :  "- name: ..." starts a new worker
+//	4 :  worker fields (strategy, replicas, input, match_count) and the
+//	     section headers "outputs:" / "env:"
+//	6 :  "- <value>" items of outputs, "KEY: value" entries of env
 func parseSpec(src string) (*spec, error) {
 	s := &spec{Clients: 1, Gateways: 1}
 	var cur *workerSpec
@@ -262,14 +266,14 @@ func writeGateway(w io.Writer, id int) {
 	fmt.Fprintf(w, "  gateway_%d:\n", id)
 	fmt.Fprintln(w, "    build: { context: ./src/, dockerfile: gateway/Dockerfile }")
 	fmt.Fprintln(w, "    depends_on: { rabbitmq: { condition: service_healthy } }")
+	fmt.Fprintln(w, "    env_file:")
+	fmt.Fprintln(w, "      - .env")
 	fmt.Fprintln(w, "    environment:")
 	fmt.Fprintln(w, "      - ALL_TRANSACTIONS_QUEUE=all_transactions")
 	fmt.Fprintln(w, "      - ALL_ACCOUNTS_QUEUE=all_accounts")
 	fmt.Fprintln(w, "      - FINAL_QUEUE=final")
 	fmt.Fprintf(w, "      - GATEWAY_ID=%d\n", id)
 	fmt.Fprintln(w, "      - RESULT_BATCH_MAX_BYTES=8192")
-	fmt.Fprintln(w, "      - MOM_HOST=rabbitmq")
-	fmt.Fprintln(w, "      - MOM_PORT=5672")
 	fmt.Fprintln(w, "      - SERVER_HOST=0.0.0.0")
 	fmt.Fprintln(w, "      - SERVER_PORT=5678")
 }
@@ -278,6 +282,8 @@ func writeWorker(w io.Writer, ws workerSpec, replica int) {
 	fmt.Fprintf(w, "  %s:\n", serviceName(ws, replica))
 	fmt.Fprintln(w, "    build: { context: ./src/, dockerfile: worker/Dockerfile }")
 	fmt.Fprintln(w, "    depends_on: { rabbitmq: { condition: service_healthy } }")
+	fmt.Fprintln(w, "    env_file:")
+	fmt.Fprintln(w, "      - .env")
 	fmt.Fprintln(w, "    environment:")
 	fmt.Fprintf(w, "      - STRATEGY=%s\n", ws.Strategy)
 	fmt.Fprintf(w, "      - REPLICA_ID=%d\n", replica)
@@ -285,8 +291,6 @@ func writeWorker(w io.Writer, ws workerSpec, replica int) {
 	input := strings.ReplaceAll(ws.Input, "{REPLICA_ID}", strconv.Itoa(replica))
 	fmt.Fprintf(w, "      - INPUT=%s\n", input)
 	fmt.Fprintf(w, "      - OUTPUTS_MATCH_COUNT=%d\n", ws.MatchCount)
-	fmt.Fprintln(w, "      - MOM_HOST=rabbitmq")
-	fmt.Fprintln(w, "      - MOM_PORT=5672")
 	for j, o := range ws.Outputs {
 		fmt.Fprintf(w, "      - OUTPUT_%d=%s\n", j, o)
 	}
