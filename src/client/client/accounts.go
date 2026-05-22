@@ -13,7 +13,8 @@ import (
 )
 
 const (
-	accountBatchHeaderBytes = 1 + 4 // MsgType + uint32 batch size
+	accountBatchHeaderBytes      = 1 + 4 // MsgType + uint32 batch size
+	accBatchArrayInitialCapacity = 16
 )
 
 func (client *Client) sendAccounts() error {
@@ -30,7 +31,7 @@ func (client *Client) sendAccounts() error {
 		return fmt.Errorf("reading accounts header: %w", err)
 	}
 
-	batch := make([]account.Account, 0, 16)
+	batch := make([]account.Account, 0, accBatchArrayInitialCapacity)
 	batchBytes := accountBatchHeaderBytes
 	for {
 		row, err := reader.Read()
