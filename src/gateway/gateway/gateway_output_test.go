@@ -28,13 +28,13 @@ func TestHandleClientResultOutputAcksAfterResultBatchAck(t *testing.T) {
 
 	state.EnqueueResult(clientregistry.ResultDelivery{
 		QueryID: 1,
-		Status:  "row-1",
+		Data:  "row-1",
 		Ack:     func() { ackCount.Add(1) },
 		Nack:    func() { nackCount.Add(1) },
 	})
 	state.EnqueueResult(clientregistry.ResultDelivery{
 		QueryID: 1,
-		Status:  "EOF",
+		Data:  "EOF",
 		Ack:     func() { ackCount.Add(1) },
 		Nack:    func() { nackCount.Add(1) },
 	})
@@ -87,7 +87,7 @@ func TestHandleClientResultOutputNacksWhenClientClosesBeforeAck(t *testing.T) {
 
 	state.EnqueueResult(clientregistry.ResultDelivery{
 		QueryID: 2,
-		Status:  "row-2",
+		Data:  "row-2",
 		Ack:     func() { ackCount.Add(1) },
 		Nack:    func() { nackCount.Add(1) },
 	})
@@ -130,7 +130,7 @@ func TestHandleClientResultOutputNacksOversizedRow(t *testing.T) {
 
 	state.EnqueueResult(clientregistry.ResultDelivery{
 		QueryID: 3,
-		Status:  "",
+		Data:  "",
 		Ack:     func() { ackCount.Add(1) },
 		Nack:    func() { nackCount.Add(1) },
 	})

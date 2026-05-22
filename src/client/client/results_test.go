@@ -52,8 +52,8 @@ func TestSendIngestMessageHandlesInterleavedResultBatch(t *testing.T) {
 		}
 
 		if err := external.WriteResultBatch(serverConn, []external.ResultBatchItem{
-			{QueryID: 1, Status: "20,A,31,B,10.00"},
-			{QueryID: 1, Status: queryEOFStatus},
+			{QueryID: 1, Data: "20,A,31,B,10.00"},
+			{QueryID: 1, Data: queryEOFStatus},
 		}); err != nil {
 			serverDone <- err
 			return
@@ -132,8 +132,8 @@ func TestWaitForAllQueryEOFs(t *testing.T) {
 
 	for queryID := uint8(1); queryID <= 5; queryID++ {
 		if err := external.WriteResultBatch(serverConn, []external.ResultBatchItem{
-			{QueryID: queryID, Status: "row"},
-			{QueryID: queryID, Status: queryEOFStatus},
+			{QueryID: queryID, Data: "row"},
+			{QueryID: queryID, Data: queryEOFStatus},
 		}); err != nil {
 			t.Fatalf("WriteResultBatch failed for query %d: %v", queryID, err)
 		}

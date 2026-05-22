@@ -28,6 +28,7 @@ type SerialAnalyzer struct {
 	connSettings         middleware.ConnSettings
 	finalQueues          map[string]middleware.Middleware
 	processor            *session.Processor
+	batchMaxBytes        int
 	running              atomic.Bool
 	shutdownOnce         sync.Once
 	shutdownCh           chan struct{}
@@ -56,6 +57,7 @@ func NewSerialAnalyzer(config analyzerconfig.SerialAnalyzerConfig) (*SerialAnaly
 		connSettings:         connSettings,
 		finalQueues:          make(map[string]middleware.Middleware),
 		processor:            session.NewProcessor(),
+		batchMaxBytes:        config.BatchMaxBytes,
 		shutdownCh:           make(chan struct{}),
 	}
 	serialAnalyzer.running.Store(true)
@@ -240,9 +242,35 @@ func (serialAnalyzer *SerialAnalyzer) handleAccountsMessage(message middleware.M
 	ack()
 }
 
+// resultBatchItemBytes returns the number of bytes an item occupies in the binary payload.
+// Format: 1B QueryID + 1B len + len bytes Data.
+func resultBatchItemBytes(item inner.QueryResultItem) int {
+	return 2 + len(item.Data)
+}
+
 func (serialAnalyzer *SerialAnalyzer) publishOutputs(gatewayID inner.GatewayID, clientID inner.ClientID, outputs []session.QueryOutput) error {
+	if len(outputs) == 0 {
+		return nil
+	}
 	finalQueue, err := serialAnalyzer.getFinalQueueForGateway(gatewayID)
 	if err != nil {
+		return err
+	}
+
+	batch := make([]inner.QueryResultItem, 0, 16)
+	batchBytes := 2 // 2B count header
+
+	flush := func() error {
+		if len(batch) == 0 {
+			return nil
+		}
+		msg, err := inner.SerializeFinalQueryResultBatch(gatewayID, clientID, batch)
+		if err != nil {
+			return err
+		}
+		err = finalQueue.Send(*msg)
+		batch = batch[:0]
+		batchBytes = 2
 		return err
 	}
 
@@ -250,16 +278,23 @@ func (serialAnalyzer *SerialAnalyzer) publishOutputs(gatewayID inner.GatewayID, 
 		if len(output.Data) > 255 {
 			return ErrStatusTooLong
 		}
-
-		message, err := inner.SerializeFinalQueryResult(gatewayID, clientID, output.QueryID, output.Data)
-		if err != nil {
-			return err
+		item := inner.QueryResultItem{QueryID: output.QueryID, Data: output.Data}
+		itemBytes := resultBatchItemBytes(item)
+		if len(batch) > 0 && batchBytes+itemBytes > serialAnalyzer.batchMaxBytes {
+			if err := flush(); err != nil {
+				return err
+			}
 		}
-		if err := finalQueue.Send(*message); err != nil {
-			return err
+		batch = append(batch, item)
+		batchBytes += itemBytes
+		// Flush en EOF para no dejar al cliente esperando el siguiente llenado.
+		if output.Data == session.EOFStatus {
+			if err := flush(); err != nil {
+				return err
+			}
 		}
 	}
-	return nil
+	return flush()
 }
 
 func (serialAnalyzer *SerialAnalyzer) getFinalQueueForGateway(gatewayID inner.GatewayID) (middleware.Middleware, error) {

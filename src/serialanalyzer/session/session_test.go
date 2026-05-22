@@ -28,8 +28,8 @@ func TestQueryReadinessAndEOFByClient(t *testing.T) {
 	if outputs[0].QueryID != queries.Query1ID {
 		t.Fatalf("expected incremental output for Q1, got query=%d", outputs[0].QueryID)
 	}
-	if outputs[0].Status != "20,A,31,B,10.00" {
-		t.Fatalf("unexpected Q1 incremental row: %q", outputs[0].Status)
+	if outputs[0].Data != "20,A,31,B,10.00" {
+		t.Fatalf("unexpected Q1 incremental row: %q", outputs[0].Data)
 	}
 	outputs = processor.MarkTransactionsEOF(gatewayID, clientID, 1)
 
@@ -78,7 +78,7 @@ func TestClientIsolation(t *testing.T) {
 
 func hasQueryEOF(outputs []QueryOutput, queryID uint8) bool {
 	for _, out := range outputs {
-		if out.QueryID == queryID && out.Status == EOFStatus {
+		if out.QueryID == queryID && out.Data == EOFStatus {
 			return true
 		}
 	}
@@ -87,7 +87,7 @@ func hasQueryEOF(outputs []QueryOutput, queryID uint8) bool {
 
 func hasQueryRow(outputs []QueryOutput, row string) bool {
 	for _, out := range outputs {
-		if out.Status == row {
+		if out.Data == row {
 			return true
 		}
 	}

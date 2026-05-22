@@ -18,7 +18,9 @@ const (
 	AllTransactionsEOF
 	AllAccountsBatch
 	AllAccountsEOF
-	FinalQueryResult
+	// FinalQueryResultBatch groups N query results into a single AMQP post.
+	// Binary payload: 2B (LE) count | { 1B QueryID | 1B len | len bytes Data } × count
+	FinalQueryResultBatch
 	// TransactionMessage carries a single transaction (Payload = SerializeTransaction(tx)).
 	// Used in internal pipeline queues after the gateway unpacks the external batch.
 	TransactionMessage
@@ -46,9 +48,13 @@ type Envelope struct {
 	ClientID  ClientID  `json:"c"`
 	Kind      MsgKind   `json:"k"`
 	Total     uint32    `json:"t,omitempty"`
-	Payload   []byte    `json:"p,omitempty"` // batches de transacciones, cuentas, el token del ring coordinator
-	QueryID   uint8     `json:"q,omitempty"`
-	Data      string    `json:"d,omitempty"` // solo lo usa FinalQueryResult, y transporta exactamente una de dos cosas: una fila CSV de resultado
+	Payload   []byte    `json:"p,omitempty"`
+}
+
+// QueryResultItem is an item within a FinalQueryResultBatch: a CSV or "EOF" row.
+type QueryResultItem struct {
+	QueryID uint8
+	Data    string
 }
 
 func SerializeEnvelope(kind MsgKind, gatewayID GatewayID, clientID ClientID, total uint32, payload []byte) (*middleware.Message, error) {
@@ -190,16 +196,58 @@ func DeserializeInnerBatch(env *Envelope) (MsgKind, [][]byte, error) {
 	return itemKind, items, nil
 }
 
-func SerializeFinalQueryResult(gatewayID GatewayID, clientID ClientID, queryID uint8, status string) (*middleware.Message, error) {
-	body, err := json.Marshal(Envelope{
-		GatewayID: gatewayID,
-		ClientID:  clientID,
-		Kind:      FinalQueryResult,
-		QueryID:   queryID,
-		Data:      status,
-	})
-	if err != nil {
-		return nil, err
+func SerializeFinalQueryResultBatch(gatewayID GatewayID, clientID ClientID, items []QueryResultItem) (*middleware.Message, error) {
+	if len(items) == 0 {
+		return nil, errors.New("result batch must contain at least one item")
 	}
-	return &middleware.Message{Body: string(body)}, nil
+	if len(items) > 0xFFFF {
+		return nil, errors.New("result batch exceeds max items (65535)")
+	}
+	size := 2
+	for _, item := range items {
+		size += 1 + 1 + len(item.Data)
+	}
+	buf := make([]byte, 0, size)
+	var countBuf [2]byte
+	binary.LittleEndian.PutUint16(countBuf[:], uint16(len(items)))
+	buf = append(buf, countBuf[:]...)
+	for _, item := range items {
+		buf = append(buf, item.QueryID)
+		buf = append(buf, byte(len(item.Data)))
+		buf = append(buf, item.Data...)
+	}
+	return SerializeEnvelope(FinalQueryResultBatch, gatewayID, clientID, 0, buf)
+}
+
+func DeserializeFinalQueryResultBatch(env *Envelope) ([]QueryResultItem, error) {
+	if env == nil || env.Kind != FinalQueryResultBatch {
+		return nil, ErrUnexpectedKind
+	}
+	p := env.Payload
+	if len(p) < 2 {
+		return nil, ErrMalformedEnvelope
+	}
+	count := binary.LittleEndian.Uint16(p[0:2])
+	items := make([]QueryResultItem, 0, count)
+	off := 2
+	for i := 0; i < int(count); i++ {
+		if off+2 > len(p) {
+			return nil, ErrMalformedEnvelope
+		}
+		queryID := p[off]
+		dataLen := int(p[off+1])
+		off += 2
+		if off+dataLen > len(p) {
+			return nil, ErrMalformedEnvelope
+		}
+		items = append(items, QueryResultItem{
+			QueryID: queryID,
+			Data:    string(p[off : off+dataLen]),
+		})
+		off += dataLen
+	}
+	if off != len(p) {
+		return nil, ErrMalformedEnvelope
+	}
+	return items, nil
 }

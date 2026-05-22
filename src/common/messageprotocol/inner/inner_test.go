@@ -37,17 +37,22 @@ func TestSerializeDeserializeEnvelope(t *testing.T) {
 	}
 }
 
-func TestFinalQueryResultRoundTrip(t *testing.T) {
-	msg, err := SerializeFinalQueryResult(2, "client-10", 3, "ACK")
+func TestFinalQueryResultBatchRoundTrip(t *testing.T) {
+	input := []QueryResultItem{
+		{QueryID: 1, Data: "2022-09-01,Alice,100.00"},
+		{QueryID: 1, Data: "EOF"},
+		{QueryID: 3, Data: "EOF"},
+	}
+	msg, err := SerializeFinalQueryResultBatch(2, "client-10", input)
 	if err != nil {
-		t.Fatalf("SerializeFinalQueryResult returned error: %v", err)
+		t.Fatalf("SerializeFinalQueryResultBatch returned error: %v", err)
 	}
 
 	envelope, err := DeserializeEnvelope(msg)
 	if err != nil {
 		t.Fatalf("DeserializeEnvelope returned error: %v", err)
 	}
-	if envelope.Kind != FinalQueryResult {
+	if envelope.Kind != FinalQueryResultBatch {
 		t.Fatalf("unexpected kind: got %d", envelope.Kind)
 	}
 	if envelope.ClientID != "client-10" {
@@ -57,11 +62,20 @@ func TestFinalQueryResultRoundTrip(t *testing.T) {
 		t.Fatalf("unexpected gateway id: got %d", envelope.GatewayID)
 	}
 
-	if envelope.QueryID != 3 {
-		t.Fatalf("unexpected query id: got %d", envelope.QueryID)
+	items, err := DeserializeFinalQueryResultBatch(envelope)
+	if err != nil {
+		t.Fatalf("DeserializeFinalQueryResultBatch returned error: %v", err)
 	}
-	if envelope.Status != "ACK" {
-		t.Fatalf("unexpected status: got %s", envelope.Status)
+	if len(items) != len(input) {
+		t.Fatalf("unexpected item count: got %d want %d", len(items), len(input))
+	}
+	for i, want := range input {
+		if items[i].QueryID != want.QueryID {
+			t.Fatalf("item %d: QueryID got %d want %d", i, items[i].QueryID, want.QueryID)
+		}
+		if items[i].Data != want.Data {
+			t.Fatalf("item %d: Data got %q want %q", i, items[i].Data, want.Data)
+		}
 	}
 }
 

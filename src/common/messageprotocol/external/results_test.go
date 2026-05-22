@@ -10,8 +10,8 @@ import (
 
 func TestResultBatchRoundTrip(t *testing.T) {
 	items := []ResultBatchItem{
-		{QueryID: 1, Status: "row-1"},
-		{QueryID: 2, Status: "EOF"},
+		{QueryID: 1, Data: "row-1"},
+		{QueryID: 2, Data: "EOF"},
 	}
 
 	var buffer bytes.Buffer
@@ -74,7 +74,7 @@ func TestResultBatchRejectsLongStatus(t *testing.T) {
 	}
 
 	_, err := SerializeResultBatchPayload([]ResultBatchItem{
-		{QueryID: 1, Status: string(tooLong)},
+		{QueryID: 1, Data: string(tooLong)},
 	})
 	if !errors.Is(err, serializer.ErrStringTooLong) {
 		t.Fatalf("expected ErrStringTooLong, got %v", err)

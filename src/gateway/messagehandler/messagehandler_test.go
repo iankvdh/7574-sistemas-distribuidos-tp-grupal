@@ -108,37 +108,49 @@ func TestSerializeEmptyBatchReturnsNil(t *testing.T) {
 	}
 }
 
-func TestDeserializeFinalMessage(t *testing.T) {
-	message, err := inner.SerializeFinalQueryResult(4, "client-4", 2, "ACK")
+func TestDeserializeFinalBatch(t *testing.T) {
+	input := []inner.QueryResultItem{
+		{QueryID: 2, Data: "row-data"},
+		{QueryID: 2, Data: "EOF"},
+	}
+	message, err := inner.SerializeFinalQueryResultBatch(4, "client-4", input)
 	if err != nil {
-		t.Fatalf("SerializeFinalQueryResult returned error: %v", err)
+		t.Fatalf("SerializeFinalQueryResultBatch returned error: %v", err)
 	}
 
-	parsed, err := DeserializeFinalMessage(message)
+	parsed, err := DeserializeFinalBatch(message)
 	if err != nil {
-		t.Fatalf("DeserializeFinalMessage returned error: %v", err)
+		t.Fatalf("DeserializeFinalBatch returned error: %v", err)
 	}
-	if parsed.GatewayID != 4 || parsed.ClientID != "client-4" || parsed.QueryID != 2 || parsed.Status != "ACK" {
-		t.Fatalf("unexpected parsed final message: %+v", parsed)
+	if parsed.GatewayID != 4 || parsed.ClientID != "client-4" {
+		t.Fatalf("unexpected header: %+v", parsed)
+	}
+	if len(parsed.Items) != len(input) {
+		t.Fatalf("unexpected item count: got %d want %d", len(parsed.Items), len(input))
+	}
+	for i, want := range input {
+		if parsed.Items[i].QueryID != want.QueryID || parsed.Items[i].Data != want.Data {
+			t.Fatalf("item %d mismatch: got %+v want %+v", i, parsed.Items[i], want)
+		}
 	}
 }
 
-func TestDeserializeFinalMessageUnexpectedKind(t *testing.T) {
+func TestDeserializeFinalBatchUnexpectedKind(t *testing.T) {
 	msg, err := inner.SerializeAllTransactionsEOF(5, "client-5", 10)
 	if err != nil {
 		t.Fatalf("SerializeAllTransactionsEOF returned error: %v", err)
 	}
 
-	_, err = DeserializeFinalMessage(msg)
+	_, err = DeserializeFinalBatch(msg)
 	if !errors.Is(err, inner.ErrUnexpectedKind) {
 		t.Fatalf("expected ErrUnexpectedKind, got %v", err)
 	}
 }
 
-func TestDeserializeFinalMessageMalformed(t *testing.T) {
+func TestDeserializeFinalBatchMalformed(t *testing.T) {
 	msg := &middleware.Message{Body: "invalid-json"}
 
-	_, err := DeserializeFinalMessage(msg)
+	_, err := DeserializeFinalBatch(msg)
 	if !errors.Is(err, inner.ErrMalformedEnvelope) {
 		t.Fatalf("expected ErrMalformedEnvelope, got %v", err)
 	}
