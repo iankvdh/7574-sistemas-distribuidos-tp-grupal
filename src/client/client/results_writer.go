@@ -8,7 +8,11 @@ import (
 	"path/filepath"
 )
 
-const outputDirMode = 0o755
+const outputDirPermissions = 0o755
+const outputFilePermissions = 0o644
+const outputFileFlags = os.O_CREATE | os.O_TRUNC | os.O_WRONLY
+
+const writerBufferSize = 16 * 1024
 
 var queryHeaders = map[uint8]string{
 	1: "From Bank,Account,To Bank,Account.1,Amount Paid",
@@ -42,7 +46,7 @@ func newQueryResultsWriter(outputDir, clientID string) (*queryResultsWriter, err
 	if outputDir == "" {
 		return nil, errors.New("results output dir is required")
 	}
-	if err := os.MkdirAll(outputDir, outputDirMode); err != nil {
+	if err := os.MkdirAll(outputDir, outputDirPermissions); err != nil {
 		return nil, err
 	}
 
@@ -95,12 +99,16 @@ func (writer *queryResultsWriter) ensureFile(queryID uint8) (*queryResultFile, e
 		return queryFile, nil
 	}
 
+	return writer.createQueryResultFile(queryID, header)
+}
+
+func (writer *queryResultsWriter) createQueryResultFile(queryID uint8, header string) (*queryResultFile, error) {
 	filePath := filepath.Join(writer.outputDir, resultFileName(writer.clientID, queryID))
-	file, err := os.OpenFile(filePath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+	file, err := os.OpenFile(filePath, outputFileFlags, outputFilePermissions)
 	if err != nil {
 		return nil, err
 	}
-	bufferedWriter := bufio.NewWriter(file)
+	bufferedWriter := bufio.NewWriterSize(file, writerBufferSize)
 	if _, err := bufferedWriter.WriteString(header + "\n"); err != nil {
 		_ = file.Close()
 		return nil, err

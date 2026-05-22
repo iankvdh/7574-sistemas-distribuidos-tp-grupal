@@ -14,7 +14,7 @@ import (
 
 const (
 	transactionBatchHeaderBytes = 1 + 4 // MsgType + uint32 batch size
-	batchArrayInitialCapacity    = 16
+	txBatchArrayInitialCapacity = 16
 )
 
 func (client *Client) sendTransactions() error {
@@ -31,7 +31,7 @@ func (client *Client) sendTransactions() error {
 		return fmt.Errorf("reading transactions header: %w", err)
 	}
 
-	batch := make([]transaction.Transaction, 0, batchArrayInitialCapacity)
+	batch := make([]transaction.Transaction, 0, txBatchArrayInitialCapacity)
 	batchBytes := transactionBatchHeaderBytes
 	for {
 		row, err := reader.Read()
