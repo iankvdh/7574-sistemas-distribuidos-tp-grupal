@@ -20,7 +20,10 @@ import (
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/gateway/messagehandler"
 )
 
-const requiredQueryEOFs = 5
+const (
+	requiredQueryEOFs = 5
+	queryResultEOF    = "EOF"
+)
 
 type Gateway struct {
 	registry             clientregistry.ClientRegistry
@@ -254,6 +257,7 @@ func (gateway *Gateway) handleClientResultOutput(state *clientregistry.ClientSta
 	pendingDeliveries := make([]clientregistry.ResultDelivery, 0, 16)
 	pendingItems := make([]external.ResultBatchItem, 0, 16)
 	currentBatchBytes := external.ResultBatchHeaderBytes()
+	eofCountInBatch := 0
 
 	nackPending := func() {
 		for _, pending := range pendingDeliveries {
@@ -262,6 +266,7 @@ func (gateway *Gateway) handleClientResultOutput(state *clientregistry.ClientSta
 		pendingDeliveries = pendingDeliveries[:0]
 		pendingItems = pendingItems[:0]
 		currentBatchBytes = external.ResultBatchHeaderBytes()
+		eofCountInBatch = 0
 	}
 
 	flush := func() error {
@@ -288,6 +293,7 @@ func (gateway *Gateway) handleClientResultOutput(state *clientregistry.ClientSta
 		pendingDeliveries = pendingDeliveries[:0]
 		pendingItems = pendingItems[:0]
 		currentBatchBytes = external.ResultBatchHeaderBytes()
+		eofCountInBatch = 0
 		return nil
 	}
 
@@ -313,7 +319,17 @@ func (gateway *Gateway) handleClientResultOutput(state *clientregistry.ClientSta
 		pendingDeliveries = append(pendingDeliveries, delivery)
 		pendingItems = append(pendingItems, item)
 		currentBatchBytes += itemBytes
+		if delivery.Data == queryResultEOF {
+			eofCountInBatch++
+		}
 		return nil
+	}
+
+	abortWithError := func(d clientregistry.ResultDelivery, err error) {
+		slog.Error("While building result batch for client", "client_id", clientID, "err", err)
+		d.Nack()
+		nackPending()
+		gateway.registry.RemoveAndClose(clientID)
 	}
 
 	eofsSent := 0
@@ -326,14 +342,11 @@ func (gateway *Gateway) handleClientResultOutput(state *clientregistry.ClientSta
 		}
 
 		if err := appendDelivery(delivery); err != nil {
-			slog.Error("While building result batch for client", "client_id", clientID, "err", err)
-			delivery.Nack()
-			nackPending()
-			gateway.registry.RemoveAndClose(clientID)
+			abortWithError(delivery, err)
 			return
 		}
 
-		if delivery.Data != "EOF" {
+		if delivery.Data != queryResultEOF {
 			for currentBatchBytes < gateway.resultBatchMaxBytes {
 				nextDelivery, exists := state.TryDequeueResult()
 				if !exists {
@@ -347,26 +360,17 @@ func (gateway *Gateway) handleClientResultOutput(state *clientregistry.ClientSta
 				}
 
 				if err := appendDelivery(nextDelivery); err != nil {
-					slog.Error("While building result batch for client", "client_id", clientID, "err", err)
-					nextDelivery.Nack()
-					nackPending()
-					gateway.registry.RemoveAndClose(clientID)
+					abortWithError(nextDelivery, err)
 					return
 				}
 
-				if nextDelivery.Data == "EOF" {
+				if nextDelivery.Data == queryResultEOF {
 					break
 				}
 			}
 		}
 
-		eofCountInBatch := 0
-		for _, d := range pendingDeliveries {
-			if d.Data == "EOF" {
-				eofCountInBatch++
-			}
-		}
-
+		batchEOFs := eofCountInBatch
 		if err := flush(); err != nil {
 			if gateway.running.Load() {
 				slog.Warn("While flushing result batch to client", "client_id", clientID, "err", err)
@@ -375,7 +379,7 @@ func (gateway *Gateway) handleClientResultOutput(state *clientregistry.ClientSta
 			return
 		}
 
-		eofsSent += eofCountInBatch
+		eofsSent += batchEOFs
 		if eofsSent >= requiredQueryEOFs {
 			slog.Info("All query EOFs delivered to client, closing session", "client_id", clientID)
 			gateway.registry.RemoveAndClose(clientID)
@@ -398,39 +402,35 @@ func (gateway *Gateway) handleHandshake(state *clientregistry.ClientState, clien
 	})
 }
 
-func (gateway *Gateway) handleTransactionBatch(state *clientregistry.ClientState, handler *messagehandler.MessageHandler) error {
-	batch, err := external.ReadTransactionBatch(state.Conn)
-	if err != nil {
-		return err
-	}
-
-	msg, err := handler.SerializeTransactionBatch(batch)
-	if err != nil {
-		return err
-	}
+func (gateway *Gateway) sendToQueueAndAck(state *clientregistry.ClientState, msg *middleware.Message, queue middleware.Middleware) error {
 	if msg != nil {
-		if err := gateway.allTransactionsQueue.Send(*msg); err != nil {
+		if err := queue.Send(*msg); err != nil {
 			return err
 		}
 	}
-
 	return state.WriteWithLock(func(conn net.Conn) error {
 		return external.WriteIngestAck(conn)
 	})
 }
 
-func (gateway *Gateway) handleEndOfTransactions(state *clientregistry.ClientState, handler *messagehandler.MessageHandler) error {
-	message, err := handler.SerializeTransactionEOFMessage()
+func (gateway *Gateway) handleTransactionBatch(state *clientregistry.ClientState, handler *messagehandler.MessageHandler) error {
+	batch, err := external.ReadTransactionBatch(state.Conn)
 	if err != nil {
 		return err
 	}
-	if err := gateway.allTransactionsQueue.Send(*message); err != nil {
+	msg, err := handler.SerializeTransactionBatch(batch)
+	if err != nil {
 		return err
 	}
+	return gateway.sendToQueueAndAck(state, msg, gateway.allTransactionsQueue)
+}
 
-	return state.WriteWithLock(func(conn net.Conn) error {
-		return external.WriteIngestAck(conn)
-	})
+func (gateway *Gateway) handleEndOfTransactions(state *clientregistry.ClientState, handler *messagehandler.MessageHandler) error {
+	msg, err := handler.SerializeTransactionEOFMessage()
+	if err != nil {
+		return err
+	}
+	return gateway.sendToQueueAndAck(state, msg, gateway.allTransactionsQueue)
 }
 
 func (gateway *Gateway) handleAccountBatch(state *clientregistry.ClientState, handler *messagehandler.MessageHandler) error {
@@ -438,34 +438,19 @@ func (gateway *Gateway) handleAccountBatch(state *clientregistry.ClientState, ha
 	if err != nil {
 		return err
 	}
-
 	msg, err := handler.SerializeAccountBatch(batch)
 	if err != nil {
 		return err
 	}
-	if msg != nil {
-		if err := gateway.allAccountsQueue.Send(*msg); err != nil {
-			return err
-		}
-	}
-
-	return state.WriteWithLock(func(conn net.Conn) error {
-		return external.WriteIngestAck(conn)
-	})
+	return gateway.sendToQueueAndAck(state, msg, gateway.allAccountsQueue)
 }
 
 func (gateway *Gateway) handleEndOfAccounts(state *clientregistry.ClientState, handler *messagehandler.MessageHandler) error {
-	message, err := handler.SerializeAccountEOFMessage()
+	msg, err := handler.SerializeAccountEOFMessage()
 	if err != nil {
 		return err
 	}
-	if err := gateway.allAccountsQueue.Send(*message); err != nil {
-		return err
-	}
-
-	return state.WriteWithLock(func(conn net.Conn) error {
-		return external.WriteIngestAck(conn)
-	})
+	return gateway.sendToQueueAndAck(state, msg, gateway.allAccountsQueue)
 }
 
 func (gateway *Gateway) shutdown() {
