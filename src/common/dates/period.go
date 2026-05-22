@@ -8,12 +8,17 @@ const (
 	Period2End   uint32 = 20220915
 )
 
+// InRange reports whether date lies in [start, end].
+func InRange(date, start, end uint32) bool {
+	return date >= start && date <= end
+}
+
 // InPeriod1 reports whether the given date lies in [2022-09-01, 2022-09-05].
 func InPeriod1(date uint32) bool {
-	return date >= Period1Start && date <= Period1End
+	return InRange(date, Period1Start, Period1End)
 }
 
 // InPeriod2 reports whether the given date lies in [2022-09-06, 2022-09-15].
 func InPeriod2(date uint32) bool {
-	return date >= Period2Start && date <= Period2End
+	return InRange(date, Period2Start, Period2End)
 }
