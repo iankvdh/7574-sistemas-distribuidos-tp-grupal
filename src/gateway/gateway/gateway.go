@@ -33,7 +33,7 @@ type Gateway struct {
 	running              atomic.Bool
 	shutdownOnce         sync.Once
 	shutdownCh           chan struct{}
-	waitingGroup        sync.WaitGroup
+	waitingGroup         sync.WaitGroup
 }
 
 func NewGateway(config gatewayconfig.GatewayConfig) (*Gateway, error) {
@@ -143,41 +143,54 @@ func (gateway *Gateway) consumeFinalQueue() {
 }
 
 func (gateway *Gateway) forwardFinalMessage(msg middleware.Message, ack func(), nack func()) {
-	finalMsg, err := messagehandler.DeserializeFinalMessage(&msg)
+	batch, err := messagehandler.DeserializeFinalBatch(&msg)
 	if err != nil {
 		slog.Error("Invalid message from FINAL queue", "err", err)
 		ack()
 		return
 	}
 
-	if finalMsg.GatewayID != gateway.gatewayID {
+	if batch.GatewayID != gateway.gatewayID {
 		slog.Error(
-			"Received FINAL message addressed to another gateway — this is a routing bug, shutting down",
+			"Received FINAL batch addressed to another gateway — this is a routing bug, shutting down",
 			"expected_gateway_id", gateway.gatewayID,
-			"received_gateway_id", finalMsg.GatewayID,
-			"client_id", finalMsg.ClientID,
+			"received_gateway_id", batch.GatewayID,
+			"client_id", batch.ClientID,
 		)
 		ack()
 		gateway.shutdown()
 		return
 	}
 
-	state, ok := gateway.registry.Get(finalMsg.ClientID)
+	state, ok := gateway.registry.Get(batch.ClientID)
 	if !ok {
-		slog.Warn("Received FINAL message for unknown client", "client_id", finalMsg.ClientID)
+		slog.Warn("Received FINAL batch for unknown client", "client_id", batch.ClientID)
 		ack()
 		return
 	}
 
-	enqueued := state.EnqueueResult(clientregistry.ResultDelivery{
-		QueryID: finalMsg.QueryID,
-		Data:    finalMsg.Data,
-		Ack:     ack,
-		Nack:    nack,
-	})
-	if !enqueued {
-		slog.Warn("Dropping FINAL message because client session is closed", "client_id", finalMsg.ClientID)
-		ack()
+	remaining := &atomic.Int32{}
+	remaining.Store(int32(len(batch.Items)))
+	once := &sync.Once{}
+	itemAck := func() {
+		if remaining.Add(-1) == 0 {
+			once.Do(ack)
+		}
+	}
+	itemNack := func() { once.Do(nack) }
+
+	for _, item := range batch.Items {
+		enqueued := state.EnqueueResult(clientregistry.ResultDelivery{
+			QueryID: item.QueryID,
+			Data:    item.Data,
+			Ack:     itemAck,
+			Nack:    itemNack,
+		})
+		if !enqueued {
+			slog.Warn("Dropping FINAL batch because client session is closed", "client_id", batch.ClientID)
+			once.Do(ack)
+			return
+		}
 	}
 }
 

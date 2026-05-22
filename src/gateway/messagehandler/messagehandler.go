@@ -81,26 +81,28 @@ func (handler *MessageHandler) SerializeAccountEOFMessage() (*middleware.Message
 	return inner.SerializeAllAccountsEOF(handler.gatewayID, handler.clientID, handler.accountAmount)
 }
 
-type FinalMessage struct {
+type FinalBatch struct {
 	GatewayID inner.GatewayID
 	ClientID  inner.ClientID
-	QueryID   uint8
-	Data      string
+	Items     []inner.QueryResultItem
 }
 
-func DeserializeFinalMessage(message *middleware.Message) (*FinalMessage, error) {
+func DeserializeFinalBatch(message *middleware.Message) (*FinalBatch, error) {
 	envelope, err := inner.DeserializeEnvelope(message)
 	if err != nil {
 		return nil, err
 	}
 
 	switch envelope.Kind {
-	case inner.FinalQueryResult:
-		return &FinalMessage{
+	case inner.FinalQueryResultBatch:
+		items, err := inner.DeserializeFinalQueryResultBatch(envelope)
+		if err != nil {
+			return nil, err
+		}
+		return &FinalBatch{
 			GatewayID: envelope.GatewayID,
 			ClientID:  envelope.ClientID,
-			QueryID:   envelope.QueryID,
-			Data:      envelope.Data,
+			Items:     items,
 		}, nil
 	default:
 		return nil, fmt.Errorf("%w: %d", inner.ErrUnexpectedKind, envelope.Kind)
