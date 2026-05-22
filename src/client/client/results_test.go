@@ -1,6 +1,7 @@
 package client
 
 import (
+	"context"
 	"net"
 	"os"
 	"path/filepath"
@@ -17,21 +18,25 @@ func TestSendIngestMessageHandlesInterleavedResultBatch(t *testing.T) {
 	defer clientConn.Close()
 	defer serverConn.Close()
 
+	ctx, cancel := context.WithCancel(context.Background())
 	c := &Client{
-		conn:     clientConn,
-		clientID: "test-client",
+		conn:          clientConn,
+		clientID:      "test-client",
+		ctx:           ctx,
+		cancel:        cancel,
+		ingestAckCh:   make(chan struct{}, 1),
+		allQueryEOFCh: make(chan struct{}),
 		config: ClientConfig{
 			ResultsDir: t.TempDir(),
 		},
 	}
-	c.initIOChannels()
 	c.running.Store(true)
 	if err := c.initResultsCollector(); err != nil {
 		t.Fatalf("initResultsCollector failed: %v", err)
 	}
 	defer c.closeResultsCollector()
 
-	c.startIOLoops()
+	go c.readerLoop()
 	defer c.stopIO()
 
 	serverDone := make(chan error, 1)
@@ -104,21 +109,25 @@ func TestWaitForAllQueryEOFs(t *testing.T) {
 	defer clientConn.Close()
 	defer serverConn.Close()
 
+	ctx, cancel := context.WithCancel(context.Background())
 	c := &Client{
-		conn:     clientConn,
-		clientID: "test-client",
+		conn:          clientConn,
+		clientID:      "test-client",
+		ctx:           ctx,
+		cancel:        cancel,
+		ingestAckCh:   make(chan struct{}, 1),
+		allQueryEOFCh: make(chan struct{}),
 		config: ClientConfig{
 			ResultsDir: t.TempDir(),
 		},
 	}
-	c.initIOChannels()
 	c.running.Store(true)
 	if err := c.initResultsCollector(); err != nil {
 		t.Fatalf("initResultsCollector failed: %v", err)
 	}
 	defer c.closeResultsCollector()
 
-	c.startIOLoops()
+	go c.readerLoop()
 	defer c.stopIO()
 
 	for queryID := uint8(1); queryID <= 5; queryID++ {

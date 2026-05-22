@@ -1,6 +1,7 @@
 package client
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -31,11 +32,6 @@ type ClientConfig struct {
 	ConnectTimeout     time.Duration
 }
 
-type writeRequest struct {
-	write func(conn net.Conn) error
-	done  chan error
-}
-
 type Client struct {
 	conn         net.Conn
 	clientID     string
@@ -44,15 +40,14 @@ type Client struct {
 	gatewayAddrs []string
 	results      *resultsCollector
 
-	writeRequests chan writeRequest
+	writeMu       sync.Mutex
+	ctx           context.Context
+	cancel        context.CancelFunc
 	ingestAckCh   chan struct{}
 	allQueryEOFCh chan struct{}
-	ioStopCh      chan struct{}
-	ioErrCh       chan struct{}
 
-	ioStopOnce sync.Once
-	ioErrMu    sync.Mutex
-	ioErr      error
+	ioErrMu sync.Mutex
+	ioErr   error
 }
 
 func NewClient(config ClientConfig) (*Client, error) {
@@ -61,15 +56,20 @@ func NewClient(config ClientConfig) (*Client, error) {
 		return nil, errors.New("gateway list is empty")
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
 	client := &Client{
-		config:       config,
-		gatewayAddrs: gatewayAddrs,
+		config:        config,
+		gatewayAddrs:  gatewayAddrs,
+		ctx:           ctx,
+		cancel:        cancel,
+		ingestAckCh:   make(chan struct{}, 1),
+		allQueryEOFCh: make(chan struct{}),
 	}
-	client.initIOChannels()
 	client.running.Store(true)
 
 	conn, clientID, err := client.connectToGateway()
 	if err != nil {
+		cancel()
 		return nil, err
 	}
 	client.conn = conn
@@ -198,7 +198,7 @@ func (client *Client) Run() error {
 		}
 	}()
 
-	client.startIOLoops()
+	go client.readerLoop()
 
 	if err := client.sendTransactions(); err != nil {
 		if client.running.Load() {
@@ -222,35 +222,6 @@ func (client *Client) Run() error {
 	}
 
 	return nil
-}
-
-func (client *Client) initIOChannels() {
-	client.writeRequests = make(chan writeRequest)
-	client.ingestAckCh = make(chan struct{}, 1)
-	client.allQueryEOFCh = make(chan struct{})
-	client.ioStopCh = make(chan struct{})
-	client.ioErrCh = make(chan struct{})
-}
-
-func (client *Client) startIOLoops() {
-	go client.writerLoop()
-	go client.readerLoop()
-}
-
-func (client *Client) writerLoop() {
-	for {
-		select {
-		case <-client.ioStopCh:
-			return
-		case request := <-client.writeRequests:
-			err := request.write(client.conn)
-			request.done <- err
-			if err != nil {
-				client.setIOError(err)
-				return
-			}
-		}
-	}
 }
 
 func (client *Client) readerLoop() {
@@ -295,27 +266,9 @@ func (client *Client) readerLoop() {
 }
 
 func (client *Client) sendWrite(writeAction func(conn net.Conn) error) error {
-	request := writeRequest{
-		write: writeAction,
-		done:  make(chan error, 1),
-	}
-
-	select {
-	case <-client.ioStopCh:
-		return client.ioErrorOrStopped()
-	case <-client.ioErrCh:
-		return client.ioErrorOrStopped()
-	case client.writeRequests <- request:
-	}
-
-	select {
-	case err := <-request.done:
-		return err
-	case <-client.ioErrCh:
-		return client.ioErrorOrStopped()
-	case <-client.ioStopCh:
-		return client.ioErrorOrStopped()
-	}
+	client.writeMu.Lock()
+	defer client.writeMu.Unlock()
+	return writeAction(client.conn)
 }
 
 func (client *Client) sendIngestMessage(writeAction func(conn net.Conn) error) error {
@@ -329,9 +282,7 @@ func (client *Client) waitForIngestAck() error {
 	select {
 	case <-client.ingestAckCh:
 		return nil
-	case <-client.ioErrCh:
-		return client.ioErrorOrStopped()
-	case <-client.ioStopCh:
+	case <-client.ctx.Done():
 		return client.ioErrorOrStopped()
 	}
 }
@@ -340,9 +291,7 @@ func (client *Client) waitForAllQueryEOFs() error {
 	select {
 	case <-client.allQueryEOFCh:
 		return nil
-	case <-client.ioErrCh:
-		return client.ioErrorOrStopped()
-	case <-client.ioStopCh:
+	case <-client.ctx.Done():
 		return client.ioErrorOrStopped()
 	}
 }
@@ -371,7 +320,6 @@ func (client *Client) setIOError(err error) {
 	client.ioErrMu.Lock()
 	if client.ioErr == nil {
 		client.ioErr = err
-		close(client.ioErrCh)
 		client.ioErrMu.Unlock()
 		client.stopIO()
 		return
@@ -389,12 +337,10 @@ func (client *Client) ioErrorOrStopped() error {
 }
 
 func (client *Client) stopIO() {
-	client.ioStopOnce.Do(func() {
-		close(client.ioStopCh)
-		if client.conn != nil {
-			_ = client.conn.Close()
-		}
-	})
+	client.cancel()
+	if client.conn != nil {
+		_ = client.conn.Close()
+	}
 }
 
 func (client *Client) handleSignals() {
