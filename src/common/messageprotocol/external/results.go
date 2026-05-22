@@ -14,20 +14,20 @@ const (
 
 type ResultBatchItem struct {
 	QueryID uint8
-	Status  string
+	Data    string // "EOF" o fila CSV con resultados
 }
 
 func ResultBatchItemSize(item ResultBatchItem) (int, error) {
-	if len(item.Status) > 255 {
+	if len(item.Data) > 255 {
 		return 0, serializer.ErrStringTooLong
 	}
-	return 1 + 1 + len(item.Status), nil
+	return 1 + 1 + len(item.Data), nil
 }
 
 func SerializeResultBatchPayload(items []ResultBatchItem) ([]byte, error) {
 	msg := serializer.SerializeUint32(uint32(len(items)))
 	for _, item := range items {
-		statusSerialized, err := serializer.SerializeShortString(item.Status)
+		statusSerialized, err := serializer.SerializeShortString(item.Data)
 		if err != nil {
 			return nil, err
 		}
@@ -70,7 +70,7 @@ func ReadResultBatch(reader io.Reader) ([]ResultBatchItem, error) {
 		}
 		items = append(items, ResultBatchItem{
 			QueryID: serializer.DeserializeUint8(queryIDBuf),
-			Status:  status,
+			Data:    status,
 		})
 	}
 	return items, nil
@@ -96,7 +96,7 @@ func ResultBatchItemBytes(queryID uint8, status string) (int, error) {
 	_ = queryID
 	itemSize, err := ResultBatchItemSize(ResultBatchItem{
 		QueryID: queryID,
-		Status:  status,
+		Data:    status,
 	})
 	if err != nil {
 		return 0, err

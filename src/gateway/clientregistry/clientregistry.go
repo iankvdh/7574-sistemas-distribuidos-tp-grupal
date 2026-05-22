@@ -13,7 +13,7 @@ const (
 
 type ResultDelivery struct {
 	QueryID uint8
-	Status  string
+	Data    string
 	Ack     func()
 	Nack    func()
 }

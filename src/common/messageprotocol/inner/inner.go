@@ -46,9 +46,9 @@ type Envelope struct {
 	ClientID  ClientID  `json:"c"`
 	Kind      MsgKind   `json:"k"`
 	Total     uint32    `json:"t,omitempty"`
-	Payload   []byte    `json:"p,omitempty"`
+	Payload   []byte    `json:"p,omitempty"` // batches de transacciones, cuentas, el token del ring coordinator
 	QueryID   uint8     `json:"q,omitempty"`
-	Status    string    `json:"s,omitempty"`
+	Data      string    `json:"d,omitempty"` // solo lo usa FinalQueryResult, y transporta exactamente una de dos cosas: una fila CSV de resultado
 }
 
 func SerializeEnvelope(kind MsgKind, gatewayID GatewayID, clientID ClientID, total uint32, payload []byte) (*middleware.Message, error) {
@@ -196,7 +196,7 @@ func SerializeFinalQueryResult(gatewayID GatewayID, clientID ClientID, queryID u
 		ClientID:  clientID,
 		Kind:      FinalQueryResult,
 		QueryID:   queryID,
-		Status:    status,
+		Data:      status,
 	})
 	if err != nil {
 		return nil, err
