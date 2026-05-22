@@ -85,7 +85,7 @@ type FinalMessage struct {
 	GatewayID inner.GatewayID
 	ClientID  inner.ClientID
 	QueryID   uint8
-	Status    string
+	Data      string
 }
 
 func DeserializeFinalMessage(message *middleware.Message) (*FinalMessage, error) {
@@ -100,7 +100,7 @@ func DeserializeFinalMessage(message *middleware.Message) (*FinalMessage, error)
 			GatewayID: envelope.GatewayID,
 			ClientID:  envelope.ClientID,
 			QueryID:   envelope.QueryID,
-			Status:    envelope.Status,
+			Data:      envelope.Data,
 		}, nil
 	default:
 		return nil, fmt.Errorf("%w: %d", inner.ErrUnexpectedKind, envelope.Kind)

@@ -11,7 +11,7 @@ const EOFStatus = "EOF"
 
 type QueryOutput struct {
 	QueryID uint8
-	Status  string
+	Data    string
 }
 
 type clientState struct {
@@ -133,7 +133,7 @@ func (processor *Processor) emitReadyQueries(state *clientState) []QueryOutput {
 func emitQueryRows(queryID uint8, rows []string) []QueryOutput {
 	result := make([]QueryOutput, 0, len(rows))
 	for _, row := range rows {
-		result = append(result, QueryOutput{QueryID: queryID, Status: row})
+		result = append(result, QueryOutput{QueryID: queryID, Data: row})
 	}
 	return result
 }
@@ -144,7 +144,7 @@ func emitQuery(state *clientState, queryID uint8, rows []string) []QueryOutput {
 	}
 
 	result := emitQueryRows(queryID, rows)
-	result = append(result, QueryOutput{QueryID: queryID, Status: EOFStatus})
+	result = append(result, QueryOutput{QueryID: queryID, Data: EOFStatus})
 	state.emittedEOF[queryID] = true
 	return result
 }
@@ -153,7 +153,7 @@ func emitQueryEOF(state *clientState, queryID uint8) []QueryOutput {
 	if state.emittedEOF[queryID] {
 		return nil
 	}
-	result := []QueryOutput{{QueryID: queryID, Status: EOFStatus}}
+	result := []QueryOutput{{QueryID: queryID, Data: EOFStatus}}
 	state.emittedEOF[queryID] = true
 	return result
 }

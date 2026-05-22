@@ -9,18 +9,7 @@ import (
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/messageprotocol/external/serializer"
 )
 
-// SerializeAccount returns the binary representation of a single account.
-// Useful for internal queues that carry one element per message.
 func SerializeAccount(acc *account.Account) ([]byte, error) {
-	return serializeAccount(acc)
-}
-
-// DeserializeAccount reconstructs an account from the byte slice produced by SerializeAccount.
-func DeserializeAccount(payload []byte) (*account.Account, error) {
-	return deserializeAccount(bytes.NewReader(payload))
-}
-
-func serializeAccount(acc *account.Account) ([]byte, error) {
 	bankName, err := serializer.SerializeShortString(acc.BankName)
 	if err != nil {
 		return nil, err
@@ -45,6 +34,10 @@ func serializeAccount(acc *account.Account) ([]byte, error) {
 	buf = append(buf, entityID...)
 	buf = append(buf, entityName...)
 	return buf, nil
+}
+
+func DeserializeAccount(payload []byte) (*account.Account, error) {
+	return deserializeAccount(bytes.NewReader(payload))
 }
 
 func deserializeAccount(reader io.Reader) (*account.Account, error) {
@@ -78,8 +71,6 @@ func deserializeAccount(reader io.Reader) (*account.Account, error) {
 	}, nil
 }
 
-// WriteAccountBatch writes [MsgType=AccountBatch][N uint32][acc1]...[accN]
-// in a single Write to keep one TCP segment per batch.
 func WriteAccountBatch(writer io.Writer, accs []account.Account) error {
 	payload, err := SerializeAccountBatchPayload(accs)
 	if err != nil {
@@ -93,7 +84,7 @@ func WriteAccountBatch(writer io.Writer, accs []account.Account) error {
 func SerializeAccountBatchPayload(accs []account.Account) ([]byte, error) {
 	msg := serializer.SerializeUint32(uint32(len(accs)))
 	for i := range accs {
-		serialized, err := serializeAccount(&accs[i])
+		serialized, err := SerializeAccount(&accs[i])
 		if err != nil {
 			return nil, err
 		}
@@ -106,8 +97,6 @@ func DeserializeAccountBatchPayload(payload []byte) ([]account.Account, error) {
 	return ReadAccountBatch(bytes.NewReader(payload))
 }
 
-// ReadAccountBatch reads [N uint32][acc1]...[accN]. The MsgType byte must have
-// been consumed by ReadMsgType before calling this.
 func ReadAccountBatch(reader io.Reader) ([]account.Account, error) {
 	nBuf, err := safeio.ReadAll(reader, serializer.UINT32_SIZE)
 	if err != nil {

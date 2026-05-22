@@ -16,7 +16,7 @@ const (
 
 func (client *Client) consumeResultBatch(items []external.ResultBatchItem) error {
 	for _, item := range items {
-		if err := client.consumeQueryResult(item.QueryID, item.Status); err != nil {
+		if err := client.consumeQueryResult(item.QueryID, item.Data); err != nil {
 			return err
 		}
 	}

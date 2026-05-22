@@ -247,11 +247,11 @@ func (serialAnalyzer *SerialAnalyzer) publishOutputs(gatewayID inner.GatewayID, 
 	}
 
 	for _, output := range outputs {
-		if len(output.Status) > 255 {
+		if len(output.Data) > 255 {
 			return ErrStatusTooLong
 		}
 
-		message, err := inner.SerializeFinalQueryResult(gatewayID, clientID, output.QueryID, output.Status)
+		message, err := inner.SerializeFinalQueryResult(gatewayID, clientID, output.QueryID, output.Data)
 		if err != nil {
 			return err
 		}

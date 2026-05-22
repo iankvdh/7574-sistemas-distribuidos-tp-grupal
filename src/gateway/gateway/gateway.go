@@ -171,7 +171,7 @@ func (gateway *Gateway) forwardFinalMessage(msg middleware.Message, ack func(), 
 
 	enqueued := state.EnqueueResult(clientregistry.ResultDelivery{
 		QueryID: finalMsg.QueryID,
-		Status:  finalMsg.Status,
+		Data:    finalMsg.Data,
 		Ack:     ack,
 		Nack:    nack,
 	})
@@ -281,7 +281,7 @@ func (gateway *Gateway) handleClientResultOutput(state *clientregistry.ClientSta
 	appendDelivery := func(delivery clientregistry.ResultDelivery) error {
 		item := external.ResultBatchItem{
 			QueryID: delivery.QueryID,
-			Status:  delivery.Status,
+			Data:    delivery.Data,
 		}
 		itemBytes, err := external.ResultBatchItemSize(item)
 		if err != nil {
@@ -320,7 +320,7 @@ func (gateway *Gateway) handleClientResultOutput(state *clientregistry.ClientSta
 			return
 		}
 
-		if delivery.Status != "EOF" {
+		if delivery.Data != "EOF" {
 			for currentBatchBytes < gateway.resultBatchMaxBytes {
 				nextDelivery, exists := state.TryDequeueResult()
 				if !exists {
@@ -341,7 +341,7 @@ func (gateway *Gateway) handleClientResultOutput(state *clientregistry.ClientSta
 					return
 				}
 
-				if nextDelivery.Status == "EOF" {
+				if nextDelivery.Data == "EOF" {
 					break
 				}
 			}
@@ -349,7 +349,7 @@ func (gateway *Gateway) handleClientResultOutput(state *clientregistry.ClientSta
 
 		eofCountInBatch := 0
 		for _, d := range pendingDeliveries {
-			if d.Status == "EOF" {
+			if d.Data == "EOF" {
 				eofCountInBatch++
 			}
 		}
