@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -26,7 +27,7 @@ const (
 )
 
 type Gateway struct {
-	registry             clientregistry.ClientRegistry
+	registry             *clientregistry.ClientRegistry
 	allTransactionsQueue middleware.Middleware
 	allAccountsQueue     middleware.Middleware
 	finalQueue           middleware.Middleware
@@ -34,8 +35,9 @@ type Gateway struct {
 	resultBatchMaxBytes  int
 	listener             net.Listener
 	running              atomic.Bool
+	ctx                  context.Context
+	cancel               context.CancelFunc
 	shutdownOnce         sync.Once
-	shutdownCh           chan struct{}
 	waitingGroup         sync.WaitGroup
 }
 
@@ -71,14 +73,17 @@ func NewGateway(config gatewayconfig.GatewayConfig) (*Gateway, error) {
 		return nil, err
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
 	gateway := &Gateway{
+		registry:             clientregistry.NewClientRegistry(),
 		allTransactionsQueue: allTransactionsQueue,
 		allAccountsQueue:     allAccountsQueue,
 		finalQueue:           finalQueue,
 		gatewayID:            gatewayID,
 		resultBatchMaxBytes:  config.ResultBatchMaxBytes,
 		listener:             listener,
-		shutdownCh:           make(chan struct{}),
+		ctx:                  ctx,
+		cancel:               cancel,
 	}
 	gateway.running.Store(true)
 
@@ -108,7 +113,7 @@ func (gateway *Gateway) Run() error {
 		// TODO: implement idempotency/recovery strategy for reconnecting clients.
 		clientID := inner.ClientID(uuid.NewString())
 		handler := messagehandler.NewMessageHandler(gateway.gatewayID, clientID)
-		state := gateway.registry.Add(clientID, conn)
+		state := gateway.registry.Add(gateway.ctx, clientID, conn)
 
 		gateway.waitingGroup.Add(1)
 		go gateway.handleClientSession(state, &handler)
@@ -129,7 +134,7 @@ func (gateway *Gateway) handleSignals() {
 	case sig := <-signals:
 		slog.Info("Signal received, shutting down gateway", "signal", sig.String())
 		gateway.shutdown()
-	case <-gateway.shutdownCh:
+	case <-gateway.ctx.Done():
 	}
 }
 
@@ -351,7 +356,7 @@ func (gateway *Gateway) handleClientResultOutput(state *clientregistry.ClientSta
 				nextDelivery, exists := state.TryDequeueResult()
 				if !exists {
 					select {
-					case <-state.Closed():
+					case <-state.Done():
 						nackPending()
 						return
 					default:
@@ -456,7 +461,7 @@ func (gateway *Gateway) handleEndOfAccounts(state *clientregistry.ClientState, h
 func (gateway *Gateway) shutdown() {
 	gateway.shutdownOnce.Do(func() {
 		gateway.running.Store(false)
-		close(gateway.shutdownCh)
+		gateway.cancel()
 
 		_ = gateway.listener.Close()
 		gateway.registry.CloseAll()

@@ -1,6 +1,7 @@
 package clientregistry
 
 import (
+	"context"
 	"net"
 	"sync"
 
@@ -23,18 +24,21 @@ type ClientState struct {
 
 	writeMu sync.Mutex
 
+	ctx    context.Context
+	cancel context.CancelFunc
+
 	resultQueue chan ResultDelivery
 	resultAckCh chan struct{}
-	closed      chan struct{}
-	closeOnce   sync.Once
 }
 
-func NewClientState(conn net.Conn) *ClientState {
+func NewClientState(parentCtx context.Context, conn net.Conn) *ClientState {
+	ctx, cancel := context.WithCancel(parentCtx)
 	return &ClientState{
 		Conn:        conn,
+		ctx:         ctx,
+		cancel:      cancel,
 		resultQueue: make(chan ResultDelivery, defaultResultQueueSize),
 		resultAckCh: make(chan struct{}, 1),
-		closed:      make(chan struct{}),
 	}
 }
 
@@ -46,7 +50,7 @@ func (state *ClientState) WriteWithLock(action func(conn net.Conn) error) error 
 
 func (state *ClientState) EnqueueResult(delivery ResultDelivery) bool {
 	select {
-	case <-state.closed:
+	case <-state.ctx.Done():
 		return false
 	case state.resultQueue <- delivery:
 		return true
@@ -63,7 +67,7 @@ func (state *ClientState) DequeueResult() (ResultDelivery, bool) {
 	select {
 	case delivery := <-state.resultQueue:
 		return delivery, true
-	case <-state.closed:
+	case <-state.ctx.Done():
 		return ResultDelivery{}, false
 	}
 }
@@ -76,7 +80,7 @@ func (state *ClientState) TryDequeueResult() (ResultDelivery, bool) {
 	}
 
 	select {
-	case <-state.closed:
+	case <-state.ctx.Done():
 		return ResultDelivery{}, false
 	default:
 		return ResultDelivery{}, false
@@ -85,7 +89,7 @@ func (state *ClientState) TryDequeueResult() (ResultDelivery, bool) {
 
 func (state *ClientState) NotifyResultBatchAck() bool {
 	select {
-	case <-state.closed:
+	case <-state.ctx.Done():
 		return false
 	default:
 	}
@@ -101,22 +105,20 @@ func (state *ClientState) NotifyResultBatchAck() bool {
 
 func (state *ClientState) WaitForResultBatchAck() bool {
 	select {
-	case <-state.closed:
+	case <-state.ctx.Done():
 		return false
 	case <-state.resultAckCh:
 		return true
 	}
 }
 
-func (state *ClientState) Closed() <-chan struct{} {
-	return state.closed
+func (state *ClientState) Done() <-chan struct{} {
+	return state.ctx.Done()
 }
 
 func (state *ClientState) Close() {
-	state.closeOnce.Do(func() {
-		close(state.closed)
-		_ = state.Conn.Close()
-	})
+	state.cancel()
+	_ = state.Conn.Close()
 }
 
 type ClientRegistry struct {
@@ -124,14 +126,17 @@ type ClientRegistry struct {
 	clients map[inner.ClientID]*ClientState
 }
 
-func (registry *ClientRegistry) Add(clientID inner.ClientID, conn net.Conn) *ClientState {
+func NewClientRegistry() *ClientRegistry {
+	return &ClientRegistry{
+		clients: make(map[inner.ClientID]*ClientState),
+	}
+}
+
+func (registry *ClientRegistry) Add(parentCtx context.Context, clientID inner.ClientID, conn net.Conn) *ClientState {
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
 
-	if registry.clients == nil {
-		registry.clients = make(map[inner.ClientID]*ClientState)
-	}
-	state := NewClientState(conn)
+	state := NewClientState(parentCtx, conn)
 	registry.clients[clientID] = state
 	return state
 }
