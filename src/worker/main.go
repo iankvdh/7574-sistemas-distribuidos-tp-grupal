@@ -15,23 +15,24 @@ import (
 )
 
 func run() int {
-	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	slog.SetDefault(logger)
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, nil)))
 
 	cfg, err := config.Load()
 	if err != nil {
-		logger.Error("While loading worker config", "err", err)
+		slog.Error("While loading worker config", "err", err)
 		return 1
 	}
 
-	w, err := runtime.New(cfg, logger.With("strategy", cfg.StrategyName, "replica_id", cfg.ReplicaID))
+	slog.SetDefault(slog.Default().With("strategy", cfg.StrategyName, "replica_id", cfg.ReplicaID))
+
+	w, err := runtime.New(cfg)
 	if err != nil {
-		logger.Error("While initializing worker", "err", err)
+		slog.Error("While initializing worker", "err", err)
 		return 1
 	}
 
 	if err := w.Run(); err != nil {
-		logger.Error("Worker stopped with error", "err", err)
+		slog.Error("Worker stopped with error", "err", err)
 		return 1
 	}
 	return 0

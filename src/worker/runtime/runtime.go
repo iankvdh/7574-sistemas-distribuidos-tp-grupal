@@ -31,7 +31,6 @@ type Worker struct {
 	ringOut       middleware.Middleware
 	outputs       []topology.OutputSink
 	outputBuffers []*outputBuffer
-	logger        *slog.Logger
 	ctx           context.Context
 	cancel        context.CancelFunc
 	wg            sync.WaitGroup
@@ -53,7 +52,7 @@ type pendingBatch struct {
 	bytes     int
 }
 
-func New(cfg config.WorkerConfig, logger *slog.Logger) (*Worker, error) {
+func New(cfg config.WorkerConfig) (*Worker, error) {
 	strat, err := strategy.Build(cfg.StrategyName)
 	if err != nil {
 		return nil, err
@@ -107,7 +106,6 @@ func New(cfg config.WorkerConfig, logger *slog.Logger) (*Worker, error) {
 	}
 
 	ctx := strategy.Context{
-		Logger:       logger,
 		OutputCount:  len(outputs),
 		ReplicaID:    cfg.ReplicaID,
 		NReplicas:    cfg.NReplicas,
@@ -142,7 +140,6 @@ func New(cfg config.WorkerConfig, logger *slog.Logger) (*Worker, error) {
 		ringOut:       ringOut,
 		outputs:       outputs,
 		outputBuffers: buffers,
-		logger:        logger,
 		ctx:           runCtx,
 		cancel:        cancel,
 		upstreamEOFs:  map[inner.ClientID]middleware.Message{},
@@ -160,7 +157,7 @@ func (w *Worker) Run() error {
 	w.wg.Add(1)
 	go w.handleSignals()
 
-	w.logger.Info(
+	slog.Info(
 		"Worker started",
 		"strategy", w.cfg.StrategyName,
 		"replica_id", w.cfg.ReplicaID,
@@ -178,7 +175,7 @@ func (w *Worker) Run() error {
 
 	err := w.input.StartConsuming(w.handleInputMessage)
 	if err != nil && w.ctx.Err() == nil {
-		w.logger.Error("Input consumer stopped unexpectedly", "err", err)
+		slog.Error("Input consumer stopped unexpectedly", "err", err)
 	}
 	return nil
 }
@@ -187,14 +184,14 @@ func (w *Worker) consumeRing() {
 	defer w.wg.Done()
 	err := w.ringIn.StartConsuming(w.handleRingMessage)
 	if err != nil && w.ctx.Err() == nil {
-		w.logger.Error("Ring consumer stopped unexpectedly", "err", err)
+		slog.Error("Ring consumer stopped unexpectedly", "err", err)
 	}
 }
 
 func (w *Worker) handleInputMessage(msg middleware.Message, ack func(), nack func()) {
 	envelope, err := inner.DeserializeEnvelope(&msg)
 	if err != nil {
-		w.logger.Error("Malformed envelope in input queue", "err", err)
+		slog.Error("Malformed envelope in input queue", "err", err)
 		ack()
 		return
 	}
@@ -205,13 +202,13 @@ func (w *Worker) handleInputMessage(msg middleware.Message, ack func(), nack fun
 		outcome, err := w.strategy.OnUpstreamEOF(envelope)
 		if err != nil {
 			w.strategyMu.Unlock()
-			w.logger.Error("Strategy OnUpstreamEOF failed", "client_id", envelope.ClientID, "err", err)
+			slog.Error("Strategy OnUpstreamEOF failed", "client_id", envelope.ClientID, "err", err)
 			nack()
 			return
 		}
 		if err := w.applyOutcome(envelope, outcome); err != nil {
 			w.strategyMu.Unlock()
-			w.logger.Error("Applying EOF outcome failed", "client_id", envelope.ClientID, "err", err)
+			slog.Error("Applying EOF outcome failed", "client_id", envelope.ClientID, "err", err)
 			nack()
 			return
 		}
@@ -225,7 +222,7 @@ func (w *Worker) handleInputMessage(msg middleware.Message, ack func(), nack fun
 		itemKind, items, err := inner.DeserializeInnerBatch(envelope)
 		if err != nil {
 			w.strategyMu.Unlock()
-			w.logger.Error("Malformed InnerBatch envelope", "err", err)
+			slog.Error("Malformed InnerBatch envelope", "err", err)
 			ack()
 			return
 		}
@@ -238,7 +235,7 @@ func (w *Worker) handleInputMessage(msg middleware.Message, ack func(), nack fun
 			}
 			if err := w.processSingleItem(item); err != nil {
 				w.strategyMu.Unlock()
-				w.logger.Error("Strategy ProcessMessage failed", "client_id", envelope.ClientID, "err", err)
+				slog.Error("Strategy ProcessMessage failed", "client_id", envelope.ClientID, "err", err)
 				nack()
 				return
 			}
@@ -246,7 +243,7 @@ func (w *Worker) handleInputMessage(msg middleware.Message, ack func(), nack fun
 	} else {
 		if err := w.processSingleItem(envelope); err != nil {
 			w.strategyMu.Unlock()
-			w.logger.Error("Strategy ProcessMessage failed", "client_id", envelope.ClientID, "err", err)
+			slog.Error("Strategy ProcessMessage failed", "client_id", envelope.ClientID, "err", err)
 			nack()
 			return
 		}
@@ -266,19 +263,19 @@ func (w *Worker) processSingleItem(env *inner.Envelope) error {
 func (w *Worker) handleRingMessage(msg middleware.Message, ack func(), nack func()) {
 	envelope, err := inner.DeserializeEnvelope(&msg)
 	if err != nil {
-		w.logger.Error("Malformed envelope in ring queue", "err", err)
+		slog.Error("Malformed envelope in ring queue", "err", err)
 		ack()
 		return
 	}
 	if envelope.Kind != inner.RingTokenMessage {
-		w.logger.Warn("Unexpected kind on ring queue", "kind", envelope.Kind)
+		slog.Warn("Unexpected kind on ring queue", "kind", envelope.Kind)
 		ack()
 		return
 	}
 
 	token, err := eof.UnmarshalToken(envelope.Payload)
 	if err != nil {
-		w.logger.Error("Malformed ring token", "err", err)
+		slog.Error("Malformed ring token", "err", err)
 		ack()
 		return
 	}
@@ -287,7 +284,7 @@ func (w *Worker) handleRingMessage(msg middleware.Message, ack func(), nack func
 	outcome, err := w.strategy.OnRingToken(token)
 	if err != nil {
 		w.strategyMu.Unlock()
-		w.logger.Error("Strategy OnRingToken failed", "client_id", token.ClientID, "err", err)
+		slog.Error("Strategy OnRingToken failed", "client_id", token.ClientID, "err", err)
 		nack()
 		return
 	}
@@ -295,7 +292,7 @@ func (w *Worker) handleRingMessage(msg middleware.Message, ack func(), nack func
 	pseudoEnv := &inner.Envelope{GatewayID: envelope.GatewayID, ClientID: token.ClientID}
 	if err := w.applyOutcome(pseudoEnv, outcome); err != nil {
 		w.strategyMu.Unlock()
-		w.logger.Error("Applying ring outcome failed", "client_id", token.ClientID, "err", err)
+		slog.Error("Applying ring outcome failed", "client_id", token.ClientID, "err", err)
 		nack()
 		return
 	}
@@ -414,7 +411,7 @@ func (w *Worker) flushAll() {
 		for shard := range buf.perShard {
 			for clientID := range buf.perShard[shard] {
 				if err := w.flushShard(idx, shard, clientID); err != nil {
-					w.logger.Error("Flush on shutdown failed", "client_id", clientID, "output", idx, "shard", shard, "err", err)
+					slog.Error("Flush on shutdown failed", "client_id", clientID, "output", idx, "shard", shard, "err", err)
 				}
 			}
 		}
@@ -484,7 +481,7 @@ func (w *Worker) handleSignals() {
 
 	select {
 	case sig := <-signals:
-		w.logger.Info("Signal received, shutting down worker", "signal", sig.String())
+		slog.Info("Signal received, shutting down worker", "signal", sig.String())
 		w.cancel()
 	case <-w.ctx.Done():
 	}

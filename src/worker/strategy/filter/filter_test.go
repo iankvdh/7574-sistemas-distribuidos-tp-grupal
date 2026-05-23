@@ -1,7 +1,6 @@
 package filter
 
 import (
-	"log/slog"
 	"testing"
 
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/dates"
@@ -13,7 +12,6 @@ import (
 
 func makeContext(matchOutputs, nomatchOutputs int) strategy.Context {
 	return strategy.Context{
-		Logger:      slog.Default(),
 		OutputCount: matchOutputs + nomatchOutputs,
 		MatchCount:  matchOutputs,
 		NReplicas:   1,
