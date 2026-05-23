@@ -30,6 +30,7 @@ services:
       - BACKOFF_BASE_MS=200
       - BACKOFF_MAX_MS=3000
       - RESULTS_DIR=/results
+      - LOG_LEVEL=info
     volumes:
       - ./datasets:/datasets
       - ./results/client_0:/results
@@ -45,6 +46,7 @@ services:
       - GATEWAY_ID=1
       - SERVER_HOST=0.0.0.0
       - SERVER_PORT=5678
+      - LOG_LEVEL=info
   filter_period1:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
     depends_on: { rabbitmq: { condition: service_healthy } }
@@ -58,6 +60,7 @@ services:
       - OUTPUTS_MATCH_COUNT=1
       - OUTPUT_0=direct_exchange:period1_transactions
       - OUTPUT_1=queue:non_period1_transactions
+      - LOG_LEVEL=info
   filter_wire_ach:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
     depends_on: { rabbitmq: { condition: service_healthy } }
@@ -70,6 +73,7 @@ services:
       - INPUT=direct_exchange:period1_transactions
       - OUTPUTS_MATCH_COUNT=1
       - OUTPUT_0=queue:period1_wire_ach
+      - LOG_LEVEL=info
   filter_currency_usd_p1:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
     depends_on: { rabbitmq: { condition: service_healthy } }
@@ -83,6 +87,7 @@ services:
       - OUTPUTS_MATCH_COUNT=2
       - OUTPUT_0=direct_exchange:period1_usd_direct_exchange
       - OUTPUT_1=sharded_queues:joiner_usd_input:1
+      - LOG_LEVEL=info
   filter_period2:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
     depends_on: { rabbitmq: { condition: service_healthy } }
@@ -96,6 +101,7 @@ services:
       - OUTPUTS_MATCH_COUNT=1
       - OUTPUT_0=queue:period2_transactions
       - OUTPUT_1=queue:other_dates_transactions
+      - LOG_LEVEL=info
   filter_currency_usd_p2:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
     depends_on: { rabbitmq: { condition: service_healthy } }
@@ -109,6 +115,7 @@ services:
       - OUTPUTS_MATCH_COUNT=2
       - OUTPUT_0=direct_exchange:period2_usd_direct_exchange
       - OUTPUT_1=sharded_queues:joiner_usd_input:1
+      - LOG_LEVEL=info
   filter_currency_usd_other_periods:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
     depends_on: { rabbitmq: { condition: service_healthy } }
@@ -121,6 +128,7 @@ services:
       - INPUT=queue:other_dates_transactions
       - OUTPUTS_MATCH_COUNT=1
       - OUTPUT_0=sharded_queues:joiner_usd_input:1
+      - LOG_LEVEL=info
   joiner_usd:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
     depends_on: { rabbitmq: { condition: service_healthy } }
@@ -133,6 +141,7 @@ services:
       - INPUT=queue:joiner_usd_input_0
       - OUTPUTS_MATCH_COUNT=0
       - OUTPUT_0=direct_exchange:usd
+      - LOG_LEVEL=info
       - EXPECTED_EOFS=3
   filter_amount_lt_50:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
@@ -146,6 +155,7 @@ services:
       - INPUT=direct_exchange:usd
       - OUTPUTS_MATCH_COUNT=1
       - OUTPUT_0=queue:q1_input
+      - LOG_LEVEL=info
   drain_q1_input:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
     depends_on: { rabbitmq: { condition: service_healthy } }
@@ -157,6 +167,7 @@ services:
       - N_REPLICAS=1
       - INPUT=queue:q1_input
       - OUTPUTS_MATCH_COUNT=0
+      - LOG_LEVEL=info
       - DRAIN_OUTPUT_FILE=/results/drain_q1_input.csv
     volumes:
       - ./results:/results
@@ -171,6 +182,7 @@ services:
       - N_REPLICAS=1
       - INPUT=queue:period1_wire_ach
       - OUTPUTS_MATCH_COUNT=0
+      - LOG_LEVEL=info
       - DRAIN_OUTPUT_FILE=/results/drain_period1_wire_ach.csv
     volumes:
       - ./results:/results
@@ -185,6 +197,7 @@ services:
       - N_REPLICAS=1
       - INPUT=direct_exchange:period1_usd_direct_exchange
       - OUTPUTS_MATCH_COUNT=0
+      - LOG_LEVEL=info
       - DRAIN_OUTPUT_FILE=/results/drain_period1_usd.csv
     volumes:
       - ./results:/results
@@ -199,6 +212,7 @@ services:
       - N_REPLICAS=1
       - INPUT=direct_exchange:period2_usd_direct_exchange
       - OUTPUTS_MATCH_COUNT=0
+      - LOG_LEVEL=info
       - DRAIN_OUTPUT_FILE=/results/drain_period2_usd.csv
     volumes:
       - ./results:/results
@@ -213,6 +227,7 @@ services:
       - N_REPLICAS=1
       - INPUT=direct_exchange:usd
       - OUTPUTS_MATCH_COUNT=0
+      - LOG_LEVEL=info
       - DRAIN_OUTPUT_FILE=/results/drain_usd_joined.csv
     volumes:
       - ./results:/results

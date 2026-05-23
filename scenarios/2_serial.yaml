@@ -23,6 +23,7 @@ services:
       - BACKOFF_BASE_MS=200
       - BACKOFF_MAX_MS=3000
       - RESULTS_DIR=/results
+      - LOG_LEVEL=info
     volumes:
       - ./datasets:/datasets
       - ./results/client_0:/results
@@ -51,6 +52,7 @@ services:
       - BACKOFF_BASE_MS=200
       - BACKOFF_MAX_MS=3000
       - RESULTS_DIR=/results
+      - LOG_LEVEL=info
     volumes:
       - ./datasets:/datasets
       - ./results/client_1:/results
@@ -71,6 +73,7 @@ services:
       - GATEWAY_ID=1
       - SERVER_HOST=0.0.0.0
       - SERVER_PORT=5678
+      - LOG_LEVEL=info
 
   gateway_2:
     build:
@@ -88,6 +91,7 @@ services:
       - GATEWAY_ID=2
       - SERVER_HOST=0.0.0.0
       - SERVER_PORT=5678
+      - LOG_LEVEL=info
 
   serial-analyzer:
     build:
@@ -102,6 +106,7 @@ services:
       - ALL_TRANSACTIONS_QUEUE=all_transactions
       - ALL_ACCOUNTS_QUEUE=all_accounts
       - FINAL_QUEUE=final
+      - LOG_LEVEL=info
 
   rabbitmq:
     build:

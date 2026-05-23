@@ -3,6 +3,7 @@
 
 clients: 1
 gateways: 1
+log_level: info
 transactions: /datasets/LI-Small_Trans.csv
 accounts: /datasets/LI-Small_accounts.csv
 
