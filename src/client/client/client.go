@@ -19,17 +19,17 @@ import (
 )
 
 type ClientConfig struct {
-	GatewayPrefix      string
-	GatewayAmount      int
-	GatewayPort        string
-	InputTransactions  string
-	InputAccounts      string
-	ResultsDir         string
-	BatchMaxBytes      int
-	ConnectMaxAttempts int
-	BackoffBase        time.Duration
-	BackoffMax         time.Duration
-	ConnectTimeout     time.Duration
+	GatewayPrefix         string
+	GatewayAmount         int
+	GatewayPort           string
+	InputTransactions     string
+	InputAccounts         string
+	ResultsDir            string
+	MaxExternalBatchBytes int
+	ConnectMaxAttempts    int
+	BackoffBase           time.Duration
+	BackoffMax            time.Duration
+	ConnectTimeout        time.Duration
 }
 
 type Client struct {

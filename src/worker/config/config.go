@@ -8,21 +8,21 @@ import (
 )
 
 const (
-	defaultMomPort       = 5672
-	defaultBatchMaxBytes = 64 * 1024
+	defaultMomPort               = 5672
+	defaultMaxInternalBatchBytes = 65536
 )
 
 type WorkerConfig struct {
-	StrategyName      string
-	ReplicaID         int
-	NReplicas         int
-	Input             string // raw INPUT env var: queue:NAME or direct_exchange:NAME[:KEY]
-	OutputsMatchCount int
-	RingQueueIn       string // optional: queue this replica consumes ring tokens from
-	RingQueueOut      string // optional: queue this replica publishes ring tokens to (next replica)
-	MomHost           string
-	MomPort           int
-	BatchMaxBytes     int
+	StrategyName          string
+	ReplicaID             int
+	NReplicas             int
+	Input                 string // raw INPUT env var: queue:NAME or direct_exchange:NAME[:KEY]
+	OutputsMatchCount     int
+	RingQueueIn           string // optional: queue this replica consumes ring tokens from
+	RingQueueOut          string // optional: queue this replica publishes ring tokens to (next replica)
+	MomHost               string
+	MomPort               int
+	MaxInternalBatchBytes int
 }
 
 func Load() (WorkerConfig, error) {
@@ -67,7 +67,7 @@ func Load() (WorkerConfig, error) {
 		return WorkerConfig{}, errors.New("OUTPUTS_MATCH_COUNT must be non-negative")
 	}
 
-	batchMaxBytes, err := env.IntWithDefault("BATCH_MAX_BYTES", defaultBatchMaxBytes, true)
+	maxInternalBatchBytes, err := env.IntWithDefault("MAX_INTERNAL_BATCH_BYTES", defaultMaxInternalBatchBytes, true)
 	if err != nil {
 		return WorkerConfig{}, err
 	}
@@ -83,15 +83,15 @@ func Load() (WorkerConfig, error) {
 	}
 
 	return WorkerConfig{
-		StrategyName:      strategyName,
-		ReplicaID:         replicaID,
-		NReplicas:         nReplicas,
-		Input:             input,
-		OutputsMatchCount: outputsMatchCount,
-		RingQueueIn:       ringQueueIn,
-		RingQueueOut:      ringQueueOut,
-		MomHost:           momHost,
-		MomPort:           momPort,
-		BatchMaxBytes:     batchMaxBytes,
+		StrategyName:          strategyName,
+		ReplicaID:             replicaID,
+		NReplicas:             nReplicas,
+		Input:                 input,
+		OutputsMatchCount:     outputsMatchCount,
+		RingQueueIn:           ringQueueIn,
+		RingQueueOut:          ringQueueOut,
+		MomHost:               momHost,
+		MomPort:               momPort,
+		MaxInternalBatchBytes: maxInternalBatchBytes,
 	}, nil
 }

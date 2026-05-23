@@ -42,10 +42,11 @@ services:
       drain_period1_usd: { condition: service_started }
       drain_period2_usd: { condition: service_started }
       drain_usd_joined: { condition: service_started }
+    env_file:
+      - .env
     environment:
       - INPUT_TRANSACTIONS=/datasets/LI-Small_Trans.csv
       - INPUT_ACCOUNTS=/datasets/LI-Small_accounts.csv
-      - BATCH_MAX_BYTES=8192
       - GATEWAY_PREFIX=gateway_
       - GATEWAY_AMOUNT=2
       - GATEWAY_PORT=5678
@@ -100,10 +101,11 @@ services:
       drain_period1_usd: { condition: service_started }
       drain_period2_usd: { condition: service_started }
       drain_usd_joined: { condition: service_started }
+    env_file:
+      - .env
     environment:
       - INPUT_TRANSACTIONS=/datasets/LI-Small_Trans.csv
       - INPUT_ACCOUNTS=/datasets/LI-Small_accounts.csv
-      - BATCH_MAX_BYTES=8192
       - GATEWAY_PREFIX=gateway_
       - GATEWAY_AMOUNT=2
       - GATEWAY_PORT=5678
@@ -125,7 +127,6 @@ services:
       - ALL_ACCOUNTS_QUEUE=all_accounts
       - FINAL_QUEUE=final
       - GATEWAY_ID=1
-      - RESULT_BATCH_MAX_BYTES=8192
       - SERVER_HOST=0.0.0.0
       - SERVER_PORT=5678
   gateway_2:
@@ -138,7 +139,6 @@ services:
       - ALL_ACCOUNTS_QUEUE=all_accounts
       - FINAL_QUEUE=final
       - GATEWAY_ID=2
-      - RESULT_BATCH_MAX_BYTES=8192
       - SERVER_HOST=0.0.0.0
       - SERVER_PORT=5678
   filter_period1_0:

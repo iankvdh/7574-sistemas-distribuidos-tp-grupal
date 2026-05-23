@@ -8,12 +8,12 @@ import (
 )
 
 const (
-	defaultConnectMaxAttempts = 6
-	defaultBackoffBaseMs      = 200
-	defaultBackoffMaxMs       = 3000
-	defaultConnectTimeoutMs   = 800
-	defaultBatchMaxBytes      = 8192
-	defaultResultsDir         = "results"
+	defaultConnectMaxAttempts    = 6
+	defaultBackoffBaseMs         = 200
+	defaultBackoffMaxMs          = 3000
+	defaultConnectTimeoutMs      = 800
+	defaultMaxExternalBatchBytes = 8192
+	defaultResultsDir            = "results"
 )
 
 func Load() (client.ClientConfig, error) {
@@ -42,7 +42,7 @@ func Load() (client.ClientConfig, error) {
 		return client.ClientConfig{}, err
 	}
 
-	batchMaxBytes, err := env.IntWithDefault("BATCH_MAX_BYTES", defaultBatchMaxBytes, true)
+	maxExternalBatchBytes, err := env.IntWithDefault("MAX_EXTERNAL_BATCH_BYTES", defaultMaxExternalBatchBytes, true)
 	if err != nil {
 		return client.ClientConfig{}, err
 	}
@@ -70,9 +70,9 @@ func Load() (client.ClientConfig, error) {
 		GatewayPort:        gatewayPort,
 		InputTransactions:  inputTransactions,
 		InputAccounts:      inputAccounts,
-		ResultsDir:         env.StringWithDefault("RESULTS_DIR", defaultResultsDir),
-		BatchMaxBytes:      batchMaxBytes,
-		ConnectMaxAttempts: connectMaxAttempts,
+		ResultsDir:            env.StringWithDefault("RESULTS_DIR", defaultResultsDir),
+		MaxExternalBatchBytes: maxExternalBatchBytes,
+		ConnectMaxAttempts:    connectMaxAttempts,
 		BackoffBase:        time.Duration(backoffBaseMs) * time.Millisecond,
 		BackoffMax:         time.Duration(backoffMaxMs) * time.Millisecond,
 		ConnectTimeout:     time.Duration(connectTimeoutMs) * time.Millisecond,

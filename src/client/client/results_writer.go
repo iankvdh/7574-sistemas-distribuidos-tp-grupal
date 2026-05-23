@@ -12,7 +12,7 @@ const outputDirPermissions = 0o755
 const outputFilePermissions = 0o644
 const outputFileFlags = os.O_CREATE | os.O_TRUNC | os.O_WRONLY
 
-const writerBufferSize = 16 * 1024
+const writerBufferSize = 16384
 
 var queryHeaders = map[uint8]string{
 	1: "From Bank,Account,To Bank,Account.1,Amount Paid",

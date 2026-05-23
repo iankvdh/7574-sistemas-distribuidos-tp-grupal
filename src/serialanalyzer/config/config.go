@@ -8,20 +8,20 @@ import (
 )
 
 const (
-	defaultAllTransactionsQueue = "all_transactions"
-	defaultAllAccountsQueue     = "all_accounts"
-	defaultFinalQueue           = "final"
-	defaultMomPort              = 5672
-	defaultBatchMaxBytes        = 8192
+	defaultAllTransactionsQueue  = "all_transactions"
+	defaultAllAccountsQueue      = "all_accounts"
+	defaultFinalQueue            = "final"
+	defaultMomPort               = 5672
+	defaultMaxInternalBatchBytes = 65536
 )
 
 type SerialAnalyzerConfig struct {
-	AllTransactionsQueue string
-	AllAccountsQueue     string
-	FinalQueue           string
-	MomHost              string
-	MomPort              int
-	BatchMaxBytes        int
+	AllTransactionsQueue  string
+	AllAccountsQueue      string
+	FinalQueue            string
+	MomHost               string
+	MomPort               int
+	MaxInternalBatchBytes int
 }
 
 func Load() (SerialAnalyzerConfig, error) {
@@ -39,22 +39,22 @@ func Load() (SerialAnalyzerConfig, error) {
 		momPort = parsed
 	}
 
-	batchMaxBytes := defaultBatchMaxBytes
-	if raw := os.Getenv("BATCH_MAX_BYTES"); raw != "" {
+	maxInternalBatchBytes := defaultMaxInternalBatchBytes
+	if raw := os.Getenv("MAX_INTERNAL_BATCH_BYTES"); raw != "" {
 		parsed, err := strconv.Atoi(raw)
 		if err != nil || parsed <= 0 {
-			return SerialAnalyzerConfig{}, fmt.Errorf("invalid BATCH_MAX_BYTES: %q", raw)
+			return SerialAnalyzerConfig{}, fmt.Errorf("invalid MAX_INTERNAL_BATCH_BYTES: %q", raw)
 		}
-		batchMaxBytes = parsed
+		maxInternalBatchBytes = parsed
 	}
 
 	return SerialAnalyzerConfig{
-		AllTransactionsQueue: envOrDefault("ALL_TRANSACTIONS_QUEUE", defaultAllTransactionsQueue),
-		AllAccountsQueue:     envOrDefault("ALL_ACCOUNTS_QUEUE", defaultAllAccountsQueue),
-		FinalQueue:           envOrDefault("FINAL_QUEUE", defaultFinalQueue),
-		MomHost:              momHost,
-		MomPort:              momPort,
-		BatchMaxBytes:        batchMaxBytes,
+		AllTransactionsQueue:  envOrDefault("ALL_TRANSACTIONS_QUEUE", defaultAllTransactionsQueue),
+		AllAccountsQueue:      envOrDefault("ALL_ACCOUNTS_QUEUE", defaultAllAccountsQueue),
+		FinalQueue:            envOrDefault("FINAL_QUEUE", defaultFinalQueue),
+		MomHost:               momHost,
+		MomPort:               momPort,
+		MaxInternalBatchBytes: maxInternalBatchBytes,
 	}, nil
 }
 
