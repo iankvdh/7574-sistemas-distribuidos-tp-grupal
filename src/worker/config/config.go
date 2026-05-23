@@ -8,7 +8,10 @@ import (
 	"strings"
 )
 
-const defaultMomPort = 5672
+const (
+	defaultMomPort       = 5672
+	defaultBatchMaxBytes = 64 * 1024
+)
 
 type WorkerConfig struct {
 	StrategyName      string
@@ -20,6 +23,7 @@ type WorkerConfig struct {
 	RingQueueOut      string // optional: queue this replica publishes ring tokens to (next replica)
 	MomHost           string
 	MomPort           int
+	BatchMaxBytes     int
 }
 
 func Load() (WorkerConfig, error) {
@@ -28,12 +32,12 @@ func Load() (WorkerConfig, error) {
 		return WorkerConfig{}, errors.New("STRATEGY environment variable is required")
 	}
 
-	replicaID, err := parseInt("REPLICA_ID", 0, false)
+	replicaID, err := getIntFromEnv("REPLICA_ID", 0, false)
 	if err != nil {
 		return WorkerConfig{}, err
 	}
 
-	nReplicas, err := parseInt("N_REPLICAS", 1, true)
+	nReplicas, err := getIntFromEnv("N_REPLICAS", 1, true)
 	if err != nil {
 		return WorkerConfig{}, err
 	}
@@ -60,12 +64,17 @@ func Load() (WorkerConfig, error) {
 		momPort = parsed
 	}
 
-	outputsMatchCount, err := parseInt("OUTPUTS_MATCH_COUNT", 0, false)
+	outputsMatchCount, err := getIntFromEnv("OUTPUTS_MATCH_COUNT", 0, false)
 	if err != nil {
 		return WorkerConfig{}, err
 	}
 	if outputsMatchCount < 0 {
 		return WorkerConfig{}, errors.New("OUTPUTS_MATCH_COUNT must be non-negative")
+	}
+
+	batchMaxBytes, err := getIntFromEnv("BATCH_MAX_BYTES", defaultBatchMaxBytes, true)
+	if err != nil {
+		return WorkerConfig{}, err
 	}
 
 	ringQueueIn := strings.TrimSpace(os.Getenv("RING_QUEUE_IN"))
@@ -88,10 +97,11 @@ func Load() (WorkerConfig, error) {
 		RingQueueOut:      ringQueueOut,
 		MomHost:           momHost,
 		MomPort:           momPort,
+		BatchMaxBytes:     batchMaxBytes,
 	}, nil
 }
 
-func parseInt(name string, defaultValue int, mustBePositive bool) (int, error) {
+func getIntFromEnv(name string, defaultValue int, mustBePositive bool) (int, error) {
 	raw := os.Getenv(name)
 	if raw == "" {
 		return defaultValue, nil
@@ -105,4 +115,3 @@ func parseInt(name string, defaultValue int, mustBePositive bool) (int, error) {
 	}
 	return parsed, nil
 }
-

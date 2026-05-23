@@ -291,6 +291,7 @@ func writeWorker(w io.Writer, ws workerSpec, replica int) {
 	input := strings.ReplaceAll(ws.Input, "{REPLICA_ID}", strconv.Itoa(replica))
 	fmt.Fprintf(w, "      - INPUT=%s\n", input)
 	fmt.Fprintf(w, "      - OUTPUTS_MATCH_COUNT=%d\n", ws.MatchCount)
+	fmt.Fprintln(w, "      - BATCH_MAX_BYTES=65536")
 	for j, o := range ws.Outputs {
 		fmt.Fprintf(w, "      - OUTPUT_%d=%s\n", j, o)
 	}

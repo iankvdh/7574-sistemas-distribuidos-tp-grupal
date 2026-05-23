@@ -18,11 +18,6 @@ import (
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/topology"
 )
 
-const (
-	batchMaxItems = 512
-	batchMaxBytes = 64 * 1024
-)
-
 type Worker struct {
 	cfg           config.WorkerConfig
 	strategy      strategy.Strategy
@@ -31,6 +26,7 @@ type Worker struct {
 	ringOut       middleware.Middleware
 	outputs       []topology.OutputSink
 	outputBuffers []*outputBuffer
+	batchMaxBytes int
 	ctx           context.Context
 	cancel        context.CancelFunc
 	wg            sync.WaitGroup
@@ -140,6 +136,7 @@ func New(cfg config.WorkerConfig) (*Worker, error) {
 		ringOut:       ringOut,
 		outputs:       outputs,
 		outputBuffers: buffers,
+		batchMaxBytes: cfg.BatchMaxBytes,
 		ctx:           runCtx,
 		cancel:        cancel,
 		upstreamEOFs:  map[inner.ClientID]middleware.Message{},
@@ -366,7 +363,7 @@ func (w *Worker) appendToShard(idx int, clientID inner.ClientID, gatewayID inner
 	}
 	pending.items = append(pending.items, payload)
 	pending.bytes += len(payload)
-	if len(pending.items) >= batchMaxItems || pending.bytes >= batchMaxBytes {
+	if pending.bytes >= w.batchMaxBytes {
 		return w.flushShard(idx, shard, clientID)
 	}
 	return nil
