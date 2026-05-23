@@ -25,10 +25,8 @@ type Strategy struct {
 	count map[inner.ClientID]uint64
 }
 
-func init() {
-	strategy.Register(name, func() (strategy.Strategy, error) {
-		return &Strategy{count: map[inner.ClientID]uint64{}}, nil
-	})
+func New() *Strategy {
+	return &Strategy{count: map[inner.ClientID]uint64{}}
 }
 
 func (s *Strategy) Name() string { return name }

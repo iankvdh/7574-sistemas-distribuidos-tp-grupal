@@ -15,6 +15,7 @@ import (
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/middleware"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/config"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy"
+	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/builder"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/topology"
 )
 
@@ -49,7 +50,7 @@ type pendingBatch struct {
 }
 
 func New(cfg config.WorkerConfig) (*Worker, error) {
-	strat, err := strategy.Build(cfg.StrategyName)
+	strat, err := builder.Build(cfg.StrategyName)
 	if err != nil {
 		return nil, err
 	}

@@ -6,24 +6,11 @@ import (
 	"strconv"
 
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/transaction"
-	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy"
 )
 
 const defaultAmountThreshold = 50.0
 
-func init() {
-	strategy.Register("filter_amount_lt_50", func() (strategy.Strategy, error) {
-		threshold, err := parseAmountThreshold()
-		if err != nil {
-			return nil, err
-		}
-		return New("filter_amount_lt_50", func(tx transaction.Transaction) bool {
-			return tx.AmountPaid < threshold
-		}), nil
-	})
-}
-
-func parseAmountThreshold() (float64, error) {
+func ParseAmountThreshold() (float64, error) {
 	raw := os.Getenv("AMOUNT_THRESHOLD_USD")
 	if raw == "" {
 		return defaultAmountThreshold, nil
@@ -33,4 +20,10 @@ func parseAmountThreshold() (float64, error) {
 		return 0, fmt.Errorf("invalid AMOUNT_THRESHOLD_USD=%q — expected a positive number", raw)
 	}
 	return v, nil
+}
+
+func AmountLessThan(threshold float64) Predicate {
+	return func(tx transaction.Transaction) bool {
+		return tx.AmountPaid < threshold
+	}
 }

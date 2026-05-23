@@ -7,41 +7,29 @@ import (
 
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/dates"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/transaction"
-	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy"
 )
 
-func init() {
-	strategy.Register("filter_period1", func() (strategy.Strategy, error) {
-		start, err := parsePeriodDate("PERIOD1_START", dates.Period1Start)
-		if err != nil {
-			return nil, err
-		}
-		end, err := parsePeriodDate("PERIOD1_END", dates.Period1End)
-		if err != nil {
-			return nil, err
-		}
-		return New("filter_period1", func(tx transaction.Transaction) bool {
-			return dates.InRange(tx.Date, start, end)
-		}), nil
-	})
+func Period1Defaults() (uint32, uint32) { return dates.Period1Start, dates.Period1End }
+func Period2Defaults() (uint32, uint32) { return dates.Period2Start, dates.Period2End }
 
-	strategy.Register("filter_period2", func() (strategy.Strategy, error) {
-		start, err := parsePeriodDate("PERIOD2_START", dates.Period2Start)
-		if err != nil {
-			return nil, err
-		}
-		end, err := parsePeriodDate("PERIOD2_END", dates.Period2End)
-		if err != nil {
-			return nil, err
-		}
-		return New("filter_period2", func(tx transaction.Transaction) bool {
-			return dates.InRange(tx.Date, start, end)
-		}), nil
-	})
+func ParsePeriodRange(startEnv, endEnv string, defStart, defEnd uint32) (uint32, uint32, error) {
+	start, err := parsePeriodDate(startEnv, defStart)
+	if err != nil {
+		return 0, 0, err
+	}
+	end, err := parsePeriodDate(endEnv, defEnd)
+	if err != nil {
+		return 0, 0, err
+	}
+	return start, end, nil
 }
 
-// parsePeriodDate reads an env var as a YYYYMMDD date (uint32).
-// Returns defaultVal if the variable is unset.
+func InDateRange(start, end uint32) Predicate {
+	return func(tx transaction.Transaction) bool {
+		return dates.InRange(tx.Date, start, end)
+	}
+}
+
 func parsePeriodDate(envName string, defaultVal uint32) (uint32, error) {
 	raw := os.Getenv(envName)
 	if raw == "" {
