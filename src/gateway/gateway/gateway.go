@@ -27,16 +27,16 @@ const (
 )
 
 type Gateway struct {
-	registry             *clientregistry.ClientRegistry
-	allTransactionsQueue middleware.Middleware
-	allAccountsQueue     middleware.Middleware
-	finalQueue           middleware.Middleware
-	gatewayID            inner.GatewayID
-	resultBatchMaxBytes  int
-	listener             net.Listener
-	ctx                  context.Context
-	cancel               context.CancelFunc
-	waitingGroup         sync.WaitGroup
+	registry              *clientregistry.ClientRegistry
+	allTransactionsQueue  middleware.Middleware
+	allAccountsQueue      middleware.Middleware
+	finalQueue            middleware.Middleware
+	gatewayID             inner.GatewayID
+	maxExternalBatchBytes int
+	listener              net.Listener
+	ctx                   context.Context
+	cancel                context.CancelFunc
+	waitingGroup          sync.WaitGroup
 }
 
 func NewGateway(config gatewayconfig.GatewayConfig) (*Gateway, error) {
@@ -73,15 +73,15 @@ func NewGateway(config gatewayconfig.GatewayConfig) (*Gateway, error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	gateway := &Gateway{
-		registry:             clientregistry.NewClientRegistry(),
-		allTransactionsQueue: allTransactionsQueue,
-		allAccountsQueue:     allAccountsQueue,
-		finalQueue:           finalQueue,
-		gatewayID:            gatewayID,
-		resultBatchMaxBytes:  config.ResultBatchMaxBytes,
-		listener:             listener,
-		ctx:                  ctx,
-		cancel:               cancel,
+		registry:              clientregistry.NewClientRegistry(),
+		allTransactionsQueue:  allTransactionsQueue,
+		allAccountsQueue:      allAccountsQueue,
+		finalQueue:            finalQueue,
+		gatewayID:             gatewayID,
+		maxExternalBatchBytes: config.MaxExternalBatchBytes,
+		listener:              listener,
+		ctx:                   ctx,
+		cancel:                cancel,
 	}
 
 	return gateway, nil
@@ -269,7 +269,7 @@ func (gateway *Gateway) handleClientSession(state *clientregistry.ClientState, h
 func (gateway *Gateway) handleClientResultOutput(state *clientregistry.ClientState, clientID inner.ClientID) {
 	defer gateway.waitingGroup.Done()
 
-	builder := newResultBatchBuilder(state, gateway.resultBatchMaxBytes)
+	builder := newResultBatchBuilder(state, gateway.maxExternalBatchBytes)
 	eofsSent := 0
 
 	for {

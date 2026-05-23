@@ -5,23 +5,23 @@ import (
 )
 
 const (
-	defaultAllTransactionsQueue = "all_transactions"
-	defaultAllAccountsQueue     = "all_accounts"
-	defaultFinalQueue           = "final"
-	defaultMomPort              = 5672
-	defaultResultBatchMaxBytes  = 8192
+	defaultAllTransactionsQueue  = "all_transactions"
+	defaultAllAccountsQueue      = "all_accounts"
+	defaultFinalQueue            = "final"
+	defaultMomPort               = 5672
+	defaultMaxExternalBatchBytes = 8192
 )
 
 type GatewayConfig struct {
-	AllTransactionsQueue string
-	AllAccountsQueue     string
-	FinalQueue           string
-	ResultBatchMaxBytes  int
-	GatewayID            int
-	ServerHost           string
-	ServerPort           string
-	MomHost              string
-	MomPort              int
+	AllTransactionsQueue  string
+	AllAccountsQueue      string
+	FinalQueue            string
+	MaxExternalBatchBytes int
+	GatewayID             int
+	ServerHost            string
+	ServerPort            string
+	MomHost               string
+	MomPort               int
 }
 
 func Load() (GatewayConfig, error) {
@@ -50,20 +50,20 @@ func Load() (GatewayConfig, error) {
 		return GatewayConfig{}, err
 	}
 
-	resultBatchMaxBytes, err := env.IntWithDefault("RESULT_BATCH_MAX_BYTES", defaultResultBatchMaxBytes, true)
+	maxExternalBatchBytes, err := env.IntWithDefault("MAX_EXTERNAL_BATCH_BYTES", defaultMaxExternalBatchBytes, true)
 	if err != nil {
 		return GatewayConfig{}, err
 	}
 
 	return GatewayConfig{
-		AllTransactionsQueue: env.StringWithDefault("ALL_TRANSACTIONS_QUEUE", defaultAllTransactionsQueue),
-		AllAccountsQueue:     env.StringWithDefault("ALL_ACCOUNTS_QUEUE", defaultAllAccountsQueue),
-		FinalQueue:           env.StringWithDefault("FINAL_QUEUE", defaultFinalQueue),
-		ResultBatchMaxBytes:  resultBatchMaxBytes,
-		GatewayID:            gatewayID,
-		ServerHost:           serverHost,
-		ServerPort:           serverPort,
-		MomHost:              momHost,
-		MomPort:              momPort,
+		AllTransactionsQueue:  env.StringWithDefault("ALL_TRANSACTIONS_QUEUE", defaultAllTransactionsQueue),
+		AllAccountsQueue:      env.StringWithDefault("ALL_ACCOUNTS_QUEUE", defaultAllAccountsQueue),
+		FinalQueue:            env.StringWithDefault("FINAL_QUEUE", defaultFinalQueue),
+		MaxExternalBatchBytes: maxExternalBatchBytes,
+		GatewayID:             gatewayID,
+		ServerHost:            serverHost,
+		ServerPort:            serverPort,
+		MomHost:               momHost,
+		MomPort:               momPort,
 	}, nil
 }

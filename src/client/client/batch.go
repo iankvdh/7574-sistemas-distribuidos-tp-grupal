@@ -50,7 +50,7 @@ func readAndBatchCSV[T any](
 		itemBytes := size(item)
 		if itemBytes+batchHeaderBytes > maxBytes {
 			return fmt.Errorf(
-				"record too large for BATCH_MAX_BYTES in %s: record=%d header=%d max=%d",
+				"record too large for MAX_EXTERNAL_BATCH_BYTES in %s: record=%d header=%d max=%d",
 				filePath, itemBytes, batchHeaderBytes, maxBytes,
 			)
 		}

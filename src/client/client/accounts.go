@@ -11,7 +11,7 @@ func (client *Client) sendAccounts() error {
 	if err := readAndBatchCSV(
 		client.config.InputAccounts,
 		accColumnCount,
-		client.config.BatchMaxBytes,
+		client.config.MaxExternalBatchBytes,
 		parseAccountRow,
 		accountSize,
 		client.flushAccountBatch,

@@ -22,18 +22,18 @@ import (
 var ErrStatusTooLong = errors.New("query result status exceeds 255 bytes")
 
 type SerialAnalyzer struct {
-	allTransactionsQueue middleware.Middleware
-	allAccountsQueue     middleware.Middleware
-	finalQueuePrefix     string
-	connSettings         middleware.ConnSettings
-	finalQueues          map[string]middleware.Middleware
-	processor            *session.Processor
-	batchMaxBytes        int
-	running              atomic.Bool
-	shutdownOnce         sync.Once
-	shutdownCh           chan struct{}
-	waitingGroup         sync.WaitGroup
-	mu                   sync.Mutex
+	allTransactionsQueue  middleware.Middleware
+	allAccountsQueue      middleware.Middleware
+	finalQueuePrefix      string
+	connSettings          middleware.ConnSettings
+	finalQueues           map[string]middleware.Middleware
+	processor             *session.Processor
+	maxInternalBatchBytes int
+	running               atomic.Bool
+	shutdownOnce          sync.Once
+	shutdownCh            chan struct{}
+	waitingGroup          sync.WaitGroup
+	mu                    sync.Mutex
 }
 
 func NewSerialAnalyzer(config analyzerconfig.SerialAnalyzerConfig) (*SerialAnalyzer, error) {
@@ -51,14 +51,14 @@ func NewSerialAnalyzer(config analyzerconfig.SerialAnalyzerConfig) (*SerialAnaly
 	}
 
 	serialAnalyzer := &SerialAnalyzer{
-		allTransactionsQueue: allTransactionsQueue,
-		allAccountsQueue:     allAccountsQueue,
-		finalQueuePrefix:     config.FinalQueue,
-		connSettings:         connSettings,
-		finalQueues:          make(map[string]middleware.Middleware),
-		processor:            session.NewProcessor(),
-		batchMaxBytes:        config.BatchMaxBytes,
-		shutdownCh:           make(chan struct{}),
+		allTransactionsQueue:  allTransactionsQueue,
+		allAccountsQueue:      allAccountsQueue,
+		finalQueuePrefix:      config.FinalQueue,
+		connSettings:          connSettings,
+		finalQueues:           make(map[string]middleware.Middleware),
+		processor:             session.NewProcessor(),
+		maxInternalBatchBytes: config.MaxInternalBatchBytes,
+		shutdownCh:            make(chan struct{}),
 	}
 	serialAnalyzer.running.Store(true)
 
@@ -280,7 +280,7 @@ func (serialAnalyzer *SerialAnalyzer) publishOutputs(gatewayID inner.GatewayID, 
 		}
 		item := inner.QueryResultItem{QueryID: output.QueryID, Data: output.Data}
 		itemBytes := resultBatchItemBytes(item)
-		if len(batch) > 0 && batchBytes+itemBytes > serialAnalyzer.batchMaxBytes {
+		if len(batch) > 0 && batchBytes+itemBytes > serialAnalyzer.maxInternalBatchBytes {
 			if err := flush(); err != nil {
 				return err
 			}

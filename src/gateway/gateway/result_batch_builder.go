@@ -11,7 +11,7 @@ import (
 
 type resultBatchBuilder struct {
 	state               *clientregistry.ClientState
-	resultBatchMaxBytes int
+	maxExternalBatchBytes int
 
 	pendingDeliveries []clientregistry.ResultDelivery
 	pendingItems      []external.ResultBatchItem
@@ -19,10 +19,10 @@ type resultBatchBuilder struct {
 	eofCountInBatch   int
 }
 
-func newResultBatchBuilder(state *clientregistry.ClientState, resultBatchMaxBytes int) *resultBatchBuilder {
+func newResultBatchBuilder(state *clientregistry.ClientState, maxExternalBatchBytes int) *resultBatchBuilder {
 	return &resultBatchBuilder{
 		state:               state,
-		resultBatchMaxBytes: resultBatchMaxBytes,
+		maxExternalBatchBytes: maxExternalBatchBytes,
 		pendingDeliveries:   make([]clientregistry.ResultDelivery, 0, 16),
 		pendingItems:        make([]external.ResultBatchItem, 0, 16),
 		currentBatchBytes:   external.ResultBatchHeaderBytes(),
@@ -52,11 +52,11 @@ func (b *resultBatchBuilder) append(delivery clientregistry.ResultDelivery) erro
 	if err != nil {
 		return err
 	}
-	if itemBytes+external.ResultBatchHeaderBytes() > b.resultBatchMaxBytes {
-		return fmt.Errorf("result row exceeds RESULT_BATCH_MAX_BYTES: row=%d max=%d", itemBytes+external.ResultBatchHeaderBytes(), b.resultBatchMaxBytes)
+	if itemBytes+external.ResultBatchHeaderBytes() > b.maxExternalBatchBytes {
+		return fmt.Errorf("result row exceeds MAX_EXTERNAL_BATCH_BYTES: row=%d max=%d", itemBytes+external.ResultBatchHeaderBytes(), b.maxExternalBatchBytes)
 	}
 
-	if len(b.pendingItems) > 0 && b.currentBatchBytes+itemBytes > b.resultBatchMaxBytes {
+	if len(b.pendingItems) > 0 && b.currentBatchBytes+itemBytes > b.maxExternalBatchBytes {
 		if _, err := b.flush(); err != nil {
 			return err
 		}

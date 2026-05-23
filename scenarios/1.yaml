@@ -6,10 +6,11 @@ services:
     depends_on:
       gateway_1:
         condition: service_started
+    env_file:
+      - .env
     environment:
       - INPUT_TRANSACTIONS=/datasets/LI-Small_Trans.csv
       - INPUT_ACCOUNTS=/datasets/LI-Small_accounts.csv
-      - BATCH_MAX_BYTES=8192
       - GATEWAY_PREFIX=gateway_
       - GATEWAY_AMOUNT=1
       - GATEWAY_PORT=5678
@@ -29,14 +30,13 @@ services:
     depends_on:
       rabbitmq:
         condition: service_healthy
+    env_file:
+      - .env
     environment:
       - ALL_TRANSACTIONS_QUEUE=all_transactions
       - ALL_ACCOUNTS_QUEUE=all_accounts
       - FINAL_QUEUE=final
       - GATEWAY_ID=1
-      - RESULT_BATCH_MAX_BYTES=8192
-      - MOM_HOST=rabbitmq
-      - MOM_PORT=5672
       - SERVER_HOST=0.0.0.0
       - SERVER_PORT=5678
 

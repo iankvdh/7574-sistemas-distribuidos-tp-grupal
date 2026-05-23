@@ -19,17 +19,17 @@ import (
 )
 
 type Worker struct {
-	cfg           config.WorkerConfig
-	strategy      strategy.Strategy
-	input         middleware.Middleware
-	ringIn        middleware.Middleware
-	ringOut       middleware.Middleware
-	outputs       []topology.OutputSink
-	outputBuffers []*outputBuffer
-	batchMaxBytes int
-	ctx           context.Context
-	cancel        context.CancelFunc
-	wg            sync.WaitGroup
+	cfg                   config.WorkerConfig
+	strategy              strategy.Strategy
+	input                 middleware.Middleware
+	ringIn                middleware.Middleware
+	ringOut               middleware.Middleware
+	outputs               []topology.OutputSink
+	outputBuffers         []*outputBuffer
+	maxInternalBatchBytes int
+	ctx                   context.Context
+	cancel                context.CancelFunc
+	wg                    sync.WaitGroup
 
 	strategyMu sync.Mutex
 
@@ -129,17 +129,17 @@ func New(cfg config.WorkerConfig) (*Worker, error) {
 	}
 
 	w := &Worker{
-		cfg:           cfg,
-		strategy:      strat,
-		input:         input,
-		ringIn:        ringIn,
-		ringOut:       ringOut,
-		outputs:       outputs,
-		outputBuffers: buffers,
-		batchMaxBytes: cfg.BatchMaxBytes,
-		ctx:           runCtx,
-		cancel:        cancel,
-		upstreamEOFs:  map[inner.ClientID]middleware.Message{},
+		cfg:                   cfg,
+		strategy:              strat,
+		input:                 input,
+		ringIn:                ringIn,
+		ringOut:               ringOut,
+		outputs:               outputs,
+		outputBuffers:         buffers,
+		maxInternalBatchBytes: cfg.MaxInternalBatchBytes,
+		ctx:                   runCtx,
+		cancel:                cancel,
+		upstreamEOFs:          map[inner.ClientID]middleware.Message{},
 	}
 	return w, nil
 }
@@ -363,7 +363,7 @@ func (w *Worker) appendToShard(idx int, clientID inner.ClientID, gatewayID inner
 	}
 	pending.items = append(pending.items, payload)
 	pending.bytes += len(payload)
-	if pending.bytes >= w.batchMaxBytes {
+	if pending.bytes >= w.maxInternalBatchBytes {
 		return w.flushShard(idx, shard, clientID)
 	}
 	return nil

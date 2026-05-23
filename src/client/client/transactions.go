@@ -11,7 +11,7 @@ func (client *Client) sendTransactions() error {
 	if err := readAndBatchCSV(
 		client.config.InputTransactions,
 		txColumnCount,
-		client.config.BatchMaxBytes,
+		client.config.MaxExternalBatchBytes,
 		parseTransactionRow,
 		transactionSize,
 		client.flushTransactionBatch,

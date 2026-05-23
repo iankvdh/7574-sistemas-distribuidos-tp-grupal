@@ -245,10 +245,11 @@ func writeClient(w io.Writer, idx, gateways int, deps []string, transactions, ac
 	for _, d := range deps {
 		fmt.Fprintf(w, "      %s: { condition: service_started }\n", d)
 	}
+	fmt.Fprintln(w, "    env_file:")
+	fmt.Fprintln(w, "      - .env")
 	fmt.Fprintln(w, "    environment:")
 	fmt.Fprintf(w, "      - INPUT_TRANSACTIONS=%s\n", transactions)
 	fmt.Fprintf(w, "      - INPUT_ACCOUNTS=%s\n", accounts)
-	fmt.Fprintln(w, "      - BATCH_MAX_BYTES=8192")
 	fmt.Fprintln(w, "      - GATEWAY_PREFIX=gateway_")
 	fmt.Fprintf(w, "      - GATEWAY_AMOUNT=%d\n", gateways)
 	fmt.Fprintln(w, "      - GATEWAY_PORT=5678")
@@ -273,7 +274,6 @@ func writeGateway(w io.Writer, id int) {
 	fmt.Fprintln(w, "      - ALL_ACCOUNTS_QUEUE=all_accounts")
 	fmt.Fprintln(w, "      - FINAL_QUEUE=final")
 	fmt.Fprintf(w, "      - GATEWAY_ID=%d\n", id)
-	fmt.Fprintln(w, "      - RESULT_BATCH_MAX_BYTES=8192")
 	fmt.Fprintln(w, "      - SERVER_HOST=0.0.0.0")
 	fmt.Fprintln(w, "      - SERVER_PORT=5678")
 }
@@ -291,7 +291,6 @@ func writeWorker(w io.Writer, ws workerSpec, replica int) {
 	input := strings.ReplaceAll(ws.Input, "{REPLICA_ID}", strconv.Itoa(replica))
 	fmt.Fprintf(w, "      - INPUT=%s\n", input)
 	fmt.Fprintf(w, "      - OUTPUTS_MATCH_COUNT=%d\n", ws.MatchCount)
-	fmt.Fprintln(w, "      - BATCH_MAX_BYTES=65536")
 	for j, o := range ws.Outputs {
 		fmt.Fprintf(w, "      - OUTPUT_%d=%s\n", j, o)
 	}
