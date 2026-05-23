@@ -288,7 +288,9 @@ func (gateway *Gateway) handleClientResultOutput(state *clientregistry.ClientSta
 		}
 
 		if delivery.Data != queryResultEOF {
-			continue
+			if state.HasPendingResults() {
+				continue
+			}
 		}
 
 		eofs, err := builder.flush()

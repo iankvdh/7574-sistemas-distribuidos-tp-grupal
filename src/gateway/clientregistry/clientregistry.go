@@ -72,6 +72,10 @@ func (state *ClientState) DequeueResult() (ResultDelivery, bool) {
 	}
 }
 
+func (state *ClientState) HasPendingResults() bool {
+	return len(state.resultQueue) > 0
+}
+
 func (state *ClientState) NotifyResultBatchAck() bool {
 	select {
 	case <-state.ctx.Done():
