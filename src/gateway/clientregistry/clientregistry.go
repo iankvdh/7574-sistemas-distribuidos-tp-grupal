@@ -72,21 +72,6 @@ func (state *ClientState) DequeueResult() (ResultDelivery, bool) {
 	}
 }
 
-func (state *ClientState) TryDequeueResult() (ResultDelivery, bool) {
-	select {
-	case delivery := <-state.resultQueue:
-		return delivery, true
-	default:
-	}
-
-	select {
-	case <-state.ctx.Done():
-		return ResultDelivery{}, false
-	default:
-		return ResultDelivery{}, false
-	}
-}
-
 func (state *ClientState) NotifyResultBatchAck() bool {
 	select {
 	case <-state.ctx.Done():
@@ -110,10 +95,6 @@ func (state *ClientState) WaitForResultBatchAck() bool {
 	case <-state.resultAckCh:
 		return true
 	}
-}
-
-func (state *ClientState) Done() <-chan struct{} {
-	return state.ctx.Done()
 }
 
 func (state *ClientState) Close() {

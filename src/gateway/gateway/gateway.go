@@ -259,124 +259,30 @@ func (gateway *Gateway) handleClientSession(state *clientregistry.ClientState, h
 func (gateway *Gateway) handleClientResultOutput(state *clientregistry.ClientState, clientID inner.ClientID) {
 	defer gateway.waitingGroup.Done()
 
-	pendingDeliveries := make([]clientregistry.ResultDelivery, 0, 16)
-	pendingItems := make([]external.ResultBatchItem, 0, 16)
-	currentBatchBytes := external.ResultBatchHeaderBytes()
-	eofCountInBatch := 0
-
-	nackPending := func() {
-		for _, pending := range pendingDeliveries {
-			pending.Nack()
-		}
-		pendingDeliveries = pendingDeliveries[:0]
-		pendingItems = pendingItems[:0]
-		currentBatchBytes = external.ResultBatchHeaderBytes()
-		eofCountInBatch = 0
-	}
-
-	flush := func() error {
-		if len(pendingItems) == 0 {
-			return nil
-		}
-
-		err := state.WriteWithLock(func(conn net.Conn) error {
-			return external.WriteResultBatch(conn, pendingItems)
-		})
-		if err != nil {
-			nackPending()
-			return err
-		}
-
-		if !state.WaitForResultBatchAck() {
-			nackPending()
-			return errors.New("client session closed while waiting ResultBatchAck")
-		}
-
-		for _, pending := range pendingDeliveries {
-			pending.Ack()
-		}
-		pendingDeliveries = pendingDeliveries[:0]
-		pendingItems = pendingItems[:0]
-		currentBatchBytes = external.ResultBatchHeaderBytes()
-		eofCountInBatch = 0
-		return nil
-	}
-
-	appendDelivery := func(delivery clientregistry.ResultDelivery) error {
-		item := external.ResultBatchItem{
-			QueryID: delivery.QueryID,
-			Data:    delivery.Data,
-		}
-		itemBytes, err := external.ResultBatchItemSize(item)
-		if err != nil {
-			return err
-		}
-		if itemBytes+external.ResultBatchHeaderBytes() > gateway.resultBatchMaxBytes {
-			return fmt.Errorf("result row exceeds RESULT_BATCH_MAX_BYTES: row=%d max=%d", itemBytes+external.ResultBatchHeaderBytes(), gateway.resultBatchMaxBytes)
-		}
-
-		if len(pendingItems) > 0 && currentBatchBytes+itemBytes > gateway.resultBatchMaxBytes {
-			if err := flush(); err != nil {
-				return err
-			}
-		}
-
-		pendingDeliveries = append(pendingDeliveries, delivery)
-		pendingItems = append(pendingItems, item)
-		currentBatchBytes += itemBytes
-		if delivery.Data == queryResultEOF {
-			eofCountInBatch++
-		}
-		return nil
-	}
-
-	abortWithError := func(d clientregistry.ResultDelivery, err error) {
-		slog.Error("While building result batch for client", "client_id", clientID, "err", err)
-		d.Nack()
-		nackPending()
-		gateway.registry.RemoveAndClose(clientID)
-	}
-
+	builder := newResultBatchBuilder(state, gateway.resultBatchMaxBytes)
 	eofsSent := 0
 
 	for {
 		delivery, ok := state.DequeueResult()
 		if !ok {
-			nackPending()
+			builder.nackPending()
 			return
 		}
 
-		if err := appendDelivery(delivery); err != nil {
-			abortWithError(delivery, err)
+		if err := builder.append(delivery); err != nil {
+			slog.Error("While building result batch for client", "client_id", clientID, "err", err)
+			delivery.Nack()
+			builder.nackPending()
+			gateway.registry.RemoveAndClose(clientID)
 			return
 		}
 
 		if delivery.Data != queryResultEOF {
-			for currentBatchBytes < gateway.resultBatchMaxBytes {
-				nextDelivery, exists := state.TryDequeueResult()
-				if !exists {
-					select {
-					case <-state.Done():
-						nackPending()
-						return
-					default:
-					}
-					break
-				}
-
-				if err := appendDelivery(nextDelivery); err != nil {
-					abortWithError(nextDelivery, err)
-					return
-				}
-
-				if nextDelivery.Data == queryResultEOF {
-					break
-				}
-			}
+			continue
 		}
 
-		batchEOFs := eofCountInBatch
-		if err := flush(); err != nil {
+		eofs, err := builder.flush()
+		if err != nil {
 			if gateway.running.Load() {
 				slog.Warn("While flushing result batch to client", "client_id", clientID, "err", err)
 			}
@@ -384,7 +290,7 @@ func (gateway *Gateway) handleClientResultOutput(state *clientregistry.ClientSta
 			return
 		}
 
-		eofsSent += batchEOFs
+		eofsSent += eofs
 		if eofsSent >= requiredQueryEOFs {
 			slog.Info("All query EOFs delivered to client, closing session", "client_id", clientID)
 			gateway.registry.RemoveAndClose(clientID)
