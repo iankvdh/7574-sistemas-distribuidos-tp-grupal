@@ -37,7 +37,7 @@ func TestSendIngestMessageHandlesInterleavedResultBatch(t *testing.T) {
 	defer c.closeResultsCollector()
 
 	go c.readerLoop()
-	defer c.stopIO()
+	defer c.shutdown()
 
 	serverDone := make(chan error, 1)
 	go func() {
@@ -128,7 +128,7 @@ func TestWaitForAllQueryEOFs(t *testing.T) {
 	defer c.closeResultsCollector()
 
 	go c.readerLoop()
-	defer c.stopIO()
+	defer c.shutdown()
 
 	for queryID := uint8(1); queryID <= 5; queryID++ {
 		if err := external.WriteResultBatch(serverConn, []external.ResultBatchItem{
