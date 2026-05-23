@@ -34,10 +34,8 @@ type Gateway struct {
 	gatewayID            inner.GatewayID
 	resultBatchMaxBytes  int
 	listener             net.Listener
-	running              atomic.Bool
 	ctx                  context.Context
 	cancel               context.CancelFunc
-	shutdownOnce         sync.Once
 	waitingGroup         sync.WaitGroup
 }
 
@@ -85,13 +83,16 @@ func NewGateway(config gatewayconfig.GatewayConfig) (*Gateway, error) {
 		ctx:                  ctx,
 		cancel:               cancel,
 	}
-	gateway.running.Store(true)
 
 	return gateway, nil
 }
 
 func (gateway *Gateway) Run() error {
-	defer gateway.shutdown()
+	defer gateway.waitingGroup.Wait()
+	defer gateway.cancel()
+
+	gateway.waitingGroup.Add(1)
+	go gateway.shutdownWatcher()
 
 	gateway.waitingGroup.Add(1)
 	go gateway.consumeFinalQueue()
@@ -104,7 +105,7 @@ func (gateway *Gateway) Run() error {
 	for {
 		conn, err := gateway.listener.Accept()
 		if err != nil {
-			if !gateway.running.Load() {
+			if gateway.ctx.Err() != nil {
 				break
 			}
 			return err
@@ -119,7 +120,6 @@ func (gateway *Gateway) Run() error {
 		go gateway.handleClientSession(state, &handler)
 	}
 
-	gateway.waitingGroup.Wait()
 	return nil
 }
 
@@ -133,7 +133,7 @@ func (gateway *Gateway) handleSignals() {
 	select {
 	case sig := <-signals:
 		slog.Info("Signal received, shutting down gateway", "signal", sig.String())
-		gateway.shutdown()
+		gateway.cancel()
 	case <-gateway.ctx.Done():
 	}
 }
@@ -144,9 +144,9 @@ func (gateway *Gateway) consumeFinalQueue() {
 	err := gateway.finalQueue.StartConsuming(func(msg middleware.Message, ack func(), nack func()) {
 		gateway.forwardFinalMessage(msg, ack, nack)
 	})
-	if err != nil && gateway.running.Load() {
+	if err != nil && gateway.ctx.Err() == nil {
 		slog.Error("Final queue consumer stopped unexpectedly", "err", err)
-		gateway.shutdown()
+		gateway.cancel()
 	}
 }
 
@@ -166,7 +166,7 @@ func (gateway *Gateway) forwardFinalMessage(msg middleware.Message, ack func(), 
 			"client_id", batch.ClientID,
 		)
 		ack()
-		gateway.shutdown()
+		gateway.cancel()
 		return
 	}
 
@@ -228,7 +228,7 @@ func (gateway *Gateway) handleClientSession(state *clientregistry.ClientState, h
 	for {
 		msgType, err := external.ReadMsgType(state.Conn)
 		if err != nil {
-			if gateway.running.Load() {
+			if gateway.ctx.Err() == nil {
 				slog.Debug("While reading client message type", "client_id", handler.ClientID(), "err", err)
 			}
 			return
@@ -293,7 +293,7 @@ func (gateway *Gateway) handleClientResultOutput(state *clientregistry.ClientSta
 
 		eofs, err := builder.flush()
 		if err != nil {
-			if gateway.running.Load() {
+			if gateway.ctx.Err() == nil {
 				slog.Warn("While flushing result batch to client", "client_id", clientID, "err", err)
 			}
 			gateway.registry.RemoveAndClose(clientID)
@@ -374,17 +374,15 @@ func (gateway *Gateway) handleEndOfAccounts(state *clientregistry.ClientState, h
 	return gateway.sendToQueueAndAck(state, msg, gateway.allAccountsQueue)
 }
 
-func (gateway *Gateway) shutdown() {
-	gateway.shutdownOnce.Do(func() {
-		gateway.running.Store(false)
-		gateway.cancel()
+func (gateway *Gateway) shutdownWatcher() {
+	defer gateway.waitingGroup.Done()
+	<-gateway.ctx.Done()
 
-		_ = gateway.listener.Close()
-		gateway.registry.CloseAll()
+	_ = gateway.listener.Close()
+	gateway.registry.CloseAll()
 
-		_ = gateway.finalQueue.StopConsuming()
-		_ = gateway.finalQueue.Close()
-		_ = gateway.allTransactionsQueue.Close()
-		_ = gateway.allAccountsQueue.Close()
-	})
+	_ = gateway.finalQueue.StopConsuming()
+	_ = gateway.finalQueue.Close()
+	_ = gateway.allTransactionsQueue.Close()
+	_ = gateway.allAccountsQueue.Close()
 }
