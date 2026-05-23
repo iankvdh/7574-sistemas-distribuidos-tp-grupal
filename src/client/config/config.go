@@ -1,12 +1,10 @@
 package config
 
 import (
-	"errors"
-	"os"
-	"strconv"
 	"time"
 
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/client/client"
+	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/env"
 )
 
 const (
@@ -19,53 +17,49 @@ const (
 )
 
 func Load() (client.ClientConfig, error) {
-	gatewayPrefix := os.Getenv("GATEWAY_PREFIX")
-	if gatewayPrefix == "" {
-		return client.ClientConfig{}, errors.New("GATEWAY_PREFIX environment variable is required")
-	}
-
-	rawGatewayAmount := os.Getenv("GATEWAY_AMOUNT")
-	if rawGatewayAmount == "" {
-		return client.ClientConfig{}, errors.New("GATEWAY_AMOUNT environment variable is required")
-	}
-	gatewayAmount, err := strconv.Atoi(rawGatewayAmount)
-	if err != nil || gatewayAmount <= 0 {
-		return client.ClientConfig{}, errors.New("GATEWAY_AMOUNT must be a positive integer")
-	}
-
-	gatewayPort := os.Getenv("GATEWAY_PORT")
-	if gatewayPort == "" {
-		return client.ClientConfig{}, errors.New("GATEWAY_PORT environment variable is required")
-	}
-
-	inputTransactions := os.Getenv("INPUT_TRANSACTIONS")
-	if inputTransactions == "" {
-		return client.ClientConfig{}, errors.New("INPUT_TRANSACTIONS environment variable is required")
-	}
-
-	inputAccounts := os.Getenv("INPUT_ACCOUNTS")
-	if inputAccounts == "" {
-		return client.ClientConfig{}, errors.New("INPUT_ACCOUNTS environment variable is required")
-	}
-
-	batchMaxBytes, err := parsePositiveIntWithDefault("BATCH_MAX_BYTES", defaultBatchMaxBytes)
+	gatewayPrefix, err := env.RequiredString("GATEWAY_PREFIX")
 	if err != nil {
 		return client.ClientConfig{}, err
 	}
 
-	connectMaxAttempts, err := parsePositiveIntWithDefault("CONNECT_MAX_ATTEMPTS", defaultConnectMaxAttempts)
+	gatewayAmount, err := env.RequiredInt("GATEWAY_AMOUNT", true)
 	if err != nil {
 		return client.ClientConfig{}, err
 	}
-	backoffBaseMs, err := parsePositiveIntWithDefault("BACKOFF_BASE_MS", defaultBackoffBaseMs)
+
+	gatewayPort, err := env.RequiredString("GATEWAY_PORT")
 	if err != nil {
 		return client.ClientConfig{}, err
 	}
-	backoffMaxMs, err := parsePositiveIntWithDefault("BACKOFF_MAX_MS", defaultBackoffMaxMs)
+
+	inputTransactions, err := env.RequiredString("INPUT_TRANSACTIONS")
 	if err != nil {
 		return client.ClientConfig{}, err
 	}
-	connectTimeoutMs, err := parsePositiveIntWithDefault("CONNECT_TIMEOUT_MS", defaultConnectTimeoutMs)
+
+	inputAccounts, err := env.RequiredString("INPUT_ACCOUNTS")
+	if err != nil {
+		return client.ClientConfig{}, err
+	}
+
+	batchMaxBytes, err := env.IntWithDefault("BATCH_MAX_BYTES", defaultBatchMaxBytes, true)
+	if err != nil {
+		return client.ClientConfig{}, err
+	}
+
+	connectMaxAttempts, err := env.IntWithDefault("CONNECT_MAX_ATTEMPTS", defaultConnectMaxAttempts, true)
+	if err != nil {
+		return client.ClientConfig{}, err
+	}
+	backoffBaseMs, err := env.IntWithDefault("BACKOFF_BASE_MS", defaultBackoffBaseMs, true)
+	if err != nil {
+		return client.ClientConfig{}, err
+	}
+	backoffMaxMs, err := env.IntWithDefault("BACKOFF_MAX_MS", defaultBackoffMaxMs, true)
+	if err != nil {
+		return client.ClientConfig{}, err
+	}
+	connectTimeoutMs, err := env.IntWithDefault("CONNECT_TIMEOUT_MS", defaultConnectTimeoutMs, true)
 	if err != nil {
 		return client.ClientConfig{}, err
 	}
@@ -76,31 +70,11 @@ func Load() (client.ClientConfig, error) {
 		GatewayPort:        gatewayPort,
 		InputTransactions:  inputTransactions,
 		InputAccounts:      inputAccounts,
-		ResultsDir:         envOrDefault("RESULTS_DIR", defaultResultsDir),
+		ResultsDir:         env.StringWithDefault("RESULTS_DIR", defaultResultsDir),
 		BatchMaxBytes:      batchMaxBytes,
 		ConnectMaxAttempts: connectMaxAttempts,
 		BackoffBase:        time.Duration(backoffBaseMs) * time.Millisecond,
 		BackoffMax:         time.Duration(backoffMaxMs) * time.Millisecond,
 		ConnectTimeout:     time.Duration(connectTimeoutMs) * time.Millisecond,
 	}, nil
-}
-
-func parsePositiveIntWithDefault(envName string, defaultValue int) (int, error) {
-	raw := os.Getenv(envName)
-	if raw == "" {
-		return defaultValue, nil
-	}
-	value, err := strconv.Atoi(raw)
-	if err != nil || value <= 0 {
-		return 0, errors.New(envName + " must be a positive integer")
-	}
-	return value, nil
-}
-
-func envOrDefault(key, fallback string) string {
-	value := os.Getenv(key)
-	if value == "" {
-		return fallback
-	}
-	return value
 }
