@@ -18,8 +18,7 @@ func TestHandleClientResultOutputAcksAfterResultBatchAck(t *testing.T) {
 	defer serverConn.Close()
 
 	state := clientregistry.NewClientState(context.Background(), clientConn)
-	gateway := &Gateway{registry: clientregistry.NewClientRegistry(), resultBatchMaxBytes: 256}
-	gateway.running.Store(true)
+	gateway := &Gateway{registry: clientregistry.NewClientRegistry(), resultBatchMaxBytes: 256, ctx: context.Background()}
 
 	var ackCount atomic.Int32
 	var nackCount atomic.Int32
@@ -77,8 +76,7 @@ func TestHandleClientResultOutputNacksWhenClientClosesBeforeAck(t *testing.T) {
 	defer serverConn.Close()
 
 	state := clientregistry.NewClientState(context.Background(), clientConn)
-	gateway := &Gateway{registry: clientregistry.NewClientRegistry(), resultBatchMaxBytes: 256}
-	gateway.running.Store(true)
+	gateway := &Gateway{registry: clientregistry.NewClientRegistry(), resultBatchMaxBytes: 256, ctx: context.Background()}
 
 	var ackCount atomic.Int32
 	var nackCount atomic.Int32
@@ -120,8 +118,7 @@ func TestHandleClientResultOutputNacksOversizedRow(t *testing.T) {
 	defer serverConn.Close()
 
 	state := clientregistry.NewClientState(context.Background(), clientConn)
-	gateway := &Gateway{registry: clientregistry.NewClientRegistry(), resultBatchMaxBytes: external.ResultBatchHeaderBytes() + 1}
-	gateway.running.Store(true)
+	gateway := &Gateway{registry: clientregistry.NewClientRegistry(), resultBatchMaxBytes: external.ResultBatchHeaderBytes() + 1, ctx: context.Background()}
 
 	var ackCount atomic.Int32
 	var nackCount atomic.Int32
