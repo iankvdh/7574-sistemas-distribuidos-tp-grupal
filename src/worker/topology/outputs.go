@@ -33,10 +33,10 @@ type OutputBinding struct {
 	ShardCount int
 }
 
-// OutputSink couples a binding with its live middlewares. Non-sharded sinks
-// hold exactly one middleware; sharded sinks hold ShardCount of them, where
+// OutputTarget couples a binding with its live middlewares. Non-sharded targets
+// hold exactly one middleware; sharded targets hold ShardCount of them, where
 // Middlewares[i] is the queue PREFIX_i.
-type OutputSink struct {
+type OutputTarget struct {
 	Name        string
 	Kind        OutputKind
 	ShardCount  int
@@ -150,10 +150,10 @@ func BuildInputMiddleware(binding OutputBinding, conn middleware.ConnSettings) (
 	}
 }
 
-func BuildOutputSinks(bindings []OutputBinding, conn middleware.ConnSettings) ([]OutputSink, error) {
-	sinks := make([]OutputSink, 0, len(bindings))
+func BuildOutputTargets(bindings []OutputBinding, conn middleware.ConnSettings) ([]OutputTarget, error) {
+	targets := make([]OutputTarget, 0, len(bindings))
 	closeAll := func() {
-		for _, s := range sinks {
+		for _, s := range targets {
 			for _, mw := range s.Middlewares {
 				_ = mw.Close()
 			}
@@ -167,14 +167,14 @@ func BuildOutputSinks(bindings []OutputBinding, conn middleware.ConnSettings) ([
 				closeAll()
 				return nil, fmt.Errorf("open output %q: %w", b.Name, err)
 			}
-			sinks = append(sinks, OutputSink{Name: b.Name, Kind: b.Kind, Middlewares: []middleware.Middleware{mw}})
+			targets = append(targets, OutputTarget{Name: b.Name, Kind: b.Kind, Middlewares: []middleware.Middleware{mw}})
 		case KindDirectExchange:
 			mw, err := middleware.CreateExchangeMiddleware(b.Target, []string{b.Key}, conn)
 			if err != nil {
 				closeAll()
 				return nil, fmt.Errorf("open output %q: %w", b.Name, err)
 			}
-			sinks = append(sinks, OutputSink{Name: b.Name, Kind: b.Kind, Middlewares: []middleware.Middleware{mw}})
+			targets = append(targets, OutputTarget{Name: b.Name, Kind: b.Kind, Middlewares: []middleware.Middleware{mw}})
 		case KindShardedQueues:
 			if b.ShardCount <= 0 {
 				closeAll()
@@ -193,11 +193,11 @@ func BuildOutputSinks(bindings []OutputBinding, conn middleware.ConnSettings) ([
 				}
 				shards = append(shards, mw)
 			}
-			sinks = append(sinks, OutputSink{Name: b.Name, Kind: b.Kind, ShardCount: b.ShardCount, Middlewares: shards})
+			targets = append(targets, OutputTarget{Name: b.Name, Kind: b.Kind, ShardCount: b.ShardCount, Middlewares: shards})
 		default:
 			closeAll()
 			return nil, fmt.Errorf("unsupported output kind for %q", b.Name)
 		}
 	}
-	return sinks, nil
+	return targets, nil
 }
