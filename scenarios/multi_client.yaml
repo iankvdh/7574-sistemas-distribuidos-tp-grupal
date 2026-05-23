@@ -587,8 +587,8 @@ services:
       - ./results:/results
   rabbitmq:
     build: { context: ./src/rabbitmq, dockerfile: Dockerfile }
-    environment:
-      - RABBITMQ_LOG_LEVELS=error
+    volumes:
+      - ./src/rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
     healthcheck:
       interval: 5s
       retries: 10

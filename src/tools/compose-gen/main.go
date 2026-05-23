@@ -336,8 +336,8 @@ func writeWorker(w io.Writer, ws workerSpec, replica int, logLevel string) {
 func writeRabbit(w io.Writer) {
 	fmt.Fprintln(w, "  rabbitmq:")
 	fmt.Fprintln(w, "    build: { context: ./src/rabbitmq, dockerfile: Dockerfile }")
-	fmt.Fprintln(w, "    environment:")
-	fmt.Fprintln(w, "      - RABBITMQ_LOG_LEVELS=error")
+	fmt.Fprintln(w, "    volumes:")
+	fmt.Fprintln(w, "      - ./src/rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro")
 	fmt.Fprintln(w, "    healthcheck:")
 	fmt.Fprintln(w, "      interval: 5s")
 	fmt.Fprintln(w, "      retries: 10")
