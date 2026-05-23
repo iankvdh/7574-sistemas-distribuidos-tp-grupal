@@ -1,12 +1,12 @@
 package runtime
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"os"
 	"os/signal"
 	"sync"
-	"sync/atomic"
 	"syscall"
 
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/eof"
@@ -18,10 +18,6 @@ import (
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/topology"
 )
 
-// Producer-side batching thresholds. A pending batch flushes when either limit
-// is hit, when an EOF for that client arrives, or on shutdown. 512 items / 64 KB
-// keeps each AMQP body under frame_max (128 KB) while cutting broker ops ~4x
-// vs 128 items.
 const (
 	batchMaxItems = 512
 	batchMaxBytes = 64 * 1024
@@ -36,22 +32,16 @@ type Worker struct {
 	outputs       []topology.OutputSink
 	outputBuffers []*outputBuffer
 	logger        *slog.Logger
-	running       atomic.Bool
-	shutdownOnce  sync.Once
-	shutdownCh    chan struct{}
+	ctx           context.Context
+	cancel        context.CancelFunc
 	wg            sync.WaitGroup
 
-	// strategyMu serializes Strategy calls and output flushes. The input
-	// consumer and the ring consumer run on different goroutines and neither
-	// the Strategy nor the output buffers are safe for concurrent access.
 	strategyMu sync.Mutex
 
 	mu           sync.Mutex
 	upstreamEOFs map[inner.ClientID]middleware.Message
 }
 
-// outputBuffer holds pending batches per shard, per client. A non-sharded sink
-// has 1 shard.
 type outputBuffer struct {
 	sink     topology.OutputSink
 	perShard []map[inner.ClientID]*pendingBatch
@@ -129,6 +119,8 @@ func New(cfg config.WorkerConfig, logger *slog.Logger) (*Worker, error) {
 		return nil, err
 	}
 
+	runCtx, cancel := context.WithCancel(context.Background())
+
 	buffers := make([]*outputBuffer, len(outputs))
 	for i, sink := range outputs {
 		shards := 1
@@ -151,15 +143,19 @@ func New(cfg config.WorkerConfig, logger *slog.Logger) (*Worker, error) {
 		outputs:       outputs,
 		outputBuffers: buffers,
 		logger:        logger,
-		shutdownCh:    make(chan struct{}),
+		ctx:           runCtx,
+		cancel:        cancel,
 		upstreamEOFs:  map[inner.ClientID]middleware.Message{},
 	}
-	w.running.Store(true)
 	return w, nil
 }
 
 func (w *Worker) Run() error {
-	defer w.shutdown()
+	defer w.wg.Wait()
+	defer w.cancel()
+
+	w.wg.Add(1)
+	go w.shutdownWatcher()
 
 	w.wg.Add(1)
 	go w.handleSignals()
@@ -181,17 +177,16 @@ func (w *Worker) Run() error {
 	}
 
 	err := w.input.StartConsuming(w.handleInputMessage)
-	if err != nil && w.running.Load() {
+	if err != nil && w.ctx.Err() == nil {
 		w.logger.Error("Input consumer stopped unexpectedly", "err", err)
 	}
-	w.wg.Wait()
 	return nil
 }
 
 func (w *Worker) consumeRing() {
 	defer w.wg.Done()
 	err := w.ringIn.StartConsuming(w.handleRingMessage)
-	if err != nil && w.running.Load() {
+	if err != nil && w.ctx.Err() == nil {
 		w.logger.Error("Ring consumer stopped unexpectedly", "err", err)
 	}
 }
@@ -490,33 +485,33 @@ func (w *Worker) handleSignals() {
 	select {
 	case sig := <-signals:
 		w.logger.Info("Signal received, shutting down worker", "signal", sig.String())
-		w.shutdown()
-	case <-w.shutdownCh:
+		w.cancel()
+	case <-w.ctx.Done():
 	}
 }
 
-func (w *Worker) shutdown() {
-	w.shutdownOnce.Do(func() {
-		w.running.Store(false)
-		close(w.shutdownCh)
-		w.strategyMu.Lock()
-		w.flushAll()
-		w.strategyMu.Unlock()
-		_ = w.input.StopConsuming()
-		_ = w.input.Close()
-		if w.ringIn != nil {
-			_ = w.ringIn.StopConsuming()
-			_ = w.ringIn.Close()
+func (w *Worker) shutdownWatcher() {
+	defer w.wg.Done()
+	<-w.ctx.Done()
+
+	w.strategyMu.Lock()
+	w.flushAll()
+	w.strategyMu.Unlock()
+
+	_ = w.input.StopConsuming()
+	_ = w.input.Close()
+	if w.ringIn != nil {
+		_ = w.ringIn.StopConsuming()
+		_ = w.ringIn.Close()
+	}
+	if w.ringOut != nil {
+		_ = w.ringOut.Close()
+	}
+	for _, sink := range w.outputs {
+		for _, mw := range sink.Middlewares {
+			_ = mw.Close()
 		}
-		if w.ringOut != nil {
-			_ = w.ringOut.Close()
-		}
-		for _, sink := range w.outputs {
-			for _, mw := range sink.Middlewares {
-				_ = mw.Close()
-			}
-		}
-	})
+	}
 }
 
 func closeAll(input middleware.Middleware, ringIn middleware.Middleware, ringOut middleware.Middleware, outputs []topology.OutputSink) {
