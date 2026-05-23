@@ -11,13 +11,36 @@ SPEC ?= default
 
 # --- Compose lifecycle -----------------------------------------------------
 
+# Muestra el exit code de cada contenedor. 137 = SIGKILL (graceful shutdown roto).
+define show_exit_codes
+	echo "--- Exit codes ---" && \
+	docker ps -a --filter "label=com.docker.compose.project=$(COMPOSE_PROJECT_NAME)" \
+		--format '{{.Names}}' | while read name; do \
+		code=$$(docker inspect --format '{{.State.ExitCode}}' "$$name" 2>/dev/null); \
+		if [ "$$code" = "137" ]; then \
+			echo "SIGKILL (force-killed!) $$name"; \
+		elif [ "$$code" = "143" ] || [ "$$code" = "130" ]; then \
+			echo "ok (signal $$code)       $$name"; \
+		elif [ "$$code" = "0" ]; then \
+			echo "ok (clean exit)         $$name"; \
+		else \
+			echo "exit($$code)            $$name"; \
+		fi; \
+	done && echo "-----------------"
+endef
+
 up:
-	@COMPOSE_HTTP_TIMEOUT=300 COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT_NAME) docker compose -f $(COMPOSE_FILE) up --build --remove-orphans --detach
-	@$(compose) logs --follow
+	@trap '$(compose) stop -t 30 && $(show_exit_codes)' INT TERM EXIT; \
+	COMPOSE_HTTP_TIMEOUT=300 COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT_NAME) docker compose -f $(COMPOSE_FILE) up --build --remove-orphans
 .PHONY: up
 
+up-detach:
+	@COMPOSE_HTTP_TIMEOUT=300 COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT_NAME) docker compose -f $(COMPOSE_FILE) up --build --remove-orphans --detach
+.PHONY: up-detach
+
 down:
-	@$(compose) stop -t 1
+	@$(compose) stop -t 30
+	@$(show_exit_codes)
 	@$(compose) down
 .PHONY: down
 
