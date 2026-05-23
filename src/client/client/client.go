@@ -206,6 +206,7 @@ func (client *Client) Run() error {
 		}
 		return nil
 	}
+	slog.Info("All transactions sent", "client_id", client.clientID)
 
 	if err := client.sendAccounts(); err != nil {
 		if client.running.Load() {
@@ -213,14 +214,17 @@ func (client *Client) Run() error {
 		}
 		return nil
 	}
+	slog.Info("All accounts sent", "client_id", client.clientID)
 
 	if err := client.waitForAllQueryEOFs(); err != nil {
 		if client.running.Load() {
 			return err
 		}
+		slog.Info("Client shutting down gracefully", "client_id", client.clientID)
 		return nil
 	}
 
+	slog.Info("Client completed successfully", "client_id", client.clientID)
 	return nil
 }
 
