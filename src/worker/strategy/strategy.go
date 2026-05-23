@@ -1,8 +1,6 @@
 package strategy
 
 import (
-	"log/slog"
-
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/eof"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/messageprotocol/inner"
 )
@@ -25,7 +23,6 @@ type LocalCounts struct {
 }
 
 type Context struct {
-	Logger       *slog.Logger
 	OutputCount  int
 	ReplicaID    int
 	NReplicas    int
