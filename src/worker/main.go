@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"os"
 
+	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/logging"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/config"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/runtime"
 
@@ -15,7 +16,10 @@ import (
 )
 
 func run() int {
-	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, nil)))
+	if err := logging.Init(); err != nil {
+		slog.Error("While initializing logger", "err", err)
+		return 1
+	}
 
 	cfg, err := config.Load()
 	if err != nil {

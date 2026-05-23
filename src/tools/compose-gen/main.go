@@ -7,6 +7,7 @@
 //
 //	clients: <int>           how many client_N services to declare
 //	gateways: <int>          how many gateway_N services to declare
+//	log_level: <string>      optional; LOG_LEVEL emitted to every service (default: info)
 //	workers:
 //	  - name: <prefix>                   docker-compose service name (suffixed by replica index if replicas>1)
 //	    strategy: <STRATEGY env value>   which strategy this worker runs
@@ -51,8 +52,11 @@ type spec struct {
 	Gateways     int
 	Transactions string
 	Accounts     string
+	LogLevel     string
 	Workers      []workerSpec
 }
+
+const defaultLogLevel = "info"
 
 func main() {
 	if len(os.Args) != 2 {
@@ -109,6 +113,8 @@ func parseSpec(src string) (*spec, error) {
 				s.Transactions = value
 			case "accounts":
 				s.Accounts = value
+			case "log_level":
+				s.LogLevel = value
 			}
 			section = key
 			currentList = ""
@@ -212,15 +218,19 @@ func (s *spec) render(w io.Writer) error {
 	if accounts == "" {
 		accounts = "/datasets/LI-Small_accounts.csv"
 	}
+	logLevel := s.LogLevel
+	if logLevel == "" {
+		logLevel = defaultLogLevel
+	}
 	for i := 0; i < s.Clients; i++ {
-		writeClient(w, i, s.Gateways, dependencies, transactions, accounts)
+		writeClient(w, i, s.Gateways, dependencies, transactions, accounts, logLevel)
 	}
 	for i := 1; i <= s.Gateways; i++ {
-		writeGateway(w, i)
+		writeGateway(w, i, logLevel)
 	}
 	for _, ws := range s.Workers {
 		for r := 0; r < ws.Replicas; r++ {
-			writeWorker(w, ws, r)
+			writeWorker(w, ws, r, logLevel)
 		}
 	}
 	writeRabbit(w)
@@ -234,7 +244,7 @@ func serviceName(ws workerSpec, replica int) string {
 	return fmt.Sprintf("%s_%d", ws.Name, replica)
 }
 
-func writeClient(w io.Writer, idx, gateways int, deps []string, transactions, accounts string) {
+func writeClient(w io.Writer, idx, gateways int, deps []string, transactions, accounts, logLevel string) {
 	fmt.Fprintf(w, "  client_%d:\n", idx)
 	fmt.Fprintln(w, "    build: { context: ./src/, dockerfile: client/Dockerfile }")
 	fmt.Fprintln(w, "    depends_on:")
@@ -258,12 +268,13 @@ func writeClient(w io.Writer, idx, gateways int, deps []string, transactions, ac
 	fmt.Fprintln(w, "      - BACKOFF_BASE_MS=200")
 	fmt.Fprintln(w, "      - BACKOFF_MAX_MS=3000")
 	fmt.Fprintln(w, "      - RESULTS_DIR=/results")
+	fmt.Fprintf(w, "      - LOG_LEVEL=%s\n", logLevel)
 	fmt.Fprintln(w, "    volumes:")
 	fmt.Fprintln(w, "      - ./datasets:/datasets")
 	fmt.Fprintf(w, "      - ./results/client_%d:/results\n", idx)
 }
 
-func writeGateway(w io.Writer, id int) {
+func writeGateway(w io.Writer, id int, logLevel string) {
 	fmt.Fprintf(w, "  gateway_%d:\n", id)
 	fmt.Fprintln(w, "    build: { context: ./src/, dockerfile: gateway/Dockerfile }")
 	fmt.Fprintln(w, "    depends_on: { rabbitmq: { condition: service_healthy } }")
@@ -276,9 +287,10 @@ func writeGateway(w io.Writer, id int) {
 	fmt.Fprintf(w, "      - GATEWAY_ID=%d\n", id)
 	fmt.Fprintln(w, "      - SERVER_HOST=0.0.0.0")
 	fmt.Fprintln(w, "      - SERVER_PORT=5678")
+	fmt.Fprintf(w, "      - LOG_LEVEL=%s\n", logLevel)
 }
 
-func writeWorker(w io.Writer, ws workerSpec, replica int) {
+func writeWorker(w io.Writer, ws workerSpec, replica int, logLevel string) {
 	fmt.Fprintf(w, "  %s:\n", serviceName(ws, replica))
 	fmt.Fprintln(w, "    build: { context: ./src/, dockerfile: worker/Dockerfile }")
 	fmt.Fprintln(w, "    depends_on: { rabbitmq: { condition: service_healthy } }")
@@ -294,6 +306,7 @@ func writeWorker(w io.Writer, ws workerSpec, replica int) {
 	for j, o := range ws.Outputs {
 		fmt.Fprintf(w, "      - OUTPUT_%d=%s\n", j, o)
 	}
+	fmt.Fprintf(w, "      - LOG_LEVEL=%s\n", logLevel)
 	if ws.Replicas > 1 {
 		ringIn := fmt.Sprintf("ring_%s_%d", ws.Name, replica)
 		ringOut := fmt.Sprintf("ring_%s_%d", ws.Name, (replica+1)%ws.Replicas)
