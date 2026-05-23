@@ -89,8 +89,6 @@ func deserializeTransaction(reader io.Reader) (*transaction.Transaction, error) 
 	}, nil
 }
 
-// WriteTransactionBatch writes [MsgType=TransactionBatch][N uint32][tx1]...[txN]
-// in a single Write to keep one TCP segment per batch.
 func WriteTransactionBatch(writer io.Writer, txs []transaction.Transaction) error {
 	payload, err := SerializeTransactionBatchPayload(txs)
 	if err != nil {
@@ -117,8 +115,6 @@ func DeserializeTransactionBatchPayload(payload []byte) ([]transaction.Transacti
 	return ReadTransactionBatch(bytes.NewReader(payload))
 }
 
-// ReadTransactionBatch reads [N uint32][tx1]...[txN] from reader. The MsgType
-// byte must have been consumed by ReadMsgType before calling this.
 func ReadTransactionBatch(reader io.Reader) ([]transaction.Transaction, error) {
 	nBuf, err := safeio.ReadAll(reader, serializer.UINT32_SIZE)
 	if err != nil {
