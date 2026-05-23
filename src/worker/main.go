@@ -7,12 +7,6 @@ import (
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/logging"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/config"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/runtime"
-
-	// Register strategies via blank imports so factories install themselves at startup.
-	_ "github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/drain"
-	_ "github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/filter"
-	_ "github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/joiner"
-	_ "github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/noop"
 )
 
 func run() int {

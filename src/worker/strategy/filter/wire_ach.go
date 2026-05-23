@@ -2,13 +2,8 @@ package filter
 
 import (
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/transaction"
-	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy"
 )
 
-func init() {
-	strategy.Register("filter_wire_ach", func() (strategy.Strategy, error) {
-		return New("filter_wire_ach", func(tx transaction.Transaction) bool {
-			return tx.PaymentFormat == "Wire" || tx.PaymentFormat == "ACH"
-		}), nil
-	})
+func IsWireOrACH(tx transaction.Transaction) bool {
+	return tx.PaymentFormat == "Wire" || tx.PaymentFormat == "ACH"
 }

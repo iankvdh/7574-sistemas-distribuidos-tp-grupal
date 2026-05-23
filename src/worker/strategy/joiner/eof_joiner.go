@@ -22,10 +22,8 @@ type EOFJoiner struct {
 	expectedEOFs int
 }
 
-func init() {
-	strategy.Register("joiner_usd", func() (strategy.Strategy, error) {
-		return &EOFJoiner{name: "joiner_usd"}, nil
-	})
+func NewEOFJoiner(name string) *EOFJoiner {
+	return &EOFJoiner{name: name}
 }
 
 func (j *EOFJoiner) Name() string { return j.name }
