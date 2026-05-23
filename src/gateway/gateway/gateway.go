@@ -176,7 +176,17 @@ func (gateway *Gateway) forwardFinalMessage(msg middleware.Message, ack func(), 
 		ack()
 		return
 	}
-
+	// NOTA: NO BORRAR
+	// At-least-once delivery: the AMQP ack fires only when all items in this
+	// batch have been individually acked by the client via ResultBatchAck.
+	// If any item fails (e.g. client disconnects mid-flush), the whole AMQP
+	// message is nacked and the broker redelivers it — including items already
+	// sent. Today this is harmless because the client session is gone by the
+	// time the nack fires, and redeliveries for unknown clients are dropped.
+	// If reconnection with stable clientIDs is ever implemented, this becomes
+	// an at-least-once gap: the reconnecting client could receive duplicate
+	// results. Fix at that point: either deduplicate on the client side using
+	// a sequence number, or ack + re-publish only the undelivered items.
 	remaining := &atomic.Int32{}
 	remaining.Store(int32(len(batch.Items)))
 	once := &sync.Once{}
