@@ -3,9 +3,8 @@ package config
 import (
 	"errors"
 	"fmt"
-	"os"
-	"strconv"
-	"strings"
+
+	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/env"
 )
 
 const (
@@ -27,17 +26,17 @@ type WorkerConfig struct {
 }
 
 func Load() (WorkerConfig, error) {
-	strategyName := strings.TrimSpace(os.Getenv("STRATEGY"))
-	if strategyName == "" {
-		return WorkerConfig{}, errors.New("STRATEGY environment variable is required")
-	}
-
-	replicaID, err := getIntFromEnv("REPLICA_ID", 0, false)
+	strategyName, err := env.RequiredString("STRATEGY")
 	if err != nil {
 		return WorkerConfig{}, err
 	}
 
-	nReplicas, err := getIntFromEnv("N_REPLICAS", 1, true)
+	replicaID, err := env.IntWithDefault("REPLICA_ID", 0, false)
+	if err != nil {
+		return WorkerConfig{}, err
+	}
+
+	nReplicas, err := env.IntWithDefault("N_REPLICAS", 1, true)
 	if err != nil {
 		return WorkerConfig{}, err
 	}
@@ -45,26 +44,22 @@ func Load() (WorkerConfig, error) {
 		return WorkerConfig{}, fmt.Errorf("REPLICA_ID=%d out of range for N_REPLICAS=%d", replicaID, nReplicas)
 	}
 
-	input := strings.TrimSpace(os.Getenv("INPUT"))
-	if input == "" {
-		return WorkerConfig{}, errors.New("INPUT environment variable is required")
+	input, err := env.RequiredString("INPUT")
+	if err != nil {
+		return WorkerConfig{}, err
 	}
 
-	momHost := os.Getenv("MOM_HOST")
-	if momHost == "" {
-		return WorkerConfig{}, errors.New("MOM_HOST environment variable is required")
+	momHost, err := env.RequiredString("MOM_HOST")
+	if err != nil {
+		return WorkerConfig{}, err
 	}
 
-	momPort := defaultMomPort
-	if raw := os.Getenv("MOM_PORT"); raw != "" {
-		parsed, err := strconv.Atoi(raw)
-		if err != nil || parsed <= 0 {
-			return WorkerConfig{}, fmt.Errorf("invalid MOM_PORT: %s", raw)
-		}
-		momPort = parsed
+	momPort, err := env.IntWithDefault("MOM_PORT", defaultMomPort, true)
+	if err != nil {
+		return WorkerConfig{}, err
 	}
 
-	outputsMatchCount, err := getIntFromEnv("OUTPUTS_MATCH_COUNT", 0, false)
+	outputsMatchCount, err := env.IntWithDefault("OUTPUTS_MATCH_COUNT", 0, false)
 	if err != nil {
 		return WorkerConfig{}, err
 	}
@@ -72,13 +67,13 @@ func Load() (WorkerConfig, error) {
 		return WorkerConfig{}, errors.New("OUTPUTS_MATCH_COUNT must be non-negative")
 	}
 
-	batchMaxBytes, err := getIntFromEnv("BATCH_MAX_BYTES", defaultBatchMaxBytes, true)
+	batchMaxBytes, err := env.IntWithDefault("BATCH_MAX_BYTES", defaultBatchMaxBytes, true)
 	if err != nil {
 		return WorkerConfig{}, err
 	}
 
-	ringQueueIn := strings.TrimSpace(os.Getenv("RING_QUEUE_IN"))
-	ringQueueOut := strings.TrimSpace(os.Getenv("RING_QUEUE_OUT"))
+	ringQueueIn := env.StringWithDefault("RING_QUEUE_IN", "")
+	ringQueueOut := env.StringWithDefault("RING_QUEUE_OUT", "")
 	// Both or neither; specifying one without the other is a misconfiguration.
 	if (ringQueueIn == "") != (ringQueueOut == "") {
 		return WorkerConfig{}, errors.New("RING_QUEUE_IN and RING_QUEUE_OUT must be set together")
@@ -99,19 +94,4 @@ func Load() (WorkerConfig, error) {
 		MomPort:           momPort,
 		BatchMaxBytes:     batchMaxBytes,
 	}, nil
-}
-
-func getIntFromEnv(name string, defaultValue int, mustBePositive bool) (int, error) {
-	raw := os.Getenv(name)
-	if raw == "" {
-		return defaultValue, nil
-	}
-	parsed, err := strconv.Atoi(raw)
-	if err != nil {
-		return 0, fmt.Errorf("invalid %s: %s", name, raw)
-	}
-	if mustBePositive && parsed <= 0 {
-		return 0, fmt.Errorf("%s must be a positive integer", name)
-	}
-	return parsed, nil
 }
