@@ -88,7 +88,7 @@ func TestHandleClientResultOutputNacksWhenClientClosesBeforeAck(t *testing.T) {
 
 	state.EnqueueResult(clientregistry.ResultDelivery{
 		QueryID: 2,
-		Data:  "row-2",
+		Data:    "EOF",
 		Ack:     func() { ackCount.Add(1) },
 		Nack:    func() { nackCount.Add(1) },
 	})
