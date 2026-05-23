@@ -187,7 +187,7 @@ func computeBackoffCap(base, max time.Duration, attempt int) time.Duration {
 
 func (client *Client) Run() error {
 	go client.handleSignals()
-	defer client.stopIO()
+	defer client.shutdown()
 
 	if err := client.initResultsCollector(); err != nil {
 		return err
@@ -321,7 +321,7 @@ func (client *Client) setIOError(err error) {
 	if client.ioErr == nil {
 		client.ioErr = err
 		client.ioErrMu.Unlock()
-		client.stopIO()
+		client.shutdown()
 		return
 	}
 	client.ioErrMu.Unlock()
@@ -336,7 +336,7 @@ func (client *Client) ioErrorOrStopped() error {
 	return errors.New("client stopped")
 }
 
-func (client *Client) stopIO() {
+func (client *Client) shutdown() {
 	client.cancel()
 	if client.conn != nil {
 		_ = client.conn.Close()
@@ -351,5 +351,5 @@ func (client *Client) handleSignals() {
 	sig := <-signals
 	slog.Info("Signal received, shutting down client", "signal", sig.String())
 	client.running.Store(false)
-	client.stopIO()
+	client.shutdown()
 }
