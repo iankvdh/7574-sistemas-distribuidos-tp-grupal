@@ -146,3 +146,142 @@ func TestFilterEOFEmitsCountsPerOutput(t *testing.T) {
 		t.Fatalf("nomatch EOF wrong: %+v", outcome.EOFs[1])
 	}
 }
+
+func TestProjectionDropsFieldOnMatch(t *testing.T) {
+	f := New("filter_wire_ach", IsWireOrACH)
+	f.WithMatchProjection(WithoutPaymentFormat)
+	if err := f.Init(makeStrategyConfig(1, 0)); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	tx := transaction.Transaction{Date: 20220901, FromBank: 1, FromAccount: "a", ToBank: 2, ToAccount: "b", AmountPaid: 10.0, PaymentCurrency: "US Dollar", PaymentFormat: "Wire"}
+	env := envelopeForTransaction(t, tx)
+
+	outputMessages, _, err := f.ProcessMessage(env)
+	if err != nil {
+		t.Fatalf("ProcessMessage: %v", err)
+	}
+	if len(outputMessages) != 1 {
+		t.Fatalf("expected 1 output message, got %d", len(outputMessages))
+	}
+	t.Logf("payload before projection: %d bytes", len(env.Payload))
+	t.Logf("payload after  projection: %d bytes", len(outputMessages[0].Body))
+	result, err := external.DeserializeTransaction(outputMessages[0].Body)
+	if err != nil {
+		t.Fatalf("DeserializeTransaction: %v", err)
+	}
+	if result.PaymentFormat != "" {
+		t.Fatalf("expected PaymentFormat to be dropped, got %q", result.PaymentFormat)
+	}
+	if result.AmountPaid != tx.AmountPaid {
+		t.Fatalf("expected AmountPaid to be preserved, got %v", result.AmountPaid)
+	}
+}
+
+func TestProjectionDropsFieldOnNoMatch(t *testing.T) {
+	f := New("filter_period1", func(tx transaction.Transaction) bool {
+		return dates.InPeriod1(tx.Date)
+	})
+	f.WithNoMatchProjection(WithoutPaymentFormat)
+	if err := f.Init(makeStrategyConfig(1, 1)); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	tx := transaction.Transaction{Date: 20220601, FromBank: 1, FromAccount: "a", ToBank: 2, ToAccount: "b", AmountPaid: 5.0, PaymentCurrency: "US Dollar", PaymentFormat: "ACH"}
+	env := envelopeForTransaction(t, tx)
+
+	outputMessages, _, err := f.ProcessMessage(env)
+	if err != nil {
+		t.Fatalf("ProcessMessage: %v", err)
+	}
+	if len(outputMessages) != 1 {
+		t.Fatalf("expected 1 output message, got %d", len(outputMessages))
+	}
+	t.Logf("payload before projection: %d bytes", len(env.Payload))
+	t.Logf("payload after  projection: %d bytes", len(outputMessages[0].Body))
+	result, err := external.DeserializeTransaction(outputMessages[0].Body)
+	if err != nil {
+		t.Fatalf("DeserializeTransaction: %v", err)
+	}
+	if result.PaymentFormat != "" {
+		t.Fatalf("expected PaymentFormat to be dropped, got %q", result.PaymentFormat)
+	}
+	if result.Date != tx.Date {
+		t.Fatalf("expected Date to be preserved, got %v", result.Date)
+	}
+}
+
+func TestNoProjectionPassesThroughPayloadUnchanged(t *testing.T) {
+	f := New("filter_period1", func(tx transaction.Transaction) bool {
+		return dates.InPeriod1(tx.Date)
+	})
+	if err := f.Init(makeStrategyConfig(1, 1)); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	tx := transaction.Transaction{Date: 20220901, PaymentFormat: "Wire", PaymentCurrency: "US Dollar"}
+	env := envelopeForTransaction(t, tx)
+
+	outputMessages, _, err := f.ProcessMessage(env)
+	if err != nil {
+		t.Fatalf("ProcessMessage: %v", err)
+	}
+	if len(outputMessages) != 1 {
+		t.Fatalf("expected 1 output message, got %d", len(outputMessages))
+	}
+	if string(outputMessages[0].Body) != string(env.Payload) {
+		t.Fatal("expected body to be identical to original payload when no projection is set")
+	}
+}
+
+func TestProjectionsAreChainable(t *testing.T) {
+	// First filter drops PaymentFormat on match.
+	f1 := New("filter_wire_ach", IsWireOrACH)
+	f1.WithMatchProjection(WithoutPaymentFormat)
+	if err := f1.Init(makeStrategyConfig(1, 0)); err != nil {
+		t.Fatalf("f1 Init: %v", err)
+	}
+
+	// Second filter drops PaymentCurrency on match (simulates filter_currency_usd after wire/ach).
+	f2 := New("filter_currency_usd", func(tx transaction.Transaction) bool {
+		return tx.PaymentCurrency == "US Dollar"
+	})
+	f2.WithMatchProjection(WithoutPaymentCurrency)
+	if err := f2.Init(makeStrategyConfig(1, 0)); err != nil {
+		t.Fatalf("f2 Init: %v", err)
+	}
+
+	tx := transaction.Transaction{Date: 20220901, FromBank: 1, FromAccount: "a", ToBank: 2, ToAccount: "b", AmountPaid: 10.0, PaymentCurrency: "US Dollar", PaymentFormat: "Wire"}
+	env1 := envelopeForTransaction(t, tx)
+
+	out1, _, err := f1.ProcessMessage(env1)
+	if err != nil || len(out1) != 1 {
+		t.Fatalf("f1 ProcessMessage: err=%v, out=%v", err, out1)
+	}
+
+	// Feed f1 output into f2.
+	msg2, err := inner.SerializeTransactionMessage(1, "client-x", out1[0].Body)
+	if err != nil {
+		t.Fatalf("SerializeTransactionMessage: %v", err)
+	}
+	env2, err := inner.DeserializeEnvelope(msg2)
+	if err != nil {
+		t.Fatalf("DeserializeEnvelope: %v", err)
+	}
+
+	out2, _, err := f2.ProcessMessage(env2)
+	if err != nil || len(out2) != 1 {
+		t.Fatalf("f2 ProcessMessage: err=%v, out=%v", err, out2)
+	}
+
+	result, err := external.DeserializeTransaction(out2[0].Body)
+	if err != nil {
+		t.Fatalf("DeserializeTransaction: %v", err)
+	}
+	if result.PaymentFormat != "" {
+		t.Fatalf("expected PaymentFormat dropped by f1, got %q", result.PaymentFormat)
+	}
+	if result.PaymentCurrency != "" {
+		t.Fatalf("expected PaymentCurrency dropped by f2, got %q", result.PaymentCurrency)
+	}
+	if result.AmountPaid != tx.AmountPaid {
+		t.Fatalf("expected AmountPaid preserved, got %v", result.AmountPaid)
+	}
+}
