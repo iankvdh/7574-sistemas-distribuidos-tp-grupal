@@ -56,7 +56,7 @@ func (j *EOFJoiner) ProcessMessage(env *inner.Envelope) ([]strategy.Decision, st
 	}
 	return []strategy.Decision{{
 		OutputIndices: indices,
-		Body:          string(env.Payload),
+		Body:          env.Payload,
 		ClientID:      env.ClientID,
 	}}, strategy.LocalCounts{Processed: 1}, nil
 }

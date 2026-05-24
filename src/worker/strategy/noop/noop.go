@@ -31,7 +31,7 @@ func (s *Strategy) ProcessMessage(env *inner.Envelope) ([]strategy.Decision, str
 		indices = append(indices, i)
 	}
 	s.counts[env.ClientID]++
-	return []strategy.Decision{{OutputIndices: indices, Body: string(env.Payload), ClientID: env.ClientID}}, strategy.LocalCounts{Processed: 1, Matched: 1}, nil
+	return []strategy.Decision{{OutputIndices: indices, Body: env.Payload, ClientID: env.ClientID}}, strategy.LocalCounts{Processed: 1, Matched: 1}, nil
 }
 
 func (s *Strategy) OnUpstreamEOF(env *inner.Envelope) (strategy.EOFOutcome, error) {

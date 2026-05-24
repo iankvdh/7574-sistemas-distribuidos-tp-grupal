@@ -332,7 +332,7 @@ func (w *Worker) appendDecisions(gatewayID inner.GatewayID, decisions []strategy
 			if idx < 0 || idx >= len(w.outputTargetBuffers) {
 				return errors.New("strategy returned invalid output index")
 			}
-			if err := w.appendToShard(idx, d.ClientID, gatewayID, []byte(d.Body)); err != nil {
+			if err := w.appendToShard(idx, d.ClientID, gatewayID, d.Body); err != nil {
 				return err
 			}
 		}
