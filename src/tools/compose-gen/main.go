@@ -58,6 +58,28 @@ type spec struct {
 
 const defaultLogLevel = "info"
 
+// strategiesWithRing lista las strategies que coordinan EOFs con un anillo
+// entre réplicas (RING_QUEUE_IN/OUT). Sólo se generan ring queues para estas
+// strategies cuando replicas > 1. Si la strategy no usa anillo (path_finder_q4,
+// counter_q4, drain, noop, ...) las ring queues se omiten incluso con varias
+// réplicas, evitando colas que nadie consume.
+var strategiesWithRing = map[string]struct{}{
+	"filter_period1":                    {},
+	"filter_wire_ach":                   {},
+	"filter_currency_usd_p1":            {},
+	"filter_currency_usd_p2":            {},
+	"filter_currency_usd_other_periods": {},
+	"filter_period2":                    {},
+	"filter_amount_lt_50":               {},
+	"joiner_usd":                        {},
+	"sharder_q4":                        {},
+}
+
+func strategyUsesRing(strategy string) bool {
+	_, ok := strategiesWithRing[strategy]
+	return ok
+}
+
 func main() {
 	if len(os.Args) != 2 {
 		fmt.Fprintln(os.Stderr, "usage: compose-gen <spec.yaml>")
@@ -307,7 +329,7 @@ func writeWorker(w io.Writer, ws workerSpec, replica int, logLevel string) {
 		fmt.Fprintf(w, "      - OUTPUT_%d=%s\n", j, o)
 	}
 	fmt.Fprintf(w, "      - LOG_LEVEL=%s\n", logLevel)
-	if ws.Replicas > 1 {
+	if ws.Replicas > 1 && strategyUsesRing(ws.Strategy) {
 		ringIn := fmt.Sprintf("ring_%s_%d", ws.Name, replica)
 		ringOut := fmt.Sprintf("ring_%s_%d", ws.Name, (replica+1)%ws.Replicas)
 		fmt.Fprintf(w, "      - RING_QUEUE_IN=%s\n", ringIn)
