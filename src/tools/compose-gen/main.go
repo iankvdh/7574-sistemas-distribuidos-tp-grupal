@@ -210,7 +210,7 @@ func splitKV(line string) (string, string) {
 		return strings.TrimSpace(line), ""
 	}
 	key := strings.TrimSpace(line[:idx])
-	value := strings.TrimSpace(line[idx+1:])
+	value := stripInlineComment(strings.TrimSpace(line[idx+1:]))
 	// Strip optional quoting (env vars often need to be quoted in YAML to keep
 	// the parser happy with values like "3" or "*").
 	if len(value) >= 2 {
@@ -219,6 +219,35 @@ func splitKV(line string) (string, string) {
 		}
 	}
 	return key, value
+}
+
+// stripInlineComment drops YAML-style trailing comments (" # ..." or "\t# ...")
+// while leaving '#' characters that are part of quoted values or that aren't
+// preceded by whitespace untouched. Without this, a line like
+//   EXPECTED_EOFS: "3"   # = N_REPLICAS de sharder_q1
+// would yield value = `"3"   # = N_REPLICAS de sharder_q1` and the worker
+// would later fail to parse it as an integer.
+func stripInlineComment(s string) string {
+	if s == "" {
+		return s
+	}
+	var quote byte
+	if s[0] == '"' || s[0] == '\'' {
+		quote = s[0]
+	}
+	inQuote := quote != 0
+	for i := 0; i < len(s); i++ {
+		if inQuote {
+			if s[i] == quote {
+				inQuote = false
+			}
+			continue
+		}
+		if s[i] == '#' && (i == 0 || s[i-1] == ' ' || s[i-1] == '\t') {
+			return strings.TrimRight(s[:i], " \t")
+		}
+	}
+	return s
 }
 
 func (s *spec) render(w io.Writer) error {
