@@ -52,19 +52,30 @@ func newExchangeMiddleware(exchange string, keys []string, settings ConnSettings
 
 func (e *exchangeMiddleware) Send(msg Message) error {
 	for _, key := range e.routingKeys {
-		err := e.channel.Publish(
-			e.exchange, // nombre del exchange
-			key,        // routing key para rutear el mensaje
-			false,      // mandatory
-			false,      // inmediate
-			amqp.Publishing{
-				ContentType: "text/plain",
-				Body:        []byte(msg.Body),
-			},
-		)
-		if err != nil {
-			return middlewareError(err)
+		if err := e.publish(msg, key); err != nil {
+			return err
 		}
+	}
+	return nil
+}
+
+func (e *exchangeMiddleware) SendWithKey(msg Message, routingKey string) error {
+	return e.publish(msg, routingKey)
+}
+
+func (e *exchangeMiddleware) publish(msg Message, routingKey string) error {
+	err := e.channel.Publish(
+		e.exchange,
+		routingKey,
+		false,
+		false,
+		amqp.Publishing{
+			ContentType: "text/plain",
+			Body:        []byte(msg.Body),
+		},
+	)
+	if err != nil {
+		return middlewareError(err)
 	}
 	return nil
 }

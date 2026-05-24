@@ -64,6 +64,10 @@ func (q *queueMiddleware) Send(msg Message) error {
 	return nil
 }
 
+func (q *queueMiddleware) SendWithKey(msg Message, _ string) error {
+	return q.Send(msg)
+}
+
 func (q *queueMiddleware) StartConsuming(callbackFunc func(msg Message, ack func(), nack func())) error {
 	deliveries, err := q.channel.Consume(
 		q.queueName, // queue
