@@ -17,7 +17,7 @@ const defaultExpectedEOFs = 3 // period1, period2, other_periods
 
 type EOFJoiner struct {
 	name         string
-	ctx          strategy.Context
+	cfg          strategy.StrategyConfig
 	coordinator  *eof.JoinerAccumulateCoordinator
 	expectedEOFs int
 }
@@ -28,9 +28,9 @@ func NewEOFJoiner(name string) *EOFJoiner {
 
 func (j *EOFJoiner) Name() string { return j.name }
 
-func (j *EOFJoiner) Init(ctx strategy.Context) error {
-	if ctx.OutputCount < 1 {
-		return fmt.Errorf("joiner_usd requires at least 1 output, got %d", ctx.OutputCount)
+func (j *EOFJoiner) Init(cfg strategy.StrategyConfig) error {
+	if cfg.OutputCount < 1 {
+		return fmt.Errorf("joiner_usd requires at least 1 output, got %d", cfg.OutputCount)
 	}
 	expected := defaultExpectedEOFs
 	if raw := os.Getenv("EXPECTED_EOFS"); raw != "" {
@@ -40,9 +40,9 @@ func (j *EOFJoiner) Init(ctx strategy.Context) error {
 		}
 		expected = parsed
 	}
-	j.ctx = ctx
+	j.cfg = cfg
 	j.expectedEOFs = expected
-	j.coordinator = eof.NewJoinerAccumulateCoordinator(expected, ctx.OutputCount)
+	j.coordinator = eof.NewJoinerAccumulateCoordinator(expected, cfg.OutputCount)
 	return nil
 }
 
@@ -50,7 +50,7 @@ func (j *EOFJoiner) ProcessMessage(env *inner.Envelope) ([]strategy.Decision, st
 	if env.Kind != inner.TransactionMessage {
 		return nil, strategy.LocalCounts{}, fmt.Errorf("joiner_usd expects TransactionMessage, got kind=%d", env.Kind)
 	}
-	indices := make([]int, j.ctx.OutputCount)
+	indices := make([]int, j.cfg.OutputCount)
 	for i := range indices {
 		indices[i] = i
 	}

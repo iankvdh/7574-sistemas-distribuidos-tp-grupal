@@ -10,7 +10,7 @@ const name = "noop"
 
 // Strategy forwards every message to all configured outputs unchanged.
 type Strategy struct {
-	ctx    strategy.Context
+	cfg    strategy.StrategyConfig
 	counts map[inner.ClientID]uint64
 }
 
@@ -18,16 +18,16 @@ func New() *Strategy {
 	return &Strategy{counts: map[inner.ClientID]uint64{}}
 }
 
-func (s *Strategy) Init(ctx strategy.Context) error {
-	s.ctx = ctx
+func (s *Strategy) Init(cfg strategy.StrategyConfig) error {
+	s.cfg = cfg
 	return nil
 }
 
 func (s *Strategy) Name() string { return name }
 
 func (s *Strategy) ProcessMessage(env *inner.Envelope) ([]strategy.Decision, strategy.LocalCounts, error) {
-	indices := make([]int, 0, s.ctx.OutputCount)
-	for i := 0; i < s.ctx.OutputCount; i++ {
+	indices := make([]int, 0, s.cfg.OutputCount)
+	for i := 0; i < s.cfg.OutputCount; i++ {
 		indices = append(indices, i)
 	}
 	s.counts[env.ClientID]++
@@ -35,8 +35,8 @@ func (s *Strategy) ProcessMessage(env *inner.Envelope) ([]strategy.Decision, str
 }
 
 func (s *Strategy) OnUpstreamEOF(env *inner.Envelope) (strategy.EOFOutcome, error) {
-	emits := make([]eof.EOFEmit, 0, s.ctx.OutputCount)
-	for i := 0; i < s.ctx.OutputCount; i++ {
+	emits := make([]eof.EOFEmit, 0, s.cfg.OutputCount)
+	for i := 0; i < s.cfg.OutputCount; i++ {
 		emits = append(emits, eof.EOFEmit{OutputIndex: i, Total: uint32(s.counts[env.ClientID])})
 	}
 	delete(s.counts, env.ClientID)
