@@ -195,7 +195,7 @@ func (w *Worker) handleInputMessage(msg middleware.Message, ack func(), nack fun
 			nack()
 			return
 		}
-		if err := w.applyOutcome(envelope, outcome); err != nil {
+		if err := w.applyEOFOutcome(envelope, outcome); err != nil {
 			w.strategyMu.Unlock()
 			slog.Error("Applying EOF outcome failed", "client_id", envelope.ClientID, "err", err)
 			nack()
@@ -242,11 +242,11 @@ func (w *Worker) handleInputMessage(msg middleware.Message, ack func(), nack fun
 }
 
 func (w *Worker) processSingleItem(env *inner.Envelope) error {
-	decisions, _, err := w.strategy.ProcessMessage(env)
+	outputMessages, _, err := w.strategy.ProcessMessage(env)
 	if err != nil {
 		return err
 	}
-	return w.appendDecisions(env.GatewayID, decisions)
+	return w.appendOutputMessages(env.GatewayID, outputMessages)
 }
 
 func (w *Worker) handleRingMessage(msg middleware.Message, ack func(), nack func()) {
@@ -279,7 +279,7 @@ func (w *Worker) handleRingMessage(msg middleware.Message, ack func(), nack func
 	}
 
 	resultEnvelope := &inner.Envelope{GatewayID: ringMessageEnvelope.GatewayID, ClientID: token.ClientID}
-	if err := w.applyOutcome(resultEnvelope, outcome); err != nil {
+	if err := w.applyEOFOutcome(resultEnvelope, outcome); err != nil {
 		w.strategyMu.Unlock()
 		slog.Error("Applying ring outcome failed", "client_id", token.ClientID, "err", err)
 		nack()
@@ -289,7 +289,7 @@ func (w *Worker) handleRingMessage(msg middleware.Message, ack func(), nack func
 	ack()
 }
 
-func (w *Worker) applyOutcome(env *inner.Envelope, outcome strategy.EOFOutcome) error {
+func (w *Worker) applyEOFOutcome(env *inner.Envelope, outcome strategy.EOFOutcome) error {
 	switch outcome.Action.Kind {
 	case eof.ActionNone:
 		return nil
@@ -326,13 +326,13 @@ func (w *Worker) forwardToken(env *inner.Envelope, token *eof.Token) error {
 	return w.ringOut.Send(*msg)
 }
 
-func (w *Worker) appendDecisions(gatewayID inner.GatewayID, decisions []strategy.Decision) error {
-	for _, d := range decisions {
-		for _, idx := range d.OutputIndices {
+func (w *Worker) appendOutputMessages(gatewayID inner.GatewayID, outputMessages []strategy.OutputMessage) error {
+	for _, om := range outputMessages {
+		for _, idx := range om.OutputIndices {
 			if idx < 0 || idx >= len(w.outputTargetBuffers) {
 				return errors.New("strategy returned invalid output index")
 			}
-			if err := w.appendToShard(idx, d.ClientID, gatewayID, d.Body); err != nil {
+			if err := w.appendToShard(idx, om.ClientID, gatewayID, om.Body); err != nil {
 				return err
 			}
 		}

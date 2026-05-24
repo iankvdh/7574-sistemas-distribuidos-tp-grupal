@@ -46,7 +46,7 @@ func (j *EOFJoiner) Init(cfg strategy.StrategyConfig) error {
 	return nil
 }
 
-func (j *EOFJoiner) ProcessMessage(env *inner.Envelope) ([]strategy.Decision, strategy.LocalCounts, error) {
+func (j *EOFJoiner) ProcessMessage(env *inner.Envelope) ([]strategy.OutputMessage, strategy.LocalCounts, error) {
 	if env.Kind != inner.TransactionMessage {
 		return nil, strategy.LocalCounts{}, fmt.Errorf("joiner_usd expects TransactionMessage, got kind=%d", env.Kind)
 	}
@@ -54,7 +54,7 @@ func (j *EOFJoiner) ProcessMessage(env *inner.Envelope) ([]strategy.Decision, st
 	for i := range indices {
 		indices[i] = i
 	}
-	return []strategy.Decision{{
+	return []strategy.OutputMessage{{
 		OutputIndices: indices,
 		Body:          env.Payload,
 		ClientID:      env.ClientID,
