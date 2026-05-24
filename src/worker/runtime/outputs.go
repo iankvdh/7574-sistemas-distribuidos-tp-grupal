@@ -52,6 +52,13 @@ func BuildOutputTargets(outputConfigs []config.OutputConfig, conn middleware.Con
 				shards = append(shards, mw)
 			}
 			targets = append(targets, OutputTarget{Name: outputConfig.Name, Kind: outputConfig.Kind, ShardCount: outputConfig.ShardCount, Middlewares: shards})
+		case config.KindFinalQueue:
+			mw, err := middleware.CreateQueueMiddleware(outputConfig.Name, conn)
+			if err != nil {
+				closeOutputTargets(targets)
+				return nil, fmt.Errorf("open output %q: %w", outputConfig.Name, err)
+			}
+			targets = append(targets, OutputTarget{Name: outputConfig.Name, Kind: outputConfig.Kind, Middlewares: []middleware.Middleware{mw}})
 		default:
 			closeOutputTargets(targets)
 			return nil, fmt.Errorf("unsupported output kind for %q", outputConfig.Name)
