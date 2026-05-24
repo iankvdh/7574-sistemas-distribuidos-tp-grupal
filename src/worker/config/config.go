@@ -17,8 +17,8 @@ type WorkerConfig struct {
 	ReplicaID             int
 	NReplicas             int
 	Input                 string // raw INPUT env var
-	InputBinding          OutputBinding
-	Outputs               []OutputBinding
+	InputConfig           OutputConfig
+	Outputs               []OutputConfig
 	OutputsMatchCount     int
 	RingQueueIn           string // optional: queue this replica consumes ring tokens from
 	RingQueueOut          string // optional: queue this replica publishes ring tokens to (next replica)
@@ -51,7 +51,7 @@ func Load() (WorkerConfig, error) {
 		return WorkerConfig{}, err
 	}
 
-	inputBinding, err := ParseInput(input)
+	inputConfig, err := ParseInput(input)
 	if err != nil {
 		return WorkerConfig{}, err
 	}
@@ -99,7 +99,7 @@ func Load() (WorkerConfig, error) {
 		ReplicaID:             replicaID,
 		NReplicas:             nReplicas,
 		Input:                 input,
-		InputBinding:          inputBinding,
+		InputConfig:           inputConfig,
 		Outputs:               outputs,
 		OutputsMatchCount:     outputsMatchCount,
 		RingQueueIn:           ringQueueIn,

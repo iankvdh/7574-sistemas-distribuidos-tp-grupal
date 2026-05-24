@@ -7,8 +7,8 @@ func TestParseInputQueue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if b.Kind != KindQueue || b.Target != "all_transactions" {
-		t.Fatalf("unexpected binding: %+v", b)
+	if b.Kind != KindQueue || b.Name != "all_transactions" {
+		t.Fatalf("unexpected outputConfig: %+v", b)
 	}
 }
 
@@ -17,8 +17,8 @@ func TestParseInputDirectExchangeWithoutKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if b.Kind != KindDirectExchange || b.Target != "period1_transactions" || b.Key != "" {
-		t.Fatalf("unexpected binding: %+v", b)
+	if b.Kind != KindDirectExchange || b.Name != "period1_transactions" || b.RoutingKey != "" {
+		t.Fatalf("unexpected outputConfig: %+v", b)
 	}
 }
 
@@ -27,8 +27,8 @@ func TestParseInputDirectExchangeWithKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if b.Kind != KindDirectExchange || b.Target != "usd_sharded" || b.Key != "client-1" {
-		t.Fatalf("unexpected binding: %+v", b)
+	if b.Kind != KindDirectExchange || b.Name != "usd_sharded" || b.RoutingKey != "client-1" {
+		t.Fatalf("unexpected outputConfig: %+v", b)
 	}
 }
 
@@ -47,17 +47,17 @@ func TestParseInputErrors(t *testing.T) {
 	}
 }
 
-func TestParseBindingShardedQueues(t *testing.T) {
-	b, err := parseBinding("sharded_queues:joiner_usd_input:4", 0)
+func TestParseOutputConfigShardedQueues(t *testing.T) {
+	b, err := parseOutputConfig("sharded_queues:joiner_usd_input:4", 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if b.Kind != KindShardedQueues || b.Target != "joiner_usd_input" || b.ShardCount != 4 {
-		t.Fatalf("unexpected binding: %+v", b)
+	if b.Kind != KindShardedQueues || b.Name != "joiner_usd_input" || b.ShardCount != 4 {
+		t.Fatalf("unexpected outputConfig: %+v", b)
 	}
 }
 
-func TestParseBindingShardedQueuesInvalid(t *testing.T) {
+func TestParseOutputConfigShardedQueuesInvalid(t *testing.T) {
 	cases := []string{
 		"sharded_queues:joiner_usd_input",   // missing K
 		"sharded_queues:joiner_usd_input:0", // K must be >0
@@ -65,7 +65,7 @@ func TestParseBindingShardedQueuesInvalid(t *testing.T) {
 		"sharded_queues:prefix:abc",         // non-numeric K
 	}
 	for _, raw := range cases {
-		if _, err := parseBinding(raw, 0); err == nil {
+		if _, err := parseOutputConfig(raw, 0); err == nil {
 			t.Fatalf("expected error for %q", raw)
 		}
 	}

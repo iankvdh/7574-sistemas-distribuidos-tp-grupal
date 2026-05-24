@@ -18,63 +18,62 @@ const (
 	KindShardedQueues
 )
 
-type OutputBinding struct {
+type OutputConfig struct {
 	Name       string
 	Kind       OutputKind
-	Target     string
-	Key        string
+	RoutingKey string
 	ShardCount int
 }
 
-func ParseOutputs() ([]OutputBinding, error) {
+func ParseOutputs() ([]OutputConfig, error) {
 	indices := collectOutputIndices()
 	if len(indices) == 0 {
 		return nil, nil
 	}
-	bindings := make([]OutputBinding, 0, len(indices))
+	outputConfigs := make([]OutputConfig, 0, len(indices))
 	for _, i := range indices {
 		raw := os.Getenv(fmt.Sprintf("OUTPUT_%d", i))
-		binding, err := parseBinding(raw, i)
+		outputConfig, err := parseOutputConfig(raw, i)
 		if err != nil {
 			return nil, err
 		}
-		bindings = append(bindings, binding)
+		outputConfigs = append(outputConfigs, outputConfig)
 	}
-	return bindings, nil
+	return outputConfigs, nil
 }
 
-func parseBinding(raw string, idx int) (OutputBinding, error) {
+func parseOutputConfig(raw string, idx int) (OutputConfig, error) {
 	parts := strings.SplitN(raw, ":", 2)
 	if len(parts) != 2 || parts[1] == "" {
-		return OutputBinding{}, fmt.Errorf("OUTPUT_%d invalid: %q (expected <kind>:<target>[:<extra>])", idx, raw)
+		return OutputConfig{}, fmt.Errorf("OUTPUT_%d invalid: %q (expected <kind>:<target>[:<extra>])", idx, raw)
 	}
 	kind, rest := parts[0], parts[1]
 	switch kind {
 	case "queue":
-		return OutputBinding{Name: rest, Kind: KindQueue, Target: rest}, nil
+		return OutputConfig{Name: rest, Kind: KindQueue}, nil
 	case "direct_exchange":
-		exchangeName, key := rest, ""
+		exchangeName, routingKey := rest, ""
 		if subParts := strings.SplitN(rest, ":", 2); len(subParts) == 2 {
 			exchangeName = subParts[0]
-			key = subParts[1]
+			routingKey = subParts[1]
 		}
 		if exchangeName == "" {
-			return OutputBinding{}, fmt.Errorf("OUTPUT_%d invalid direct_exchange target", idx)
+			return OutputConfig{}, fmt.Errorf("OUTPUT_%d invalid direct_exchange target", idx)
 		}
-		return OutputBinding{Name: exchangeName, Kind: KindDirectExchange, Target: exchangeName, Key: key}, nil
+		return OutputConfig{Name: exchangeName, Kind: KindDirectExchange, RoutingKey: routingKey}, nil
 	case "sharded_queues":
 		subParts := strings.SplitN(rest, ":", 2)
 		if len(subParts) != 2 || subParts[0] == "" || subParts[1] == "" {
-			return OutputBinding{}, fmt.Errorf("OUTPUT_%d invalid sharded_queues binding: %q (expected sharded_queues:PREFIX:K)", idx, raw)
+			return OutputConfig{}, fmt.Errorf("OUTPUT_%d invalid sharded_queues config: %q (expected sharded_queues:PREFIX:K)", idx, raw)
 		}
 		prefix, kRaw := subParts[0], subParts[1]
 		K, err := strconv.Atoi(kRaw)
 		if err != nil || K <= 0 {
-			return OutputBinding{}, fmt.Errorf("OUTPUT_%d invalid shard count in %q", idx, raw)
+			return OutputConfig{}, fmt.Errorf("OUTPUT_%d invalid shard count in %q", idx, raw)
 		}
-		return OutputBinding{Name: prefix, Kind: KindShardedQueues, Target: prefix, ShardCount: K}, nil
+		return OutputConfig{Name: prefix, Kind: KindShardedQueues, ShardCount: K}, nil
 	default:
-		return OutputBinding{}, fmt.Errorf("OUTPUT_%d unsupported kind %q", idx, kind)
+		return OutputConfig{}, fmt.Errorf("OUTPUT_%d unsupported kind %q", idx, kind)
 	}
 }
 
@@ -104,16 +103,16 @@ func collectOutputIndices() []int {
 	return indices
 }
 
-func ParseInput(raw string) (OutputBinding, error) {
+func ParseInput(raw string) (OutputConfig, error) {
 	if raw == "" {
-		return OutputBinding{}, fmt.Errorf("INPUT environment variable is required")
+		return OutputConfig{}, fmt.Errorf("INPUT environment variable is required")
 	}
-	b, err := parseBinding(raw, -1)
+	outputConfig, err := parseOutputConfig(raw, -1)
 	if err != nil {
-		return OutputBinding{}, err
+		return OutputConfig{}, err
 	}
-	if b.Kind == KindShardedQueues {
-		return OutputBinding{}, fmt.Errorf("INPUT does not accept sharded_queues; consume a specific queue:PREFIX_i")
+	if outputConfig.Kind == KindShardedQueues {
+		return OutputConfig{}, fmt.Errorf("INPUT does not accept sharded_queues; consume a specific queue:PREFIX_i")
 	}
-	return b, nil
+	return outputConfig, nil
 }

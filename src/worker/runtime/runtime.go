@@ -56,7 +56,7 @@ func New(cfg config.WorkerConfig) (*Worker, error) {
 
 	conn := middleware.ConnSettings{Hostname: cfg.MomHost, Port: cfg.MomPort}
 
-	input, err := BuildInputMiddleware(cfg.InputBinding, conn)
+	input, err := BuildInputMiddleware(cfg.InputConfig, conn)
 	if err != nil {
 		return nil, err
 	}
@@ -89,7 +89,7 @@ func New(cfg config.WorkerConfig) (*Worker, error) {
 	}
 	if matchCount > len(outputs) {
 		closeAll(input, ringIn, ringOut, outputs)
-		return nil, errors.New("OUTPUTS_MATCH_COUNT exceeds number of OUTPUT_* bindings")
+		return nil, errors.New("OUTPUTS_MATCH_COUNT exceeds number of OUTPUT_* outputConfigs")
 	}
 
 	ctx := strategy.Context{
