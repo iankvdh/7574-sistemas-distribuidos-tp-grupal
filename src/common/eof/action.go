@@ -31,11 +31,14 @@ type Action struct {
 	EOFs  []EOFEmit
 }
 
-// EOFEmit is one InternalEOF message the runtime must publish to a specific output.
+// EOFEmit is one EOF message the runtime must publish to a specific output.
 // RoutingKey is used only when the target output is a direct_exchange; otherwise
 // the runtime falls back to its default sharding/key resolution.
+// QueryID is used only when the target output is a final_queue, so the runtime
+// can embed it in the FinalQueryResultBatch EOF marker that goes to the gateway.
 type EOFEmit struct {
 	OutputIndex int
 	Total       uint32
 	RoutingKey  string
+	QueryID     uint8
 }
