@@ -14,65 +14,67 @@ type OutputTarget struct {
 	Middlewares []middleware.Middleware
 }
 
-func BuildInputMiddleware(binding config.OutputBinding, conn middleware.ConnSettings) (middleware.Middleware, error) {
-	switch binding.Kind {
+func BuildInputMiddleware(outputConfig config.OutputConfig, conn middleware.ConnSettings) (middleware.Middleware, error) {
+	switch outputConfig.Kind {
 	case config.KindQueue:
-		return middleware.CreateQueueMiddleware(binding.Target, conn)
+		return middleware.CreateQueueMiddleware(outputConfig.Name, conn)
 	case config.KindDirectExchange:
-		return middleware.CreateExchangeMiddleware(binding.Target, []string{binding.Key}, conn)
+		return middleware.CreateExchangeMiddleware(outputConfig.Name, []string{outputConfig.RoutingKey}, conn)
 	default:
-		return nil, fmt.Errorf("unsupported input kind for %q", binding.Name)
+		return nil, fmt.Errorf("unsupported input kind for %q", outputConfig.Name)
 	}
 }
 
-func BuildOutputTargets(bindings []config.OutputBinding, conn middleware.ConnSettings) ([]OutputTarget, error) {
-	targets := make([]OutputTarget, 0, len(bindings))
-	closeAll := func() {
-		for _, s := range targets {
-			for _, mw := range s.Middlewares {
-				_ = mw.Close()
-			}
-		}
-	}
-	for _, b := range bindings {
-		switch b.Kind {
+func BuildOutputTargets(outputConfigs []config.OutputConfig, conn middleware.ConnSettings) ([]OutputTarget, error) {
+	targets := make([]OutputTarget, 0, len(outputConfigs))
+
+	for _, outputConfig := range outputConfigs {
+		switch outputConfig.Kind {
 		case config.KindQueue:
-			mw, err := middleware.CreateQueueMiddleware(b.Target, conn)
+			mw, err := middleware.CreateQueueMiddleware(outputConfig.Name, conn)
 			if err != nil {
-				closeAll()
-				return nil, fmt.Errorf("open output %q: %w", b.Name, err)
+				closeOutputTargets(targets)
+				return nil, fmt.Errorf("open output %q: %w", outputConfig.Name, err)
 			}
-			targets = append(targets, OutputTarget{Name: b.Name, Kind: b.Kind, Middlewares: []middleware.Middleware{mw}})
+			targets = append(targets, OutputTarget{Name: outputConfig.Name, Kind: outputConfig.Kind, Middlewares: []middleware.Middleware{mw}})
 		case config.KindDirectExchange:
-			mw, err := middleware.CreateExchangeMiddleware(b.Target, []string{b.Key}, conn)
+			mw, err := middleware.CreateExchangeMiddleware(outputConfig.Name, []string{outputConfig.RoutingKey}, conn)
 			if err != nil {
-				closeAll()
-				return nil, fmt.Errorf("open output %q: %w", b.Name, err)
+				closeOutputTargets(targets)
+				return nil, fmt.Errorf("open output %q: %w", outputConfig.Name, err)
 			}
-			targets = append(targets, OutputTarget{Name: b.Name, Kind: b.Kind, Middlewares: []middleware.Middleware{mw}})
+			targets = append(targets, OutputTarget{Name: outputConfig.Name, Kind: outputConfig.Kind, Middlewares: []middleware.Middleware{mw}})
 		case config.KindShardedQueues:
-			if b.ShardCount <= 0 {
-				closeAll()
-				return nil, fmt.Errorf("output %q: sharded_queues requires ShardCount>0", b.Name)
+			if outputConfig.ShardCount <= 0 {
+				closeOutputTargets(targets)
+				return nil, fmt.Errorf("output %q: sharded_queues requires ShardCount>0", outputConfig.Name)
 			}
-			shards := make([]middleware.Middleware, 0, b.ShardCount)
-			for i := 0; i < b.ShardCount; i++ {
-				qname := fmt.Sprintf("%s_%d", b.Target, i)
+			shards := make([]middleware.Middleware, 0, outputConfig.ShardCount)
+			for i := 0; i < outputConfig.ShardCount; i++ {
+				qname := fmt.Sprintf("%s_%d", outputConfig.Name, i)
 				mw, err := middleware.CreateQueueMiddleware(qname, conn)
 				if err != nil {
 					for _, m := range shards {
 						_ = m.Close()
 					}
-					closeAll()
-					return nil, fmt.Errorf("open output %q shard %d: %w", b.Name, i, err)
+					closeOutputTargets(targets)
+					return nil, fmt.Errorf("open output %q shard %d: %w", outputConfig.Name, i, err)
 				}
 				shards = append(shards, mw)
 			}
-			targets = append(targets, OutputTarget{Name: b.Name, Kind: b.Kind, ShardCount: b.ShardCount, Middlewares: shards})
+			targets = append(targets, OutputTarget{Name: outputConfig.Name, Kind: outputConfig.Kind, ShardCount: outputConfig.ShardCount, Middlewares: shards})
 		default:
-			closeAll()
-			return nil, fmt.Errorf("unsupported output kind for %q", b.Name)
+			closeOutputTargets(targets)
+			return nil, fmt.Errorf("unsupported output kind for %q", outputConfig.Name)
 		}
 	}
 	return targets, nil
+}
+
+func closeOutputTargets(targets []OutputTarget) {
+	for _, t := range targets {
+		for _, m := range t.Middlewares {
+			_ = m.Close()
+		}
+	}
 }
