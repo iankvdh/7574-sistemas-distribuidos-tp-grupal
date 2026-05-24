@@ -19,7 +19,7 @@ import (
 const name = "drain"
 
 type Strategy struct {
-	ctx   strategy.Context
+	cfg   strategy.StrategyConfig
 	mu    sync.Mutex
 	file  *os.File
 	count map[inner.ClientID]uint64
@@ -31,7 +31,7 @@ func New() *Strategy {
 
 func (s *Strategy) Name() string { return name }
 
-func (s *Strategy) Init(ctx strategy.Context) error {
+func (s *Strategy) Init(cfg strategy.StrategyConfig) error {
 	path := os.Getenv("DRAIN_OUTPUT_FILE")
 	if path == "" {
 		return errors.New("DRAIN_OUTPUT_FILE is required for drain strategies")
@@ -40,7 +40,7 @@ func (s *Strategy) Init(ctx strategy.Context) error {
 	if err != nil {
 		return fmt.Errorf("open drain output: %w", err)
 	}
-	s.ctx = ctx
+	s.cfg = cfg
 	s.file = f
 	return nil
 }

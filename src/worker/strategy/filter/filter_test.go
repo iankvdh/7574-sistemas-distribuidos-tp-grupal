@@ -10,8 +10,8 @@ import (
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy"
 )
 
-func makeContext(matchOutputs, nomatchOutputs int) strategy.Context {
-	return strategy.Context{
+func makeStrategyConfig(matchOutputs, nomatchOutputs int) strategy.StrategyConfig {
+	return strategy.StrategyConfig{
 		OutputCount: matchOutputs + nomatchOutputs,
 		MatchCount:  matchOutputs,
 		NReplicas:   1,
@@ -39,7 +39,7 @@ func TestFilterMatchRoutesToMatchOutputs(t *testing.T) {
 	f := New("filter_period1", func(tx transaction.Transaction) bool {
 		return dates.InPeriod1(tx.Date)
 	})
-	if err := f.Init(makeContext(1, 1)); err != nil {
+	if err := f.Init(makeStrategyConfig(1, 1)); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 	tx := transaction.Transaction{Date: 20220903, FromBank: 1, FromAccount: "a", ToBank: 2, ToAccount: "b", AmountPaid: 12.0, PaymentCurrency: "USD", PaymentFormat: "WIRE"}
@@ -61,7 +61,7 @@ func TestFilterNoMatchRoutesToNomatchOutputs(t *testing.T) {
 	f := New("filter_period1", func(tx transaction.Transaction) bool {
 		return dates.InPeriod1(tx.Date)
 	})
-	if err := f.Init(makeContext(1, 1)); err != nil {
+	if err := f.Init(makeStrategyConfig(1, 1)); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 	tx := transaction.Transaction{Date: 20220601, PaymentCurrency: "USD", PaymentFormat: "WIRE"}
@@ -83,7 +83,7 @@ func TestFilterNoMatchDiscardsWhenNoNomatchOutput(t *testing.T) {
 	f := New("filter_currency_usd", func(tx transaction.Transaction) bool {
 		return tx.PaymentCurrency == "US Dollar"
 	})
-	if err := f.Init(makeContext(1, 0)); err != nil {
+	if err := f.Init(makeStrategyConfig(1, 0)); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 	tx := transaction.Transaction{Date: 20220903, PaymentCurrency: "EUR"}
@@ -105,7 +105,7 @@ func TestFilterEOFEmitsCountsPerOutput(t *testing.T) {
 	f := New("filter_period1", func(tx transaction.Transaction) bool {
 		return dates.InPeriod1(tx.Date)
 	})
-	if err := f.Init(makeContext(1, 1)); err != nil {
+	if err := f.Init(makeStrategyConfig(1, 1)); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 	matches := []uint32{20220901, 20220903, 20220905}

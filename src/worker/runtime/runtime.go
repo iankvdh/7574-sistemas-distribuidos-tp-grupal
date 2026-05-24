@@ -83,14 +83,14 @@ func New(cfg config.WorkerConfig) (*Worker, error) {
 		}
 	}
 
-	ctx := strategy.Context{
+	strategyCfg := strategy.StrategyConfig{
 		OutputCount:  len(outputs),
 		ReplicaID:    cfg.ReplicaID,
 		NReplicas:    cfg.NReplicas,
 		StrategyName: cfg.StrategyName,
 		MatchCount:   cfg.OutputsMatchCount,
 	}
-	if err := strat.Init(ctx); err != nil {
+	if err := strat.Init(strategyCfg); err != nil {
 		closeAll(input, ringIn, ringOut, outputs)
 		return nil, err
 	}

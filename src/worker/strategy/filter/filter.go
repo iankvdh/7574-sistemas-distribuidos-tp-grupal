@@ -19,7 +19,7 @@ type Predicate func(transaction.Transaction) bool
 type Filter struct {
 	name        string
 	predicate   Predicate
-	ctx         strategy.Context
+	cfg         strategy.StrategyConfig
 	state       map[inner.ClientID]*filterState
 	matchCount  int
 	coordinator *eof.RingCoordinator
@@ -40,13 +40,13 @@ func New(name string, predicate Predicate) *Filter {
 
 func (f *Filter) Name() string { return f.name }
 
-func (f *Filter) Init(ctx strategy.Context) error {
-	f.ctx = ctx
-	f.matchCount = ctx.MatchCount
-	if f.matchCount < 0 || f.matchCount > ctx.OutputCount {
-		return fmt.Errorf("invalid MatchCount=%d for %d outputs", f.matchCount, ctx.OutputCount)
+func (f *Filter) Init(cfg strategy.StrategyConfig) error {
+	f.cfg = cfg
+	f.matchCount = cfg.MatchCount
+	if f.matchCount < 0 || f.matchCount > cfg.OutputCount {
+		return fmt.Errorf("invalid MatchCount=%d for %d outputs", f.matchCount, cfg.OutputCount)
 	}
-	f.coordinator = eof.NewRingCoordinator(ctx.ReplicaID, ctx.NReplicas)
+	f.coordinator = eof.NewRingCoordinator(cfg.ReplicaID, cfg.NReplicas)
 	return nil
 }
 
@@ -79,7 +79,7 @@ func (f *Filter) ProcessMessage(env *inner.Envelope) ([]strategy.Decision, strat
 	}
 
 	state.notMatched++
-	totalOutputs := f.ctx.OutputCount
+	totalOutputs := f.cfg.OutputCount
 	if totalOutputs == f.matchCount {
 		return nil, strategy.LocalCounts{Processed: 1, NotMatched: 1}, nil
 	}
@@ -113,7 +113,7 @@ func (f *Filter) OnRingToken(token *eof.Token) (strategy.EOFOutcome, error) {
 }
 
 func (f *Filter) buildEOFEmits(aggMatched, aggNotMatched uint64) []eof.EOFEmit {
-	totalOutputs := f.ctx.OutputCount
+	totalOutputs := f.cfg.OutputCount
 	emits := make([]eof.EOFEmit, 0, totalOutputs)
 	for i := 0; i < f.matchCount; i++ {
 		emits = append(emits, eof.EOFEmit{OutputIndex: i, Total: uint32(aggMatched)})

@@ -6,8 +6,8 @@ import (
 )
 
 // Decision is one item the runtime must publish. OutputIndices reference
-// Context outputs by position; ClientID picks the shard when an output is
-// sharded by client. Body carries the raw payload bytes (e.g. the serialized
+// StrategyConfig outputs by position; ClientID picks the shard when an output
+// is sharded by client. Body carries the raw payload bytes (e.g. the serialized
 // transaction). The runtime batches multiple Decisions into a single InnerBatch
 // envelope per (output, shard, client).
 type Decision struct {
@@ -22,7 +22,7 @@ type LocalCounts struct {
 	NotMatched uint64
 }
 
-type Context struct {
+type StrategyConfig struct {
 	OutputCount  int
 	ReplicaID    int
 	NReplicas    int
@@ -38,7 +38,7 @@ type EOFOutcome struct {
 }
 
 type Strategy interface {
-	Init(ctx Context) error
+	Init(cfg StrategyConfig) error
 	ProcessMessage(env *inner.Envelope) ([]Decision, LocalCounts, error)
 	OnUpstreamEOF(env *inner.Envelope) (EOFOutcome, error)
 	OnRingToken(token *eof.Token) (EOFOutcome, error)
