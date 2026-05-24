@@ -9,6 +9,9 @@ type OutputMessage struct {
 	OutputIndices []int // output target indices to send the message to
 	Body          []byte
 	ClientID      inner.ClientID // used for sharding; ignored if output is not sharded
+	RoutingKey    string
+	BatchItemKind inner.MsgKind
+	BatchQueryID  uint8
 }
 
 type LocalCounts struct {
@@ -24,7 +27,9 @@ type StrategyConfig struct {
 	StrategyName string
 	// MatchCount splits outputs into match [0, MatchCount) and no-match
 	// [MatchCount, OutputCount). Filters use it; other strategies ignore it.
-	MatchCount int
+	MatchCount   int
+	RingQueueIn  string
+	RingQueueOut string
 }
 
 type EOFOutcome struct {

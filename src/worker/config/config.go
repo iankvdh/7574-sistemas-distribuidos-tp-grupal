@@ -95,9 +95,6 @@ func Load() (WorkerConfig, error) {
 	if (ringQueueIn == "") != (ringQueueOut == "") {
 		return WorkerConfig{}, errors.New("RING_QUEUE_IN and RING_QUEUE_OUT must be set together")
 	}
-	if nReplicas > 1 && ringQueueIn == "" {
-		return WorkerConfig{}, errors.New("RING_QUEUE_IN/RING_QUEUE_OUT are required when N_REPLICAS>1")
-	}
 
 	return WorkerConfig{
 		StrategyName:          strategyName,
