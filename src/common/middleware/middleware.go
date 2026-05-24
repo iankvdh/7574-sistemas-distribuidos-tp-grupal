@@ -45,6 +45,11 @@ type Middleware interface {
 	//Si ocurre un error interno que no puede resolverse devuelve ErrMessageMiddlewareMessage.
 	Send(msg Message) error
 
+	//SendWithKey publica un mensaje a un exchange direct con la routing key
+	//indicada (override de la routing key fija del constructor). En middlewares
+	//que no soportan routing keys (queue middleware) se delega a Send.
+	SendWithKey(msg Message, routingKey string) error
+
 	//Se desconecta de la cola o exchange al que estaba conectado.
 	//Si ocurre un error interno que no puede resolverse devuelve ErrMessageMiddlewareClose.
 	Close() error
