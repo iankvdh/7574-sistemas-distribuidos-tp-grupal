@@ -81,14 +81,14 @@ workers:
     outputs:
       - queue:q1_input
 
-  - name: drain_q1_input
-    strategy: drain
-    replicas: 1
+  - name: sharder_q1
+    strategy: sharder_q1
+    replicas: 3
     input: queue:q1_input
+    outputs:
+      - direct_exchange:results
     env:
-      DRAIN_OUTPUT_FILE: /results/drain_q1_input.csv
-    volumes:
-      - ./results:/results
+      N_FINAL_JOINERS: "2"
 
   - name: drain_period1_wire_ach
     strategy: drain
@@ -126,17 +126,8 @@ workers:
       - direct_exchange:results
     env:
       N_PATH_FINDERS: "3"
-      N_FINAL_JOINERS: "1"
+      N_FINAL_JOINERS: "2"
       MIN_INTERMEDIATES: "5"
-
-  - name: drain_q4
-    strategy: drain_q4
-    replicas: 1
-    input: direct_exchange:results:0
-    env:
-      DRAIN_OUTPUT_FILE: /results/drain_q4.csv
-    volumes:
-      - ./results:/results
 
   - name: drain_period2_usd
     strategy: drain
@@ -155,3 +146,25 @@ workers:
       DRAIN_OUTPUT_FILE: /results/drain_usd_joined.csv
     volumes:
       - ./results:/results
+
+  - name: final_joiner_q1
+    strategy: final_joiner
+    replicas: 2
+    input: direct_exchange:results:{REPLICA_ID}
+    outputs:
+      - final_queue:final_1
+      - final_queue:final_2
+    env:
+      QUERY_ID: "1"
+      EXPECTED_EOFS: "3"      # = N_REPLICAS de sharder_q1
+
+  - name: final_joiner_q4
+    strategy: final_joiner
+    replicas: 2
+    input: direct_exchange:results:{REPLICA_ID}
+    outputs:
+      - final_queue:final_1
+      - final_queue:final_2
+    env:
+      QUERY_ID: "4"
+      EXPECTED_EOFS: "3"      # = K_COUNTERS (replicas de counter_q4)
