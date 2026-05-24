@@ -25,13 +25,13 @@ func (s *Strategy) Init(cfg strategy.StrategyConfig) error {
 
 func (s *Strategy) Name() string { return name }
 
-func (s *Strategy) ProcessMessage(env *inner.Envelope) ([]strategy.Decision, strategy.LocalCounts, error) {
+func (s *Strategy) ProcessMessage(env *inner.Envelope) ([]strategy.OutputMessage, strategy.LocalCounts, error) {
 	indices := make([]int, 0, s.cfg.OutputCount)
 	for i := 0; i < s.cfg.OutputCount; i++ {
 		indices = append(indices, i)
 	}
 	s.counts[env.ClientID]++
-	return []strategy.Decision{{OutputIndices: indices, Body: env.Payload, ClientID: env.ClientID}}, strategy.LocalCounts{Processed: 1, Matched: 1}, nil
+	return []strategy.OutputMessage{{OutputIndices: indices, Body: env.Payload, ClientID: env.ClientID}}, strategy.LocalCounts{Processed: 1, Matched: 1}, nil
 }
 
 func (s *Strategy) OnUpstreamEOF(env *inner.Envelope) (strategy.EOFOutcome, error) {

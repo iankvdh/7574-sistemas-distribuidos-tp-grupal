@@ -5,7 +5,7 @@ import (
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/messageprotocol/inner"
 )
 
-type Decision struct {
+type OutputMessage struct {
 	OutputIndices []int // output target indices to send the message to
 	Body          []byte
 	ClientID      inner.ClientID // used for sharding; ignored if output is not sharded
@@ -34,7 +34,7 @@ type EOFOutcome struct {
 
 type Strategy interface {
 	Init(cfg StrategyConfig) error
-	ProcessMessage(env *inner.Envelope) ([]Decision, LocalCounts, error)
+	ProcessMessage(env *inner.Envelope) ([]OutputMessage, LocalCounts, error)
 	OnUpstreamEOF(env *inner.Envelope) (EOFOutcome, error)
 	OnRingToken(token *eof.Token) (EOFOutcome, error)
 	Name() string

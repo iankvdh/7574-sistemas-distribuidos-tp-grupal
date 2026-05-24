@@ -45,7 +45,7 @@ func (s *Strategy) Init(cfg strategy.StrategyConfig) error {
 	return nil
 }
 
-func (s *Strategy) ProcessMessage(env *inner.Envelope) ([]strategy.Decision, strategy.LocalCounts, error) {
+func (s *Strategy) ProcessMessage(env *inner.Envelope) ([]strategy.OutputMessage, strategy.LocalCounts, error) {
 	if env.Kind != inner.TransactionMessage {
 		return nil, strategy.LocalCounts{Processed: 1}, nil
 	}

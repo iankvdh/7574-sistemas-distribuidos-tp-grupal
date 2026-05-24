@@ -53,7 +53,7 @@ func (f *Filter) Init(cfg strategy.StrategyConfig) error {
 // ProcessMessage routes the transaction to match or no-match outputs. When no
 // no-match outputs are configured the message is dropped, but the local counter
 // still grows so ring totals stay correct.
-func (f *Filter) ProcessMessage(env *inner.Envelope) ([]strategy.Decision, strategy.LocalCounts, error) {
+func (f *Filter) ProcessMessage(env *inner.Envelope) ([]strategy.OutputMessage, strategy.LocalCounts, error) {
 	if env.Kind != inner.TransactionMessage {
 		return nil, strategy.LocalCounts{}, fmt.Errorf("filter %s expects TransactionMessage, got kind=%d", f.name, env.Kind)
 	}
@@ -69,7 +69,7 @@ func (f *Filter) ProcessMessage(env *inner.Envelope) ([]strategy.Decision, strat
 		if f.matchCount == 0 {
 			return nil, strategy.LocalCounts{Processed: 1, Matched: 1}, nil
 		}
-		return []strategy.Decision{{
+		return []strategy.OutputMessage{{
 			OutputIndices: rangeIndices(0, f.matchCount),
 			Body:          env.Payload,
 			ClientID:      env.ClientID,
@@ -81,7 +81,7 @@ func (f *Filter) ProcessMessage(env *inner.Envelope) ([]strategy.Decision, strat
 	if totalOutputs == f.matchCount {
 		return nil, strategy.LocalCounts{Processed: 1, NotMatched: 1}, nil
 	}
-	return []strategy.Decision{{
+	return []strategy.OutputMessage{{
 		OutputIndices: rangeIndices(f.matchCount, totalOutputs),
 		Body:          env.Payload,
 		ClientID:      env.ClientID,

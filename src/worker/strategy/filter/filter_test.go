@@ -45,12 +45,12 @@ func TestFilterMatchRoutesToMatchOutputs(t *testing.T) {
 	tx := transaction.Transaction{Date: 20220903, FromBank: 1, FromAccount: "a", ToBank: 2, ToAccount: "b", AmountPaid: 12.0, PaymentCurrency: "USD", PaymentFormat: "WIRE"}
 	env := envelopeForTransaction(t, tx)
 
-	decisions, counts, err := f.ProcessMessage(env)
+	outputMessages, counts, err := f.ProcessMessage(env)
 	if err != nil {
 		t.Fatalf("ProcessMessage: %v", err)
 	}
-	if len(decisions) != 1 || len(decisions[0].OutputIndices) != 1 || decisions[0].OutputIndices[0] != 0 {
-		t.Fatalf("expected single decision to output 0 (match), got %+v", decisions)
+	if len(outputMessages) != 1 || len(outputMessages[0].OutputIndices) != 1 || outputMessages[0].OutputIndices[0] != 0 {
+		t.Fatalf("expected single output message to output 0 (match), got %+v", outputMessages)
 	}
 	if counts.Matched != 1 || counts.NotMatched != 0 {
 		t.Fatalf("unexpected counts: %+v", counts)
@@ -67,12 +67,12 @@ func TestFilterNoMatchRoutesToNomatchOutputs(t *testing.T) {
 	tx := transaction.Transaction{Date: 20220601, PaymentCurrency: "USD", PaymentFormat: "WIRE"}
 	env := envelopeForTransaction(t, tx)
 
-	decisions, counts, err := f.ProcessMessage(env)
+	outputMessages, counts, err := f.ProcessMessage(env)
 	if err != nil {
 		t.Fatalf("ProcessMessage: %v", err)
 	}
-	if len(decisions) != 1 || len(decisions[0].OutputIndices) != 1 || decisions[0].OutputIndices[0] != 1 {
-		t.Fatalf("expected single decision to output 1 (nomatch), got %+v", decisions)
+	if len(outputMessages) != 1 || len(outputMessages[0].OutputIndices) != 1 || outputMessages[0].OutputIndices[0] != 1 {
+		t.Fatalf("expected single output message to output 1 (nomatch), got %+v", outputMessages)
 	}
 	if counts.NotMatched != 1 || counts.Matched != 0 {
 		t.Fatalf("unexpected counts: %+v", counts)
@@ -89,12 +89,12 @@ func TestFilterNoMatchDiscardsWhenNoNomatchOutput(t *testing.T) {
 	tx := transaction.Transaction{Date: 20220903, PaymentCurrency: "EUR"}
 	env := envelopeForTransaction(t, tx)
 
-	decisions, counts, err := f.ProcessMessage(env)
+	outputMessages, counts, err := f.ProcessMessage(env)
 	if err != nil {
 		t.Fatalf("ProcessMessage: %v", err)
 	}
-	if len(decisions) != 0 {
-		t.Fatalf("expected 0 decisions when no-match output is absent, got %+v", decisions)
+	if len(outputMessages) != 0 {
+		t.Fatalf("expected 0 output messages when no-match output is absent, got %+v", outputMessages)
 	}
 	if counts.NotMatched != 1 {
 		t.Fatalf("counter should still grow: %+v", counts)
