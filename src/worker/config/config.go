@@ -13,12 +13,14 @@ const (
 )
 
 type WorkerConfig struct {
-	StrategyName          string
-	ReplicaID             int
-	NReplicas             int
-	Input                 string // raw INPUT env var
-	InputConfig           InputConfig
-	Outputs               []OutputConfig
+	StrategyName string
+	ReplicaID    int
+	NReplicas    int
+	Input        string // raw INPUT env var
+	InputConfig  InputConfig
+	Outputs      []OutputConfig
+
+	// number of outputs that should receive matching transactions; the rest receive non-matching ones
 	OutputsMatchCount     int
 	RingQueueIn           string // optional: queue this replica consumes ring tokens from
 	RingQueueOut          string // optional: queue this replica publishes ring tokens to (next replica)
@@ -77,6 +79,9 @@ func Load() (WorkerConfig, error) {
 	}
 	if outputsMatchCount < 0 {
 		return WorkerConfig{}, errors.New("OUTPUTS_MATCH_COUNT must be non-negative")
+	}
+	if outputsMatchCount > len(outputs) {
+		return WorkerConfig{}, errors.New("OUTPUTS_MATCH_COUNT exceeds number of OUTPUT_* outputConfigs")
 	}
 
 	maxInternalBatchBytes, err := env.IntWithDefault("MAX_INTERNAL_BATCH_BYTES", defaultMaxInternalBatchBytes, true)
