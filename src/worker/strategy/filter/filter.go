@@ -56,16 +56,10 @@ func (f *Filter) WithNoMatchProjection(p Projection) *Filter {
 func (f *Filter) Init(cfg strategy.StrategyConfig) error {
 	f.cfg = cfg
 	f.matchCount = cfg.MatchCount
-	if f.matchCount < 0 || f.matchCount > cfg.OutputCount {
-		return fmt.Errorf("invalid MatchCount=%d for %d outputs", f.matchCount, cfg.OutputCount)
-	}
 	f.coordinator = eof.NewRingCoordinator(cfg.ReplicaID, cfg.NReplicas)
 	return nil
 }
 
-// ProcessMessage routes the transaction to match or no-match outputs. When no
-// no-match outputs are configured the message is dropped, but the local counter
-// still grows so ring totals stay correct.
 func (f *Filter) ProcessMessage(env *inner.Envelope) ([]strategy.OutputMessage, strategy.LocalCounts, error) {
 	if env.Kind != inner.TransactionMessage {
 		return nil, strategy.LocalCounts{}, fmt.Errorf("filter %s expects TransactionMessage, got kind=%d", f.name, env.Kind)
