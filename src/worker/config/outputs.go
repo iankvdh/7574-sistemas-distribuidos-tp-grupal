@@ -16,6 +16,12 @@ const (
 	// KindShardedQueues fans messages out to K named queues (PREFIX_0..PREFIX_{K-1}),
 	// choosing the destination by hashing client_id so each client sticks to one shard.
 	KindShardedQueues
+	// KindFinalQueue is a regular AMQP queue, but the runtime serializes payloads
+	// addressed at it as FinalQueryResultBatch envelopes (instead of InnerBatch),
+	// so the gateway's final-queue consumer can pick them up unchanged. Used by
+	// the final_joiner strategy to publish per-client query results to
+	// `final_<gatewayID>`.
+	KindFinalQueue
 )
 
 type OutputConfig struct {
@@ -72,6 +78,11 @@ func parseOutputConfig(raw string, idx int) (OutputConfig, error) {
 			return OutputConfig{}, fmt.Errorf("OUTPUT_%d invalid shard count in %q", idx, raw)
 		}
 		return OutputConfig{Name: prefix, Kind: KindShardedQueues, ShardCount: K}, nil
+	case "final_queue":
+		if rest == "" {
+			return OutputConfig{}, fmt.Errorf("OUTPUT_%d invalid final_queue target", idx)
+		}
+		return OutputConfig{Name: rest, Kind: KindFinalQueue}, nil
 	default:
 		return OutputConfig{}, fmt.Errorf("OUTPUT_%d unsupported kind %q", idx, kind)
 	}

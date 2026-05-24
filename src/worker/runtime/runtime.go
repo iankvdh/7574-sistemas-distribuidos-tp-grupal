@@ -409,7 +409,7 @@ func (w *Worker) flushBatch(idx, shard int, key batchKey) error {
 	if pending == nil || len(pending.items) == 0 {
 		return nil
 	}
-	msg, err := inner.SerializeInnerBatch(pending.queryID, pending.itemKind, pending.gatewayID, pending.clientID, pending.items)
+	msg, err := w.serializePending(buf.target, pending)
 	if err != nil {
 		return err
 	}
@@ -418,6 +418,24 @@ func (w *Worker) flushBatch(idx, shard int, key batchKey) error {
 	}
 	delete(buf.perShard[shard], key)
 	return nil
+}
+
+// serializePending picks the on-wire envelope shape for a pending batch based
+// on the target kind: queue/direct_exchange/sharded_queues use InnerBatch (so
+// the downstream worker can unwrap it); final_queue uses FinalQueryResultBatch
+// (so the gateway's final consumer can pick it up unchanged).
+func (w *Worker) serializePending(target OutputTarget, pending *pendingBatch) (*middleware.Message, error) {
+	if target.Kind == config.KindFinalQueue {
+		items := make([]inner.QueryResultItem, 0, len(pending.items))
+		for _, payload := range pending.items {
+			items = append(items, inner.QueryResultItem{
+				QueryID: pending.queryID,
+				Data:    string(payload),
+			})
+		}
+		return inner.SerializeFinalQueryResultBatch(pending.gatewayID, pending.clientID, items)
+	}
+	return inner.SerializeInnerBatch(pending.queryID, pending.itemKind, pending.gatewayID, pending.clientID, pending.items)
 }
 
 func sendOnTarget(mw middleware.Middleware, msg middleware.Message, routingKey string) error {
@@ -477,11 +495,11 @@ func (w *Worker) publishEOFs(env *inner.Envelope, emits []eof.EOFEmit) error {
 		if e.OutputIndex < 0 || e.OutputIndex >= len(w.outputs) {
 			return errors.New("strategy returned invalid output index for EOF")
 		}
-		msg, err := inner.SerializeInternalEOF(env.GatewayID, env.ClientID, e.Total)
+		target := w.outputs[e.OutputIndex]
+		msg, err := w.serializeEOF(target, env, e)
 		if err != nil {
 			return err
 		}
-		target := w.outputs[e.OutputIndex]
 		shard := w.shardFor(target, env.ClientID)
 		if shard >= len(target.Middlewares) {
 			return errors.New("misconfigured target: shard index out of range")
@@ -491,6 +509,19 @@ func (w *Worker) publishEOFs(env *inner.Envelope, emits []eof.EOFEmit) error {
 		}
 	}
 	return nil
+}
+
+// serializeEOF picks the on-wire EOF envelope shape based on the target kind.
+// Internal pipeline targets get an InternalEOF (downstream workers count them);
+// final_queue targets get a FinalQueryResultBatch carrying a single
+// QueryResultItem{Data: "EOF"} (the gateway's final consumer interprets that
+// item as "this query is done for this client").
+func (w *Worker) serializeEOF(target OutputTarget, env *inner.Envelope, e eof.EOFEmit) (*middleware.Message, error) {
+	if target.Kind == config.KindFinalQueue {
+		items := []inner.QueryResultItem{{QueryID: e.QueryID, Data: "EOF"}}
+		return inner.SerializeFinalQueryResultBatch(env.GatewayID, env.ClientID, items)
+	}
+	return inner.SerializeInternalEOF(env.GatewayID, env.ClientID, e.Total)
 }
 
 func (w *Worker) reenqueueUpstreamEOF(clientID inner.ClientID) error {
