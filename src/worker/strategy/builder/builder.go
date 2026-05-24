@@ -10,6 +10,7 @@ import (
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/joiner"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/noop"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/pathfinder"
+	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/finaljoiner"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/sharder"
 	sharder_q1 "github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/sharder_q1"
 )
@@ -57,6 +58,8 @@ func Build(name string) (strategy.Strategy, error) {
 		return sharder.New(), nil
 	case "sharder_q1":
 		return sharder_q1.New(), nil
+	case "final_joiner":
+		return finaljoiner.New(), nil
 	case "path_finder_q4":
 		return pathfinder.New(), nil
 	case "counter_q4":
