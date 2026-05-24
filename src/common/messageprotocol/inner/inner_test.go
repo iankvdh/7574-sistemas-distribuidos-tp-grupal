@@ -168,7 +168,7 @@ func TestSerializeDeserializeInnerBatch(t *testing.T) {
 		{},
 		[]byte("\x00\x01\x02\x03"),
 	}
-	msg, err := SerializeInnerBatch(TransactionMessage, 7, "client-batch", items)
+	msg, err := SerializeInnerBatch(0, TransactionMessage, 7, "client-batch", items)
 	if err != nil {
 		t.Fatalf("SerializeInnerBatch returned error: %v", err)
 	}
@@ -178,6 +178,9 @@ func TestSerializeDeserializeInnerBatch(t *testing.T) {
 	}
 	if envelope.Kind != InnerBatch {
 		t.Fatalf("unexpected envelope kind: %d", envelope.Kind)
+	}
+	if envelope.QueryID != 0 {
+		t.Fatalf("unexpected envelope QueryID: %d", envelope.QueryID)
 	}
 	itemKind, got, err := DeserializeInnerBatch(envelope)
 	if err != nil {
@@ -196,14 +199,35 @@ func TestSerializeDeserializeInnerBatch(t *testing.T) {
 	}
 }
 
+func TestInnerBatchPropagatesQueryID(t *testing.T) {
+	msg, err := SerializeInnerBatch(4, ShardedTxMessage, 1, "client-q4", [][]byte{{0xAA}})
+	if err != nil {
+		t.Fatalf("SerializeInnerBatch returned error: %v", err)
+	}
+	env, err := DeserializeEnvelope(msg)
+	if err != nil {
+		t.Fatalf("DeserializeEnvelope returned error: %v", err)
+	}
+	if env.QueryID != 4 {
+		t.Fatalf("expected QueryID=4 propagated on envelope, got %d", env.QueryID)
+	}
+	itemKind, items, err := DeserializeInnerBatch(env)
+	if err != nil {
+		t.Fatalf("DeserializeInnerBatch returned error: %v", err)
+	}
+	if itemKind != ShardedTxMessage || len(items) != 1 || items[0][0] != 0xAA {
+		t.Fatalf("payload roundtrip mismatch: kind=%d items=%v", itemKind, items)
+	}
+}
+
 func TestInnerBatchEmpty(t *testing.T) {
-	if _, err := SerializeInnerBatch(TransactionMessage, 1, "c", nil); err == nil {
+	if _, err := SerializeInnerBatch(0, TransactionMessage, 1, "c", nil); err == nil {
 		t.Fatalf("expected error for empty batch")
 	}
 }
 
 func TestInnerBatchInvalidItemKind(t *testing.T) {
-	if _, err := SerializeInnerBatch(InternalEOF, 1, "c", [][]byte{{1}}); err == nil {
+	if _, err := SerializeInnerBatch(0, InternalEOF, 1, "c", [][]byte{{1}}); err == nil {
 		t.Fatalf("expected error for non-payload item kind")
 	}
 }

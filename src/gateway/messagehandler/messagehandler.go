@@ -43,7 +43,7 @@ func (handler *MessageHandler) SerializeTransactionBatch(batch []transaction.Tra
 		}
 		items = append(items, payload)
 	}
-	msg, err := inner.SerializeInnerBatch(inner.TransactionMessage, handler.gatewayID, handler.clientID, items)
+	msg, err := inner.SerializeInnerBatch(0, inner.TransactionMessage, handler.gatewayID, handler.clientID, items)
 	if err != nil {
 		return nil, err
 	}
@@ -69,7 +69,7 @@ func (handler *MessageHandler) SerializeAccountBatch(batch []account.Account) (*
 		}
 		items = append(items, payload)
 	}
-	msg, err := inner.SerializeInnerBatch(inner.AccountMessage, handler.gatewayID, handler.clientID, items)
+	msg, err := inner.SerializeInnerBatch(0, inner.AccountMessage, handler.gatewayID, handler.clientID, items)
 	if err != nil {
 		return nil, err
 	}
