@@ -14,6 +14,7 @@ const (
 	defaultConnectTimeoutMs      = 800
 	defaultMaxExternalBatchBytes = 8192
 	defaultResultsDir            = "results"
+	defaultExpectedQueryEOFs     = 5
 )
 
 func Load() (client.ClientConfig, error) {
@@ -64,17 +65,23 @@ func Load() (client.ClientConfig, error) {
 		return client.ClientConfig{}, err
 	}
 
+	expectedQueryEOFs, err := env.IntWithDefault("EXPECTED_QUERY_EOFS", defaultExpectedQueryEOFs, true)
+	if err != nil {
+		return client.ClientConfig{}, err
+	}
+
 	return client.ClientConfig{
-		GatewayPrefix:      gatewayPrefix,
-		GatewayAmount:      gatewayAmount,
-		GatewayPort:        gatewayPort,
-		InputTransactions:  inputTransactions,
-		InputAccounts:      inputAccounts,
+		GatewayPrefix:         gatewayPrefix,
+		GatewayAmount:         gatewayAmount,
+		GatewayPort:           gatewayPort,
+		InputTransactions:     inputTransactions,
+		InputAccounts:         inputAccounts,
 		ResultsDir:            env.StringWithDefault("RESULTS_DIR", defaultResultsDir),
 		MaxExternalBatchBytes: maxExternalBatchBytes,
+		ExpectedQueryEOFs:     expectedQueryEOFs,
 		ConnectMaxAttempts:    connectMaxAttempts,
-		BackoffBase:        time.Duration(backoffBaseMs) * time.Millisecond,
-		BackoffMax:         time.Duration(backoffMaxMs) * time.Millisecond,
-		ConnectTimeout:     time.Duration(connectTimeoutMs) * time.Millisecond,
+		BackoffBase:           time.Duration(backoffBaseMs) * time.Millisecond,
+		BackoffMax:            time.Duration(backoffMaxMs) * time.Millisecond,
+		ConnectTimeout:        time.Duration(connectTimeoutMs) * time.Millisecond,
 	}, nil
 }

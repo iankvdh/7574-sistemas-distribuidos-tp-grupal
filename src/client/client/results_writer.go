@@ -53,7 +53,7 @@ func newQueryResultsWriter(outputDir, clientID string) (*queryResultsWriter, err
 	return &queryResultsWriter{
 		outputDir: outputDir,
 		clientID:  clientID,
-		files:     make(map[uint8]*queryResultFile, requiredQueryEOFs),
+		files:     make(map[uint8]*queryResultFile),
 	}, nil
 }
 

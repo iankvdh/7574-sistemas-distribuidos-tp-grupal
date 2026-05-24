@@ -26,6 +26,7 @@ type ClientConfig struct {
 	InputAccounts         string
 	ResultsDir            string
 	MaxExternalBatchBytes int
+	ExpectedQueryEOFs     int
 	ConnectMaxAttempts    int
 	BackoffBase           time.Duration
 	BackoffMax            time.Duration

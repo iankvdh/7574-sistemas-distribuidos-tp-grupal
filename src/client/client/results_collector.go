@@ -17,7 +17,7 @@ func (client *Client) initResultsCollector() error {
 
 	client.results = &resultsCollector{
 		writer:     writer,
-		eofByQuery: make(map[uint8]struct{}, requiredQueryEOFs),
+		eofByQuery: make(map[uint8]struct{}, client.config.ExpectedQueryEOFs),
 	}
 	return nil
 }
@@ -32,8 +32,8 @@ func (client *Client) closeResultsCollector() error {
 }
 
 func (client *Client) hasAllQueryEOFs() bool {
-	if client.results == nil {
+	if client.results == nil || client.config.ExpectedQueryEOFs <= 0 {
 		return false
 	}
-	return len(client.results.eofByQuery) == requiredQueryEOFs
+	return len(client.results.eofByQuery) >= client.config.ExpectedQueryEOFs
 }
