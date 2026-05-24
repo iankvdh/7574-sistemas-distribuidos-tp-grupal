@@ -17,6 +17,7 @@ services:
       sharder_q4: { condition: service_started }
       path_finder_q4: { condition: service_started }
       counter_q4: { condition: service_started }
+      drain_q4: { condition: service_started }
       drain_period2_usd: { condition: service_started }
       drain_usd_joined: { condition: service_started }
     env_file:
@@ -233,6 +234,21 @@ services:
       - MIN_INTERMEDIATES=5
       - N_FINAL_JOINERS=1
       - N_PATH_FINDERS=1
+  drain_q4:
+    build: { context: ./src/, dockerfile: worker/Dockerfile }
+    depends_on: { rabbitmq: { condition: service_healthy } }
+    env_file:
+      - .env
+    environment:
+      - STRATEGY=drain_q4
+      - REPLICA_ID=0
+      - N_REPLICAS=1
+      - INPUT=direct_exchange:results:0
+      - OUTPUTS_MATCH_COUNT=0
+      - LOG_LEVEL=info
+      - DRAIN_OUTPUT_FILE=/results/drain_q4.csv
+    volumes:
+      - ./results:/results
   drain_period2_usd:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
     depends_on: { rabbitmq: { condition: service_healthy } }

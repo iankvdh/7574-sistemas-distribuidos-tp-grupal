@@ -126,8 +126,17 @@ workers:
       - direct_exchange:results
     env:
       N_PATH_FINDERS: "3"
-      N_FINAL_JOINERS: "3"
+      N_FINAL_JOINERS: "1"
       MIN_INTERMEDIATES: "5"
+
+  - name: drain_q4
+    strategy: drain_q4
+    replicas: 1
+    input: direct_exchange:results:0
+    env:
+      DRAIN_OUTPUT_FILE: /results/drain_q4.csv
+    volumes:
+      - ./results:/results
 
   - name: drain_period2_usd
     strategy: drain
