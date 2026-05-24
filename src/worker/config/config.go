@@ -16,7 +16,9 @@ type WorkerConfig struct {
 	StrategyName          string
 	ReplicaID             int
 	NReplicas             int
-	Input                 string // raw INPUT env var: queue:NAME or direct_exchange:NAME[:KEY]
+	Input                 string // raw INPUT env var
+	InputBinding          OutputBinding
+	Outputs               []OutputBinding
 	OutputsMatchCount     int
 	RingQueueIn           string // optional: queue this replica consumes ring tokens from
 	RingQueueOut          string // optional: queue this replica publishes ring tokens to (next replica)
@@ -45,6 +47,16 @@ func Load() (WorkerConfig, error) {
 	}
 
 	input, err := env.RequiredString("INPUT")
+	if err != nil {
+		return WorkerConfig{}, err
+	}
+
+	inputBinding, err := ParseInput(input)
+	if err != nil {
+		return WorkerConfig{}, err
+	}
+
+	outputs, err := ParseOutputs()
 	if err != nil {
 		return WorkerConfig{}, err
 	}
@@ -87,6 +99,8 @@ func Load() (WorkerConfig, error) {
 		ReplicaID:             replicaID,
 		NReplicas:             nReplicas,
 		Input:                 input,
+		InputBinding:          inputBinding,
+		Outputs:               outputs,
 		OutputsMatchCount:     outputsMatchCount,
 		RingQueueIn:           ringQueueIn,
 		RingQueueOut:          ringQueueOut,

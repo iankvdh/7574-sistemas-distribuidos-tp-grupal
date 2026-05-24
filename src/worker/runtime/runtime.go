@@ -16,7 +16,6 @@ import (
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/config"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/builder"
-	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/topology"
 )
 
 type Worker struct {
@@ -25,7 +24,7 @@ type Worker struct {
 	input               middleware.Middleware
 	ringIn              middleware.Middleware
 	ringOut             middleware.Middleware
-	outputs             []topology.OutputTarget
+	outputs             []OutputTarget
 	outputTargetBuffers []*outputTargetBuffer
 	ctx                 context.Context
 	cancel              context.CancelFunc
@@ -39,7 +38,7 @@ type Worker struct {
 }
 
 type outputTargetBuffer struct {
-	target   topology.OutputTarget
+	target   OutputTarget
 	perShard []map[inner.ClientID]*pendingBatch
 }
 
@@ -55,23 +54,14 @@ func New(cfg config.WorkerConfig) (*Worker, error) {
 		return nil, err
 	}
 
-	bindings, err := topology.ParseOutputs()
-	if err != nil {
-		return nil, err
-	}
-
 	conn := middleware.ConnSettings{Hostname: cfg.MomHost, Port: cfg.MomPort}
 
-	inputBinding, err := topology.ParseInput(cfg.Input)
-	if err != nil {
-		return nil, err
-	}
-	input, err := topology.BuildInputMiddleware(inputBinding, conn)
+	input, err := BuildInputMiddleware(cfg.InputBinding, conn)
 	if err != nil {
 		return nil, err
 	}
 
-	outputs, err := topology.BuildOutputTargets(bindings, conn)
+	outputs, err := BuildOutputTargets(cfg.Outputs, conn)
 	if err != nil {
 		_ = input.Close()
 		return nil, err
@@ -119,7 +109,7 @@ func New(cfg config.WorkerConfig) (*Worker, error) {
 	buffers := make([]*outputTargetBuffer, len(outputs))
 	for i, target := range outputs {
 		shards := 1
-		if target.Kind == topology.KindShardedQueues {
+		if target.Kind == config.KindShardedQueues {
 			shards = target.ShardCount
 		}
 		perShard := make([]map[inner.ClientID]*pendingBatch, shards)
@@ -415,8 +405,8 @@ func (w *Worker) flushAll() {
 	}
 }
 
-func (w *Worker) shardFor(target topology.OutputTarget, clientID inner.ClientID) int {
-	if target.Kind == topology.KindShardedQueues {
+func (w *Worker) shardFor(target OutputTarget, clientID inner.ClientID) int {
+	if target.Kind == config.KindShardedQueues {
 		return hashing.Shard(string(clientID), target.ShardCount)
 	}
 	return 0
@@ -508,7 +498,7 @@ func (w *Worker) shutdownWatcher() {
 	}
 }
 
-func closeAll(input middleware.Middleware, ringIn middleware.Middleware, ringOut middleware.Middleware, outputs []topology.OutputTarget) {
+func closeAll(input middleware.Middleware, ringIn middleware.Middleware, ringOut middleware.Middleware, outputs []OutputTarget) {
 	if input != nil {
 		_ = input.Close()
 	}
