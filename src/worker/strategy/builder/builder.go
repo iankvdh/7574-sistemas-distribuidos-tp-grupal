@@ -58,6 +58,8 @@ func Build(name string) (strategy.Strategy, error) {
 		return pathfinder.New(), nil
 	case "counter_q4":
 		return counter.New(), nil
+	case "drain_q4":
+		return drain.NewQ4(), nil
 	default:
 		return nil, fmt.Errorf("unknown STRATEGY: %s", name)
 	}
