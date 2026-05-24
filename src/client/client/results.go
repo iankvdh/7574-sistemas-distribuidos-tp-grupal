@@ -9,7 +9,6 @@ import (
 
 const (
 	queryEOFStatus     = "EOF"
-	requiredQueryEOFs  = 5
 	minExpectedQueryID = 1
 	maxExpectedQueryID = 5
 )

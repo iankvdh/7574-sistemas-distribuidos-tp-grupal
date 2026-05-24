@@ -118,7 +118,8 @@ func TestWaitForAllQueryEOFs(t *testing.T) {
 		ingestAckCh:   make(chan struct{}, 1),
 		allQueryEOFCh: make(chan struct{}),
 		config: ClientConfig{
-			ResultsDir: t.TempDir(),
+			ResultsDir:        t.TempDir(),
+			ExpectedQueryEOFs: 5,
 		},
 	}
 	c.running.Store(true)
