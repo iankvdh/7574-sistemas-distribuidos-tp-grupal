@@ -31,7 +31,7 @@ workers:
     input: direct_exchange:period1_transactions
     match_count: 2
     outputs:
-      - direct_exchange:period1_usd_direct_exchange
+      - queue:period1_usd_for_drain
       - sharded_queues:joiner_usd_input:1
 
   - name: filter_period2
@@ -95,14 +95,35 @@ workers:
     volumes:
       - ./results:/results
 
-  - name: drain_period1_usd
-    strategy: drain
+  - name: sharder_q4
+    strategy: sharder_q4
     replicas: 1
-    input: direct_exchange:period1_usd_direct_exchange
+    input: queue:period1_usd_for_drain
+    outputs:
+      - direct_exchange:q4_account_shards
     env:
-      DRAIN_OUTPUT_FILE: /results/drain_period1_usd.csv
-    volumes:
-      - ./results:/results
+      K_PATH_FINDERS: "1"
+
+  - name: path_finder_q4
+    strategy: path_finder_q4
+    replicas: 1
+    input: direct_exchange:q4_account_shards:0
+    outputs:
+      - direct_exchange:q4_pair_shards
+    env:
+      K_COUNTERS: "1"
+      N_SHARDERS: "1"
+
+  - name: counter_q4
+    strategy: counter_q4
+    replicas: 1
+    input: direct_exchange:q4_pair_shards:0
+    outputs:
+      - direct_exchange:results
+    env:
+      N_PATH_FINDERS: "1"
+      N_FINAL_JOINERS: "1"
+      MIN_INTERMEDIATES: "5"
 
   - name: drain_period2_usd
     strategy: drain

@@ -98,14 +98,35 @@ workers:
     volumes:
       - ./results:/results
 
-  - name: drain_period1_usd
-    strategy: drain
-    replicas: 1
+  - name: sharder_q4
+    strategy: sharder_q4
+    replicas: 4
     input: queue:period1_usd_for_drain
+    outputs:
+      - direct_exchange:q4_account_shards
     env:
-      DRAIN_OUTPUT_FILE: /results/drain_period1_usd.csv
-    volumes:
-      - ./results:/results
+      K_PATH_FINDERS: "4"
+
+  - name: path_finder_q4
+    strategy: path_finder_q4
+    replicas: 4
+    input: direct_exchange:q4_account_shards:{REPLICA_ID}
+    outputs:
+      - direct_exchange:q4_pair_shards
+    env:
+      K_COUNTERS: "4"
+      N_SHARDERS: "4"
+
+  - name: counter_q4
+    strategy: counter_q4
+    replicas: 4
+    input: direct_exchange:q4_pair_shards:{REPLICA_ID}
+    outputs:
+      - direct_exchange:results
+    env:
+      N_PATH_FINDERS: "4"
+      N_FINAL_JOINERS: "4"
+      MIN_INTERMEDIATES: "5"
 
   - name: drain_period2_usd
     strategy: drain

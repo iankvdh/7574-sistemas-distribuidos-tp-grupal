@@ -14,7 +14,9 @@ services:
       filter_amount_lt_50: { condition: service_started }
       drain_q1_input: { condition: service_started }
       drain_period1_wire_ach: { condition: service_started }
-      drain_period1_usd: { condition: service_started }
+      sharder_q4: { condition: service_started }
+      path_finder_q4: { condition: service_started }
+      counter_q4: { condition: service_started }
       drain_period2_usd: { condition: service_started }
       drain_usd_joined: { condition: service_started }
     env_file:
@@ -85,7 +87,7 @@ services:
       - N_REPLICAS=1
       - INPUT=direct_exchange:period1_transactions
       - OUTPUTS_MATCH_COUNT=2
-      - OUTPUT_0=direct_exchange:period1_usd_direct_exchange
+      - OUTPUT_0=queue:period1_usd_for_drain
       - OUTPUT_1=sharded_queues:joiner_usd_input:1
       - LOG_LEVEL=info
   filter_period2:
@@ -186,21 +188,51 @@ services:
       - DRAIN_OUTPUT_FILE=/results/drain_period1_wire_ach.csv
     volumes:
       - ./results:/results
-  drain_period1_usd:
+  sharder_q4:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
     depends_on: { rabbitmq: { condition: service_healthy } }
     env_file:
       - .env
     environment:
-      - STRATEGY=drain
+      - STRATEGY=sharder_q4
       - REPLICA_ID=0
       - N_REPLICAS=1
-      - INPUT=direct_exchange:period1_usd_direct_exchange
+      - INPUT=queue:period1_usd_for_drain
       - OUTPUTS_MATCH_COUNT=0
+      - OUTPUT_0=direct_exchange:q4_account_shards
       - LOG_LEVEL=info
-      - DRAIN_OUTPUT_FILE=/results/drain_period1_usd.csv
-    volumes:
-      - ./results:/results
+      - K_PATH_FINDERS=1
+  path_finder_q4:
+    build: { context: ./src/, dockerfile: worker/Dockerfile }
+    depends_on: { rabbitmq: { condition: service_healthy } }
+    env_file:
+      - .env
+    environment:
+      - STRATEGY=path_finder_q4
+      - REPLICA_ID=0
+      - N_REPLICAS=1
+      - INPUT=direct_exchange:q4_account_shards:0
+      - OUTPUTS_MATCH_COUNT=0
+      - OUTPUT_0=direct_exchange:q4_pair_shards
+      - LOG_LEVEL=info
+      - K_COUNTERS=1
+      - N_SHARDERS=1
+  counter_q4:
+    build: { context: ./src/, dockerfile: worker/Dockerfile }
+    depends_on: { rabbitmq: { condition: service_healthy } }
+    env_file:
+      - .env
+    environment:
+      - STRATEGY=counter_q4
+      - REPLICA_ID=0
+      - N_REPLICAS=1
+      - INPUT=direct_exchange:q4_pair_shards:0
+      - OUTPUTS_MATCH_COUNT=0
+      - OUTPUT_0=direct_exchange:results
+      - LOG_LEVEL=info
+      - MIN_INTERMEDIATES=5
+      - N_FINAL_JOINERS=1
+      - N_PATH_FINDERS=1
   drain_period2_usd:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
     depends_on: { rabbitmq: { condition: service_healthy } }
