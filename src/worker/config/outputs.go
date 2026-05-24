@@ -102,17 +102,3 @@ func collectOutputIndices() []int {
 	sort.Ints(indices)
 	return indices
 }
-
-func ParseInput(raw string) (OutputConfig, error) {
-	if raw == "" {
-		return OutputConfig{}, fmt.Errorf("INPUT environment variable is required")
-	}
-	outputConfig, err := parseOutputConfig(raw, -1)
-	if err != nil {
-		return OutputConfig{}, err
-	}
-	if outputConfig.Kind == KindShardedQueues {
-		return OutputConfig{}, fmt.Errorf("INPUT does not accept sharded_queues; consume a specific queue:PREFIX_i")
-	}
-	return outputConfig, nil
-}
