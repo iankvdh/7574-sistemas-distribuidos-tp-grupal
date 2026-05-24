@@ -61,7 +61,7 @@ func New(cfg config.WorkerConfig) (*Worker, error) {
 		return nil, err
 	}
 
-	outputs, err := BuildOutputTargets(cfg.Outputs, conn)
+	outputTargets, err := BuildOutputTargets(cfg.Outputs, conn)
 	if err != nil {
 		_ = input.Close()
 		return nil, err
@@ -71,34 +71,58 @@ func New(cfg config.WorkerConfig) (*Worker, error) {
 	if cfg.RingQueueIn != "" {
 		ringIn, err = middleware.CreateQueueMiddleware(cfg.RingQueueIn, conn)
 		if err != nil {
-			closeAll(input, nil, nil, outputs)
+			closeAll(input, nil, nil, outputTargets)
 			return nil, err
 		}
 	}
 	if cfg.RingQueueOut != "" {
 		ringOut, err = middleware.CreateQueueMiddleware(cfg.RingQueueOut, conn)
 		if err != nil {
-			closeAll(input, ringIn, nil, outputs)
+			closeAll(input, ringIn, nil, outputTargets)
 			return nil, err
 		}
 	}
 
+	err = initStrategy(outputTargets, cfg, strat, input, ringIn, ringOut)
+	if err != nil {
+		return nil, err
+	}
+
+	runCtx, cancel := context.WithCancel(context.Background())
+	buffers := initOutputTargetBuffers(outputTargets)
+	w := &Worker{
+		cfg:                 cfg,
+		strategy:            strat,
+		input:               input,
+		ringIn:              ringIn,
+		ringOut:             ringOut,
+		outputs:             outputTargets,
+		outputTargetBuffers: buffers,
+		ctx:                 runCtx,
+		cancel:              cancel,
+		upstreamEOFs:        map[inner.ClientID]middleware.Message{},
+	}
+	return w, nil
+}
+
+func initStrategy(outputTargets []OutputTarget, cfg config.WorkerConfig, strat strategy.Strategy, input middleware.Middleware, ringIn middleware.Middleware, ringOut middleware.Middleware) error {
 	strategyCfg := strategy.StrategyConfig{
-		OutputCount:  len(outputs),
+		OutputCount:  len(outputTargets),
 		ReplicaID:    cfg.ReplicaID,
 		NReplicas:    cfg.NReplicas,
 		StrategyName: cfg.StrategyName,
 		MatchCount:   cfg.OutputsMatchCount,
 	}
 	if err := strat.Init(strategyCfg); err != nil {
-		closeAll(input, ringIn, ringOut, outputs)
-		return nil, err
+		closeAll(input, ringIn, ringOut, outputTargets)
+		return err
 	}
+	return nil
+}
 
-	runCtx, cancel := context.WithCancel(context.Background())
-
-	buffers := make([]*outputTargetBuffer, len(outputs))
-	for i, target := range outputs {
+func initOutputTargetBuffers(outputTargets []OutputTarget) []*outputTargetBuffer {
+	buffers := make([]*outputTargetBuffer, len(outputTargets))
+	for i, target := range outputTargets {
 		shards := 1
 		if target.Kind == config.KindShardedQueues {
 			shards = target.ShardCount
@@ -109,20 +133,7 @@ func New(cfg config.WorkerConfig) (*Worker, error) {
 		}
 		buffers[i] = &outputTargetBuffer{target: target, perShard: perShard}
 	}
-
-	w := &Worker{
-		cfg:                 cfg,
-		strategy:            strat,
-		input:               input,
-		ringIn:              ringIn,
-		ringOut:             ringOut,
-		outputs:             outputs,
-		outputTargetBuffers: buffers,
-		ctx:                 runCtx,
-		cancel:              cancel,
-		upstreamEOFs:        map[inner.ClientID]middleware.Message{},
-	}
-	return w, nil
+	return buffers
 }
 
 func (w *Worker) Run() error {
@@ -239,19 +250,19 @@ func (w *Worker) processSingleItem(env *inner.Envelope) error {
 }
 
 func (w *Worker) handleRingMessage(msg middleware.Message, ack func(), nack func()) {
-	envelope, err := inner.DeserializeEnvelope(&msg)
+	ringMessageEnvelope, err := inner.DeserializeEnvelope(&msg)
 	if err != nil {
 		slog.Error("Malformed envelope in ring queue", "err", err)
 		ack()
 		return
 	}
-	if envelope.Kind != inner.RingTokenMessage {
-		slog.Warn("Unexpected kind on ring queue", "kind", envelope.Kind)
+	if ringMessageEnvelope.Kind != inner.RingTokenMessage {
+		slog.Warn("Unexpected kind on ring queue", "kind", ringMessageEnvelope.Kind)
 		ack()
 		return
 	}
 
-	token, err := eof.UnmarshalToken(envelope.Payload)
+	token, err := eof.UnmarshalToken(ringMessageEnvelope.Payload)
 	if err != nil {
 		slog.Error("Malformed ring token", "err", err)
 		ack()
@@ -267,8 +278,8 @@ func (w *Worker) handleRingMessage(msg middleware.Message, ack func(), nack func
 		return
 	}
 
-	pseudoEnv := &inner.Envelope{GatewayID: envelope.GatewayID, ClientID: token.ClientID}
-	if err := w.applyOutcome(pseudoEnv, outcome); err != nil {
+	resultEnvelope := &inner.Envelope{GatewayID: ringMessageEnvelope.GatewayID, ClientID: token.ClientID}
+	if err := w.applyOutcome(resultEnvelope, outcome); err != nil {
 		w.strategyMu.Unlock()
 		slog.Error("Applying ring outcome failed", "client_id", token.ClientID, "err", err)
 		nack()
@@ -283,10 +294,6 @@ func (w *Worker) applyOutcome(env *inner.Envelope, outcome strategy.EOFOutcome) 
 	case eof.ActionNone:
 		return nil
 	case eof.ActionForwardToken:
-		// Every replica must flush its pending output batches for this client
-		// before its counts ride the ring token. Otherwise the aggregated total
-		// the initiator computes will exceed what downstream actually received,
-		// the ring fails the check, and re-enqueues the upstream EOF forever.
 		if err := w.flushClient(env.ClientID); err != nil {
 			return err
 		}
@@ -367,9 +374,6 @@ func (w *Worker) flushShard(idx, shard int, clientID inner.ClientID) error {
 	return nil
 }
 
-// flushClient flushes every output buffer (across all targets and shards) that
-// currently holds pending items for clientID. Called before publishing EOFs to
-// keep downstream count==upstream_total invariants.
 func (w *Worker) flushClient(clientID inner.ClientID) error {
 	for idx, buf := range w.outputTargetBuffers {
 		for shard := range buf.perShard {

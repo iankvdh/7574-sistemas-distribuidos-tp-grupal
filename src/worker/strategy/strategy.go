@@ -5,15 +5,10 @@ import (
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/messageprotocol/inner"
 )
 
-// Decision is one item the runtime must publish. OutputIndices reference
-// StrategyConfig outputs by position; ClientID picks the shard when an output
-// is sharded by client. Body carries the raw payload bytes (e.g. the serialized
-// transaction). The runtime batches multiple Decisions into a single InnerBatch
-// envelope per (output, shard, client).
 type Decision struct {
-	OutputIndices []int
+	OutputIndices []int // output target indices to send the message to
 	Body          string
-	ClientID      inner.ClientID
+	ClientID      inner.ClientID // used for sharding; ignored if output is not sharded
 }
 
 type LocalCounts struct {
