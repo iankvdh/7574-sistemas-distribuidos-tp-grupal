@@ -17,6 +17,11 @@ const (
 	// EOF envelope it received for this client to the input queue, so another
 	// replica picks it up and restarts the ring.
 	ActionReenqueueUpstreamEOF
+	// ActionEmitEOFsAndForwardToken means the runtime must: (1) flush pending
+	// data for the client, (2) publish one InternalEOF per entry in EOFs, and
+	// (3) forward Token to the next ring replica. Used by the broadcastEOFOnClose
+	// ring mode so that every replica emits EOFs at the closing pass.
+	ActionEmitEOFsAndForwardToken
 )
 
 // Action is what a topology returns to the runtime after each EOF-related event.
@@ -27,7 +32,10 @@ type Action struct {
 }
 
 // EOFEmit is one InternalEOF message the runtime must publish to a specific output.
+// RoutingKey is used only when the target output is a direct_exchange; otherwise
+// the runtime falls back to its default sharding/key resolution.
 type EOFEmit struct {
 	OutputIndex int
 	Total       uint32
+	RoutingKey  string
 }

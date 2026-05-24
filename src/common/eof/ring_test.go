@@ -79,6 +79,69 @@ func TestRingMultiReplicaInitiatorReenqueuesOnMismatch(t *testing.T) {
 	}
 }
 
+func TestRingBroadcastModeInitiatorEmitsClosingToken(t *testing.T) {
+	c := NewBroadcastRingCoordinator(0, 3)
+	_, _ = c.OnUpstreamEOF("client-x", 10, 4, 2)
+	// Token completes the ring fully aggregated to (5,5); total 10 matches.
+	token := &Token{ClientID: "client-x", InitiatorID: 0, AggMatched: 5, AggNotMatched: 5, Phase: PhaseCollecting}
+	action, _ := c.OnRingToken(token, 0, 0)
+	if action.Kind != ActionForwardToken {
+		t.Fatalf("expected ActionForwardToken (closing token), got %v", action.Kind)
+	}
+	if action.Token == nil || action.Token.Phase != PhaseClosing {
+		t.Fatalf("expected closing-phase token, got %+v", action.Token)
+	}
+	if action.Token.AggMatched != 5 || action.Token.AggNotMatched != 5 {
+		t.Fatalf("closing token must carry aggregates, got %+v", action.Token)
+	}
+}
+
+func TestRingBroadcastModeNonInitiatorEmitsAndForwards(t *testing.T) {
+	c := NewBroadcastRingCoordinator(1, 3)
+	token := &Token{ClientID: "client-x", InitiatorID: 0, AggMatched: 5, AggNotMatched: 5, Phase: PhaseClosing}
+	action, result := c.OnRingToken(token, 999, 999) // local counts must be ignored in closing pass
+	if action.Kind != ActionEmitEOFsAndForwardToken {
+		t.Fatalf("expected ActionEmitEOFsAndForwardToken, got %v", action.Kind)
+	}
+	if action.Token == nil || action.Token.Phase != PhaseClosing {
+		t.Fatalf("expected closing token forwarded, got %+v", action.Token)
+	}
+	if result == nil || result.AggMatched != 5 || result.AggNotMatched != 5 {
+		t.Fatalf("unexpected result on broadcast emit: %+v", result)
+	}
+}
+
+func TestRingBroadcastModeInitiatorFinalizesOnClosingReturn(t *testing.T) {
+	c := NewBroadcastRingCoordinator(0, 3)
+	_, _ = c.OnUpstreamEOF("client-x", 10, 4, 2)
+	collectingReturn := &Token{ClientID: "client-x", InitiatorID: 0, AggMatched: 5, AggNotMatched: 5, Phase: PhaseCollecting}
+	if a, _ := c.OnRingToken(collectingReturn, 0, 0); a.Kind != ActionForwardToken {
+		t.Fatalf("setup: expected forward-closing-token, got %v", a.Kind)
+	}
+	closingReturn := &Token{ClientID: "client-x", InitiatorID: 0, AggMatched: 5, AggNotMatched: 5, Phase: PhaseClosing}
+	action, result := c.OnRingToken(closingReturn, 0, 0)
+	if action.Kind != ActionEmitEOFs {
+		t.Fatalf("expected ActionEmitEOFs on closing-token return, got %v", action.Kind)
+	}
+	if result == nil || result.AggMatched != 5 || result.AggNotMatched != 5 {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+	// State should be cleared after finalization.
+	if _, ok := c.state["client-x"]; ok {
+		t.Fatalf("state should be cleared after broadcast finalization")
+	}
+}
+
+func TestRingBroadcastModeReenqueuesOnMismatch(t *testing.T) {
+	c := NewBroadcastRingCoordinator(0, 3)
+	_, _ = c.OnUpstreamEOF("client-x", 10, 4, 2)
+	bad := &Token{ClientID: "client-x", InitiatorID: 0, AggMatched: 5, AggNotMatched: 4, Phase: PhaseCollecting}
+	action, _ := c.OnRingToken(bad, 0, 0)
+	if action.Kind != ActionReenqueueUpstreamEOF {
+		t.Fatalf("expected ActionReenqueueUpstreamEOF, got %v", action.Kind)
+	}
+}
+
 func TestRingFullSimulationN3(t *testing.T) {
 	// Three replicas processing distinct portions of the input. The token should
 	// complete a single round and converge at the initiator.
