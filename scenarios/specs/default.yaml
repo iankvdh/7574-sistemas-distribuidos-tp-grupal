@@ -77,14 +77,14 @@ workers:
     outputs:
       - queue:q1_input
 
-  - name: drain_q1_input
-    strategy: drain
+  - name: sharder_q1
+    strategy: sharder_q1
     replicas: 1
     input: queue:q1_input
+    outputs:
+      - direct_exchange:results
     env:
-      DRAIN_OUTPUT_FILE: /results/drain_q1_input.csv
-    volumes:
-      - ./results:/results
+      N_FINAL_JOINERS: "1"
 
   - name: drain_period1_wire_ach
     strategy: drain
@@ -125,15 +125,6 @@ workers:
       N_FINAL_JOINERS: "1"
       MIN_INTERMEDIATES: "5"
 
-  - name: drain_q4
-    strategy: drain_q4
-    replicas: 1
-    input: direct_exchange:results:0
-    env:
-      DRAIN_OUTPUT_FILE: /results/drain_q4.csv
-    volumes:
-      - ./results:/results
-
   - name: drain_period2_usd
     strategy: drain
     replicas: 1
@@ -151,3 +142,23 @@ workers:
       DRAIN_OUTPUT_FILE: /results/drain_usd_joined.csv
     volumes:
       - ./results:/results
+
+  - name: final_joiner_q1
+    strategy: final_joiner
+    replicas: 1
+    input: direct_exchange:results:{REPLICA_ID}
+    outputs:
+      - final_queue:final_1
+    env:
+      QUERY_ID: "1"
+      EXPECTED_EOFS: "1"
+
+  - name: final_joiner_q4
+    strategy: final_joiner
+    replicas: 1
+    input: direct_exchange:results:{REPLICA_ID}
+    outputs:
+      - final_queue:final_1
+    env:
+      QUERY_ID: "4"
+      EXPECTED_EOFS: "1"

@@ -29,7 +29,9 @@ services:
       filter_amount_lt_50_0: { condition: service_started }
       filter_amount_lt_50_1: { condition: service_started }
       filter_amount_lt_50_2: { condition: service_started }
-      drain_q1_input: { condition: service_started }
+      sharder_q1_0: { condition: service_started }
+      sharder_q1_1: { condition: service_started }
+      sharder_q1_2: { condition: service_started }
       drain_period1_wire_ach: { condition: service_started }
       sharder_q4_0: { condition: service_started }
       sharder_q4_1: { condition: service_started }
@@ -40,9 +42,12 @@ services:
       counter_q4_0: { condition: service_started }
       counter_q4_1: { condition: service_started }
       counter_q4_2: { condition: service_started }
-      drain_q4: { condition: service_started }
       drain_period2_usd: { condition: service_started }
       drain_usd_joined: { condition: service_started }
+      final_joiner_q1_0: { condition: service_started }
+      final_joiner_q1_1: { condition: service_started }
+      final_joiner_q4_0: { condition: service_started }
+      final_joiner_q4_1: { condition: service_started }
     env_file:
       - .env
     environment:
@@ -90,7 +95,9 @@ services:
       filter_amount_lt_50_0: { condition: service_started }
       filter_amount_lt_50_1: { condition: service_started }
       filter_amount_lt_50_2: { condition: service_started }
-      drain_q1_input: { condition: service_started }
+      sharder_q1_0: { condition: service_started }
+      sharder_q1_1: { condition: service_started }
+      sharder_q1_2: { condition: service_started }
       drain_period1_wire_ach: { condition: service_started }
       sharder_q4_0: { condition: service_started }
       sharder_q4_1: { condition: service_started }
@@ -101,9 +108,12 @@ services:
       counter_q4_0: { condition: service_started }
       counter_q4_1: { condition: service_started }
       counter_q4_2: { condition: service_started }
-      drain_q4: { condition: service_started }
       drain_period2_usd: { condition: service_started }
       drain_usd_joined: { condition: service_started }
+      final_joiner_q1_0: { condition: service_started }
+      final_joiner_q1_1: { condition: service_started }
+      final_joiner_q4_0: { condition: service_started }
+      final_joiner_q4_1: { condition: service_started }
     env_file:
       - .env
     environment:
@@ -528,21 +538,54 @@ services:
       - LOG_LEVEL=info
       - RING_QUEUE_IN=ring_filter_amount_lt_50_2
       - RING_QUEUE_OUT=ring_filter_amount_lt_50_0
-  drain_q1_input:
+  sharder_q1_0:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
     depends_on: { rabbitmq: { condition: service_healthy } }
     env_file:
       - .env
     environment:
-      - STRATEGY=drain
+      - STRATEGY=sharder_q1
       - REPLICA_ID=0
-      - N_REPLICAS=1
+      - N_REPLICAS=3
       - INPUT=queue:q1_input
       - OUTPUTS_MATCH_COUNT=0
+      - OUTPUT_0=direct_exchange:results
       - LOG_LEVEL=info
-      - DRAIN_OUTPUT_FILE=/results/drain_q1_input.csv
-    volumes:
-      - ./results:/results
+      - RING_QUEUE_IN=ring_sharder_q1_0
+      - RING_QUEUE_OUT=ring_sharder_q1_1
+      - N_FINAL_JOINERS=2
+  sharder_q1_1:
+    build: { context: ./src/, dockerfile: worker/Dockerfile }
+    depends_on: { rabbitmq: { condition: service_healthy } }
+    env_file:
+      - .env
+    environment:
+      - STRATEGY=sharder_q1
+      - REPLICA_ID=1
+      - N_REPLICAS=3
+      - INPUT=queue:q1_input
+      - OUTPUTS_MATCH_COUNT=0
+      - OUTPUT_0=direct_exchange:results
+      - LOG_LEVEL=info
+      - RING_QUEUE_IN=ring_sharder_q1_1
+      - RING_QUEUE_OUT=ring_sharder_q1_2
+      - N_FINAL_JOINERS=2
+  sharder_q1_2:
+    build: { context: ./src/, dockerfile: worker/Dockerfile }
+    depends_on: { rabbitmq: { condition: service_healthy } }
+    env_file:
+      - .env
+    environment:
+      - STRATEGY=sharder_q1
+      - REPLICA_ID=2
+      - N_REPLICAS=3
+      - INPUT=queue:q1_input
+      - OUTPUTS_MATCH_COUNT=0
+      - OUTPUT_0=direct_exchange:results
+      - LOG_LEVEL=info
+      - RING_QUEUE_IN=ring_sharder_q1_2
+      - RING_QUEUE_OUT=ring_sharder_q1_0
+      - N_FINAL_JOINERS=2
   drain_period1_wire_ach:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
     depends_on: { rabbitmq: { condition: service_healthy } }
@@ -665,7 +708,7 @@ services:
       - OUTPUT_0=direct_exchange:results
       - LOG_LEVEL=info
       - MIN_INTERMEDIATES=5
-      - N_FINAL_JOINERS=1
+      - N_FINAL_JOINERS=2
       - N_PATH_FINDERS=3
   counter_q4_1:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
@@ -681,7 +724,7 @@ services:
       - OUTPUT_0=direct_exchange:results
       - LOG_LEVEL=info
       - MIN_INTERMEDIATES=5
-      - N_FINAL_JOINERS=1
+      - N_FINAL_JOINERS=2
       - N_PATH_FINDERS=3
   counter_q4_2:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
@@ -697,23 +740,8 @@ services:
       - OUTPUT_0=direct_exchange:results
       - LOG_LEVEL=info
       - MIN_INTERMEDIATES=5
-      - N_FINAL_JOINERS=1
+      - N_FINAL_JOINERS=2
       - N_PATH_FINDERS=3
-  drain_q4:
-    build: { context: ./src/, dockerfile: worker/Dockerfile }
-    depends_on: { rabbitmq: { condition: service_healthy } }
-    env_file:
-      - .env
-    environment:
-      - STRATEGY=drain_q4
-      - REPLICA_ID=0
-      - N_REPLICAS=1
-      - INPUT=direct_exchange:results:0
-      - OUTPUTS_MATCH_COUNT=0
-      - LOG_LEVEL=info
-      - DRAIN_OUTPUT_FILE=/results/drain_q4.csv
-    volumes:
-      - ./results:/results
   drain_period2_usd:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
     depends_on: { rabbitmq: { condition: service_healthy } }
@@ -744,6 +772,70 @@ services:
       - DRAIN_OUTPUT_FILE=/results/drain_usd_joined.csv
     volumes:
       - ./results:/results
+  final_joiner_q1_0:
+    build: { context: ./src/, dockerfile: worker/Dockerfile }
+    depends_on: { rabbitmq: { condition: service_healthy } }
+    env_file:
+      - .env
+    environment:
+      - STRATEGY=final_joiner
+      - REPLICA_ID=0
+      - N_REPLICAS=2
+      - INPUT=direct_exchange:results:0
+      - OUTPUTS_MATCH_COUNT=0
+      - OUTPUT_0=final_queue:final_1
+      - OUTPUT_1=final_queue:final_2
+      - LOG_LEVEL=info
+      - EXPECTED_EOFS=3
+      - QUERY_ID=1
+  final_joiner_q1_1:
+    build: { context: ./src/, dockerfile: worker/Dockerfile }
+    depends_on: { rabbitmq: { condition: service_healthy } }
+    env_file:
+      - .env
+    environment:
+      - STRATEGY=final_joiner
+      - REPLICA_ID=1
+      - N_REPLICAS=2
+      - INPUT=direct_exchange:results:1
+      - OUTPUTS_MATCH_COUNT=0
+      - OUTPUT_0=final_queue:final_1
+      - OUTPUT_1=final_queue:final_2
+      - LOG_LEVEL=info
+      - EXPECTED_EOFS=3
+      - QUERY_ID=1
+  final_joiner_q4_0:
+    build: { context: ./src/, dockerfile: worker/Dockerfile }
+    depends_on: { rabbitmq: { condition: service_healthy } }
+    env_file:
+      - .env
+    environment:
+      - STRATEGY=final_joiner
+      - REPLICA_ID=0
+      - N_REPLICAS=2
+      - INPUT=direct_exchange:results:0
+      - OUTPUTS_MATCH_COUNT=0
+      - OUTPUT_0=final_queue:final_1
+      - OUTPUT_1=final_queue:final_2
+      - LOG_LEVEL=info
+      - EXPECTED_EOFS=3
+      - QUERY_ID=4
+  final_joiner_q4_1:
+    build: { context: ./src/, dockerfile: worker/Dockerfile }
+    depends_on: { rabbitmq: { condition: service_healthy } }
+    env_file:
+      - .env
+    environment:
+      - STRATEGY=final_joiner
+      - REPLICA_ID=1
+      - N_REPLICAS=2
+      - INPUT=direct_exchange:results:1
+      - OUTPUTS_MATCH_COUNT=0
+      - OUTPUT_0=final_queue:final_1
+      - OUTPUT_1=final_queue:final_2
+      - LOG_LEVEL=info
+      - EXPECTED_EOFS=3
+      - QUERY_ID=4
   rabbitmq:
     build: { context: ./src/rabbitmq, dockerfile: Dockerfile }
     volumes:
