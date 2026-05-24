@@ -109,9 +109,6 @@ func (f *Filter) OnRingToken(token *eof.Token) (strategy.EOFOutcome, error) {
 		outcome.EOFs = f.buildEOFEmits(result.AggMatched, result.AggNotMatched)
 		delete(f.state, token.ClientID)
 	}
-	if action.Kind == eof.ActionReenqueueUpstreamEOF {
-		delete(f.state, token.ClientID)
-	}
 	return outcome, nil
 }
 
