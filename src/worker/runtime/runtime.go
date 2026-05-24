@@ -39,13 +39,24 @@ type Worker struct {
 
 type outputTargetBuffer struct {
 	target   OutputTarget
-	perShard []map[inner.ClientID]*pendingBatch
+	perShard []map[batchKey]*pendingBatch
+}
+
+type batchKey struct {
+	clientID   inner.ClientID
+	routingKey string
+	itemKind   inner.MsgKind
+	queryID    uint8
 }
 
 type pendingBatch struct {
-	gatewayID inner.GatewayID
-	items     [][]byte
-	bytes     int
+	gatewayID  inner.GatewayID
+	clientID   inner.ClientID
+	routingKey string
+	itemKind   inner.MsgKind
+	queryID    uint8
+	items      [][]byte
+	bytes      int
 }
 
 func New(cfg config.WorkerConfig) (*Worker, error) {
@@ -112,6 +123,8 @@ func initStrategy(outputTargets []OutputTarget, cfg config.WorkerConfig, strat s
 		NReplicas:    cfg.NReplicas,
 		StrategyName: cfg.StrategyName,
 		MatchCount:   cfg.OutputsMatchCount,
+		RingQueueIn:  cfg.RingQueueIn,
+		RingQueueOut: cfg.RingQueueOut,
 	}
 	if err := strat.Init(strategyCfg); err != nil {
 		closeAll(input, ringIn, ringOut, outputTargets)
@@ -127,9 +140,9 @@ func initOutputTargetBuffers(outputTargets []OutputTarget) []*outputTargetBuffer
 		if target.Kind == config.KindShardedQueues {
 			shards = target.ShardCount
 		}
-		perShard := make([]map[inner.ClientID]*pendingBatch, shards)
+		perShard := make([]map[batchKey]*pendingBatch, shards)
 		for s := range perShard {
-			perShard[s] = map[inner.ClientID]*pendingBatch{}
+			perShard[s] = map[batchKey]*pendingBatch{}
 		}
 		buffers[i] = &outputTargetBuffer{target: target, perShard: perShard}
 	}
@@ -215,19 +228,11 @@ func (w *Worker) handleInputMessage(msg middleware.Message, ack func(), nack fun
 			ack()
 			return
 		}
-		for _, payload := range items {
-			item := &inner.Envelope{
-				Kind:      itemKind,
-				GatewayID: envelope.GatewayID,
-				ClientID:  envelope.ClientID,
-				Payload:   payload,
-			}
-			if err := w.processSingleItem(item); err != nil {
-				w.strategyMu.Unlock()
-				slog.Error("Strategy ProcessMessage failed", "client_id", envelope.ClientID, "err", err)
-				nack()
-				return
-			}
+		if err := w.processBatchItems(envelope, itemKind, items); err != nil {
+			w.strategyMu.Unlock()
+			slog.Error("Strategy ProcessMessage failed", "client_id", envelope.ClientID, "err", err)
+			nack()
+			return
 		}
 	} else {
 		if err := w.processSingleItem(envelope); err != nil {
@@ -239,6 +244,22 @@ func (w *Worker) handleInputMessage(msg middleware.Message, ack func(), nack fun
 	}
 	w.strategyMu.Unlock()
 	ack()
+}
+
+func (w *Worker) processBatchItems(parent *inner.Envelope, itemKind inner.MsgKind, items [][]byte) error {
+	for _, payload := range items {
+		item := &inner.Envelope{
+			Kind:      itemKind,
+			GatewayID: parent.GatewayID,
+			ClientID:  parent.ClientID,
+			QueryID:   parent.QueryID,
+			Payload:   payload,
+		}
+		if err := w.processSingleItem(item); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (w *Worker) processSingleItem(env *inner.Envelope) error {
@@ -301,6 +322,15 @@ func (w *Worker) applyEOFOutcome(env *inner.Envelope, outcome strategy.EOFOutcom
 	case eof.ActionEmitEOFs:
 		w.clearUpstreamEOF(env.ClientID)
 		return w.publishEOFs(env, outcome.EOFs)
+	case eof.ActionEmitEOFsAndForwardToken:
+		if err := w.flushClient(env.ClientID); err != nil {
+			return err
+		}
+		w.clearUpstreamEOF(env.ClientID)
+		if err := w.publishEOFs(env, outcome.EOFs); err != nil {
+			return err
+		}
+		return w.forwardToken(env, outcome.Action.Token)
 	case eof.ActionReenqueueUpstreamEOF:
 		return w.reenqueueUpstreamEOF(env.ClientID)
 	default:
@@ -332,7 +362,7 @@ func (w *Worker) appendOutputMessages(gatewayID inner.GatewayID, outputMessages 
 			if idx < 0 || idx >= len(w.outputTargetBuffers) {
 				return errors.New("strategy returned invalid output index")
 			}
-			if err := w.appendToShard(idx, om.ClientID, gatewayID, om.Body); err != nil {
+			if err := w.appendToShard(idx, gatewayID, om); err != nil {
 				return err
 			}
 		}
@@ -340,48 +370,76 @@ func (w *Worker) appendOutputMessages(gatewayID inner.GatewayID, outputMessages 
 	return nil
 }
 
-func (w *Worker) appendToShard(idx int, clientID inner.ClientID, gatewayID inner.GatewayID, payload []byte) error {
+func (w *Worker) appendToShard(idx int, gatewayID inner.GatewayID, om strategy.OutputMessage) error {
 	buf := w.outputTargetBuffers[idx]
-	shard := w.shardFor(buf.target, clientID)
-	bucket := buf.perShard[shard]
-	pending, ok := bucket[clientID]
-	if !ok {
-		pending = &pendingBatch{gatewayID: gatewayID}
-		bucket[clientID] = pending
+	shard := w.shardFor(buf.target, om.ClientID)
+	itemKind := om.BatchItemKind
+	if itemKind == 0 {
+		itemKind = inner.TransactionMessage
 	}
-	pending.items = append(pending.items, payload)
-	pending.bytes += len(payload)
+	key := batchKey{
+		clientID:   om.ClientID,
+		routingKey: om.RoutingKey,
+		itemKind:   itemKind,
+		queryID:    om.BatchQueryID,
+	}
+	batches := buf.perShard[shard]
+	pending, ok := batches[key]
+	if !ok {
+		pending = &pendingBatch{
+			gatewayID:  gatewayID,
+			clientID:   om.ClientID,
+			routingKey: om.RoutingKey,
+			itemKind:   itemKind,
+			queryID:    om.BatchQueryID,
+		}
+		batches[key] = pending
+	}
+	pending.items = append(pending.items, om.Body)
+	pending.bytes += len(om.Body)
 	if pending.bytes >= w.cfg.MaxInternalBatchBytes {
-		return w.flushShard(idx, shard, clientID)
+		return w.flushBatch(idx, shard, key)
 	}
 	return nil
 }
 
-func (w *Worker) flushShard(idx, shard int, clientID inner.ClientID) error {
+func (w *Worker) flushBatch(idx, shard int, key batchKey) error {
 	buf := w.outputTargetBuffers[idx]
-	pending := buf.perShard[shard][clientID]
+	pending := buf.perShard[shard][key]
 	if pending == nil || len(pending.items) == 0 {
 		return nil
 	}
-	msg, err := inner.SerializeInnerBatch(inner.TransactionMessage, pending.gatewayID, clientID, pending.items)
+	msg, err := inner.SerializeInnerBatch(pending.queryID, pending.itemKind, pending.gatewayID, pending.clientID, pending.items)
 	if err != nil {
 		return err
 	}
-	if err := buf.target.Middlewares[shard].Send(*msg); err != nil {
+	if err := sendOnTarget(buf.target.Middlewares[shard], *msg, pending.routingKey); err != nil {
 		return err
 	}
-	delete(buf.perShard[shard], clientID)
+	delete(buf.perShard[shard], key)
 	return nil
+}
+
+func sendOnTarget(mw middleware.Middleware, msg middleware.Message, routingKey string) error {
+	if routingKey != "" {
+		return mw.SendWithKey(msg, routingKey)
+	}
+	return mw.Send(msg)
 }
 
 func (w *Worker) flushClient(clientID inner.ClientID) error {
 	for idx, buf := range w.outputTargetBuffers {
 		for shard := range buf.perShard {
-			if _, ok := buf.perShard[shard][clientID]; !ok {
-				continue
+			keys := make([]batchKey, 0, len(buf.perShard[shard]))
+			for k := range buf.perShard[shard] {
+				if k.clientID == clientID {
+					keys = append(keys, k)
+				}
 			}
-			if err := w.flushShard(idx, shard, clientID); err != nil {
-				return err
+			for _, k := range keys {
+				if err := w.flushBatch(idx, shard, k); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -391,9 +449,13 @@ func (w *Worker) flushClient(clientID inner.ClientID) error {
 func (w *Worker) flushAll() {
 	for idx, buf := range w.outputTargetBuffers {
 		for shard := range buf.perShard {
-			for clientID := range buf.perShard[shard] {
-				if err := w.flushShard(idx, shard, clientID); err != nil {
-					slog.Error("Flush on shutdown failed", "client_id", clientID, "output", idx, "shard", shard, "err", err)
+			keys := make([]batchKey, 0, len(buf.perShard[shard]))
+			for k := range buf.perShard[shard] {
+				keys = append(keys, k)
+			}
+			for _, k := range keys {
+				if err := w.flushBatch(idx, shard, k); err != nil {
+					slog.Error("Flush on shutdown failed", "client_id", k.clientID, "output", idx, "shard", shard, "err", err)
 				}
 			}
 		}
@@ -424,7 +486,7 @@ func (w *Worker) publishEOFs(env *inner.Envelope, emits []eof.EOFEmit) error {
 		if shard >= len(target.Middlewares) {
 			return errors.New("misconfigured target: shard index out of range")
 		}
-		if err := target.Middlewares[shard].Send(*msg); err != nil {
+		if err := sendOnTarget(target.Middlewares[shard], *msg, e.RoutingKey); err != nil {
 			return err
 		}
 	}
