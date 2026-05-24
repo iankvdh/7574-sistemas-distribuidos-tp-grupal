@@ -7,7 +7,7 @@ import (
 
 type Decision struct {
 	OutputIndices []int // output target indices to send the message to
-	Body          string
+	Body          []byte
 	ClientID      inner.ClientID // used for sharding; ignored if output is not sharded
 }
 

@@ -64,8 +64,6 @@ func (f *Filter) ProcessMessage(env *inner.Envelope) ([]strategy.Decision, strat
 
 	state := f.stateFor(env.ClientID)
 	matched := f.predicate(*tx)
-	body := string(env.Payload)
-
 	if matched {
 		state.matched++
 		if f.matchCount == 0 {
@@ -73,7 +71,7 @@ func (f *Filter) ProcessMessage(env *inner.Envelope) ([]strategy.Decision, strat
 		}
 		return []strategy.Decision{{
 			OutputIndices: rangeIndices(0, f.matchCount),
-			Body:          body,
+			Body:          env.Payload,
 			ClientID:      env.ClientID,
 		}}, strategy.LocalCounts{Processed: 1, Matched: 1}, nil
 	}
@@ -85,7 +83,7 @@ func (f *Filter) ProcessMessage(env *inner.Envelope) ([]strategy.Decision, strat
 	}
 	return []strategy.Decision{{
 		OutputIndices: rangeIndices(f.matchCount, totalOutputs),
-		Body:          body,
+		Body:          env.Payload,
 		ClientID:      env.ClientID,
 	}}, strategy.LocalCounts{Processed: 1, NotMatched: 1}, nil
 }
