@@ -48,12 +48,13 @@ type workerSpec struct {
 }
 
 type spec struct {
-	Clients      int
-	Gateways     int
-	Transactions string
-	Accounts     string
-	LogLevel     string
-	Workers      []workerSpec
+	Clients           int
+	Gateways          int
+	Transactions      string
+	Accounts          string
+	LogLevel          string
+	ExpectedQueryEOFs int // 0 means "leave gateway/client defaults" (= 5)
+	Workers           []workerSpec
 }
 
 const defaultLogLevel = "info"
@@ -73,6 +74,7 @@ var strategiesWithRing = map[string]struct{}{
 	"filter_amount_lt_50":               {},
 	"joiner_usd":                        {},
 	"sharder_q4":                        {},
+	"sharder_q1":                        {},
 }
 
 func strategyUsesRing(strategy string) bool {
@@ -137,6 +139,8 @@ func parseSpec(src string) (*spec, error) {
 				s.Accounts = value
 			case "log_level":
 				s.LogLevel = value
+			case "expected_query_eofs":
+				s.ExpectedQueryEOFs, _ = strconv.Atoi(value)
 			}
 			section = key
 			currentList = ""
@@ -274,10 +278,10 @@ func (s *spec) render(w io.Writer) error {
 		logLevel = defaultLogLevel
 	}
 	for i := 0; i < s.Clients; i++ {
-		writeClient(w, i, s.Gateways, dependencies, transactions, accounts, logLevel)
+		writeClient(w, i, s.Gateways, dependencies, transactions, accounts, logLevel, s.ExpectedQueryEOFs)
 	}
 	for i := 1; i <= s.Gateways; i++ {
-		writeGateway(w, i, logLevel)
+		writeGateway(w, i, logLevel, s.ExpectedQueryEOFs)
 	}
 	for _, ws := range s.Workers {
 		for r := 0; r < ws.Replicas; r++ {
@@ -295,7 +299,7 @@ func serviceName(ws workerSpec, replica int) string {
 	return fmt.Sprintf("%s_%d", ws.Name, replica)
 }
 
-func writeClient(w io.Writer, idx, gateways int, deps []string, transactions, accounts, logLevel string) {
+func writeClient(w io.Writer, idx, gateways int, deps []string, transactions, accounts, logLevel string, expectedQueryEOFs int) {
 	fmt.Fprintf(w, "  client_%d:\n", idx)
 	fmt.Fprintln(w, "    build: { context: ./src/, dockerfile: client/Dockerfile }")
 	fmt.Fprintln(w, "    depends_on:")
@@ -319,13 +323,16 @@ func writeClient(w io.Writer, idx, gateways int, deps []string, transactions, ac
 	fmt.Fprintln(w, "      - BACKOFF_BASE_MS=200")
 	fmt.Fprintln(w, "      - BACKOFF_MAX_MS=3000")
 	fmt.Fprintln(w, "      - RESULTS_DIR=/results")
+	if expectedQueryEOFs > 0 {
+		fmt.Fprintf(w, "      - EXPECTED_QUERY_EOFS=%d\n", expectedQueryEOFs)
+	}
 	fmt.Fprintf(w, "      - LOG_LEVEL=%s\n", logLevel)
 	fmt.Fprintln(w, "    volumes:")
 	fmt.Fprintln(w, "      - ./datasets:/datasets")
 	fmt.Fprintf(w, "      - ./results/client_%d:/results\n", idx)
 }
 
-func writeGateway(w io.Writer, id int, logLevel string) {
+func writeGateway(w io.Writer, id int, logLevel string, expectedQueryEOFs int) {
 	fmt.Fprintf(w, "  gateway_%d:\n", id)
 	fmt.Fprintln(w, "    build: { context: ./src/, dockerfile: gateway/Dockerfile }")
 	fmt.Fprintln(w, "    depends_on: { rabbitmq: { condition: service_healthy } }")
@@ -338,6 +345,9 @@ func writeGateway(w io.Writer, id int, logLevel string) {
 	fmt.Fprintf(w, "      - GATEWAY_ID=%d\n", id)
 	fmt.Fprintln(w, "      - SERVER_HOST=0.0.0.0")
 	fmt.Fprintln(w, "      - SERVER_PORT=5678")
+	if expectedQueryEOFs > 0 {
+		fmt.Fprintf(w, "      - EXPECTED_QUERY_EOFS=%d\n", expectedQueryEOFs)
+	}
 	fmt.Fprintf(w, "      - LOG_LEVEL=%s\n", logLevel)
 }
 
