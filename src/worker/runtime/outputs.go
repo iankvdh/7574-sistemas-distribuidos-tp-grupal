@@ -14,17 +14,6 @@ type OutputTarget struct {
 	Middlewares []middleware.Middleware
 }
 
-func BuildInputMiddleware(outputConfig config.OutputConfig, conn middleware.ConnSettings) (middleware.Middleware, error) {
-	switch outputConfig.Kind {
-	case config.KindQueue:
-		return middleware.CreateQueueMiddleware(outputConfig.Name, conn)
-	case config.KindDirectExchange:
-		return middleware.CreateExchangeMiddleware(outputConfig.Name, []string{outputConfig.RoutingKey}, conn)
-	default:
-		return nil, fmt.Errorf("unsupported input kind for %q", outputConfig.Name)
-	}
-}
-
 func BuildOutputTargets(outputConfigs []config.OutputConfig, conn middleware.ConnSettings) ([]OutputTarget, error) {
 	targets := make([]OutputTarget, 0, len(outputConfigs))
 

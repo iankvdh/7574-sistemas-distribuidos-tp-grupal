@@ -17,7 +17,7 @@ type WorkerConfig struct {
 	ReplicaID             int
 	NReplicas             int
 	Input                 string // raw INPUT env var
-	InputConfig           OutputConfig
+	InputConfig           InputConfig
 	Outputs               []OutputConfig
 	OutputsMatchCount     int
 	RingQueueIn           string // optional: queue this replica consumes ring tokens from
