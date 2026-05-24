@@ -22,8 +22,7 @@ import (
 )
 
 const (
-	requiredQueryEOFs = 5
-	queryResultEOF    = "EOF"
+	queryResultEOF = "EOF"
 )
 
 type Gateway struct {
@@ -33,6 +32,7 @@ type Gateway struct {
 	finalQueue            middleware.Middleware
 	gatewayID             inner.GatewayID
 	maxExternalBatchBytes int
+	expectedQueryEOFs     int
 	listener              net.Listener
 	ctx                   context.Context
 	cancel                context.CancelFunc
@@ -79,6 +79,7 @@ func NewGateway(config gatewayconfig.GatewayConfig) (*Gateway, error) {
 		finalQueue:            finalQueue,
 		gatewayID:             gatewayID,
 		maxExternalBatchBytes: config.MaxExternalBatchBytes,
+		expectedQueryEOFs:     config.ExpectedQueryEOFs,
 		listener:              listener,
 		ctx:                   ctx,
 		cancel:                cancel,
@@ -303,8 +304,9 @@ func (gateway *Gateway) handleClientResultOutput(state *clientregistry.ClientSta
 		}
 
 		eofsSent += eofs
-		if eofsSent >= requiredQueryEOFs {
-			slog.Info("All query EOFs delivered to client, closing session", "client_id", clientID)
+		if eofsSent >= gateway.expectedQueryEOFs {
+			slog.Info("All query EOFs delivered to client, closing session",
+				"client_id", clientID, "expected_query_eofs", gateway.expectedQueryEOFs)
 			gateway.registry.RemoveAndClose(clientID)
 			return
 		}

@@ -10,6 +10,7 @@ const (
 	defaultFinalQueue            = "final"
 	defaultMomPort               = 5672
 	defaultMaxExternalBatchBytes = 8192
+	defaultExpectedQueryEOFs     = 5
 )
 
 type GatewayConfig struct {
@@ -17,6 +18,7 @@ type GatewayConfig struct {
 	AllAccountsQueue      string
 	FinalQueue            string
 	MaxExternalBatchBytes int
+	ExpectedQueryEOFs     int
 	GatewayID             int
 	ServerHost            string
 	ServerPort            string
@@ -55,11 +57,17 @@ func Load() (GatewayConfig, error) {
 		return GatewayConfig{}, err
 	}
 
+	expectedQueryEOFs, err := env.IntWithDefault("EXPECTED_QUERY_EOFS", defaultExpectedQueryEOFs, true)
+	if err != nil {
+		return GatewayConfig{}, err
+	}
+
 	return GatewayConfig{
 		AllTransactionsQueue:  env.StringWithDefault("ALL_TRANSACTIONS_QUEUE", defaultAllTransactionsQueue),
 		AllAccountsQueue:      env.StringWithDefault("ALL_ACCOUNTS_QUEUE", defaultAllAccountsQueue),
 		FinalQueue:            env.StringWithDefault("FINAL_QUEUE", defaultFinalQueue),
 		MaxExternalBatchBytes: maxExternalBatchBytes,
+		ExpectedQueryEOFs:     expectedQueryEOFs,
 		GatewayID:             gatewayID,
 		ServerHost:            serverHost,
 		ServerPort:            serverPort,
