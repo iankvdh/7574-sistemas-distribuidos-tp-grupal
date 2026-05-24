@@ -1,4 +1,4 @@
-package topology
+package config
 
 import "testing"
 

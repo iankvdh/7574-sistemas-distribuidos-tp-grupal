@@ -1,4 +1,4 @@
-package topology
+package config
 
 import (
 	"fmt"
@@ -6,8 +6,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-
-	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/middleware"
 )
 
 type OutputKind int
@@ -20,11 +18,6 @@ const (
 	KindShardedQueues
 )
 
-// Spec syntax:
-//
-//	queue:NAME
-//	direct_exchange:NAME[:KEY]
-//	sharded_queues:PREFIX:K
 type OutputBinding struct {
 	Name       string
 	Kind       OutputKind
@@ -33,18 +26,6 @@ type OutputBinding struct {
 	ShardCount int
 }
 
-// OutputTarget couples a binding with its live middlewares. Non-sharded targets
-// hold exactly one middleware; sharded targets hold ShardCount of them, where
-// Middlewares[i] is the queue PREFIX_i.
-type OutputTarget struct {
-	Name        string
-	Kind        OutputKind
-	ShardCount  int
-	Middlewares []middleware.Middleware
-}
-
-// ParseOutputs reads OUTPUT_0, OUTPUT_1, ... env vars in order, stopping at the
-// first missing index.
 func ParseOutputs() ([]OutputBinding, error) {
 	indices := collectOutputIndices()
 	if len(indices) == 0 {
@@ -123,8 +104,6 @@ func collectOutputIndices() []int {
 	return indices
 }
 
-// ParseInput parses the INPUT env var. Sharded consumers are wired by the
-// generator as queue:PREFIX_{REPLICA_ID}, so sharded_queues is not accepted here.
 func ParseInput(raw string) (OutputBinding, error) {
 	if raw == "" {
 		return OutputBinding{}, fmt.Errorf("INPUT environment variable is required")
@@ -137,67 +116,4 @@ func ParseInput(raw string) (OutputBinding, error) {
 		return OutputBinding{}, fmt.Errorf("INPUT does not accept sharded_queues; consume a specific queue:PREFIX_i")
 	}
 	return b, nil
-}
-
-func BuildInputMiddleware(binding OutputBinding, conn middleware.ConnSettings) (middleware.Middleware, error) {
-	switch binding.Kind {
-	case KindQueue:
-		return middleware.CreateQueueMiddleware(binding.Target, conn)
-	case KindDirectExchange:
-		return middleware.CreateExchangeMiddleware(binding.Target, []string{binding.Key}, conn)
-	default:
-		return nil, fmt.Errorf("unsupported input kind for %q", binding.Name)
-	}
-}
-
-func BuildOutputTargets(bindings []OutputBinding, conn middleware.ConnSettings) ([]OutputTarget, error) {
-	targets := make([]OutputTarget, 0, len(bindings))
-	closeAll := func() {
-		for _, s := range targets {
-			for _, mw := range s.Middlewares {
-				_ = mw.Close()
-			}
-		}
-	}
-	for _, b := range bindings {
-		switch b.Kind {
-		case KindQueue:
-			mw, err := middleware.CreateQueueMiddleware(b.Target, conn)
-			if err != nil {
-				closeAll()
-				return nil, fmt.Errorf("open output %q: %w", b.Name, err)
-			}
-			targets = append(targets, OutputTarget{Name: b.Name, Kind: b.Kind, Middlewares: []middleware.Middleware{mw}})
-		case KindDirectExchange:
-			mw, err := middleware.CreateExchangeMiddleware(b.Target, []string{b.Key}, conn)
-			if err != nil {
-				closeAll()
-				return nil, fmt.Errorf("open output %q: %w", b.Name, err)
-			}
-			targets = append(targets, OutputTarget{Name: b.Name, Kind: b.Kind, Middlewares: []middleware.Middleware{mw}})
-		case KindShardedQueues:
-			if b.ShardCount <= 0 {
-				closeAll()
-				return nil, fmt.Errorf("output %q: sharded_queues requires ShardCount>0", b.Name)
-			}
-			shards := make([]middleware.Middleware, 0, b.ShardCount)
-			for i := 0; i < b.ShardCount; i++ {
-				qname := fmt.Sprintf("%s_%d", b.Target, i)
-				mw, err := middleware.CreateQueueMiddleware(qname, conn)
-				if err != nil {
-					for _, m := range shards {
-						_ = m.Close()
-					}
-					closeAll()
-					return nil, fmt.Errorf("open output %q shard %d: %w", b.Name, i, err)
-				}
-				shards = append(shards, mw)
-			}
-			targets = append(targets, OutputTarget{Name: b.Name, Kind: b.Kind, ShardCount: b.ShardCount, Middlewares: shards})
-		default:
-			closeAll()
-			return nil, fmt.Errorf("unsupported output kind for %q", b.Name)
-		}
-	}
-	return targets, nil
 }
