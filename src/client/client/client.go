@@ -37,9 +37,14 @@ type Client struct {
 	conn         net.Conn
 	clientID     string
 	running      atomic.Bool
-	config       ClientConfig
-	gatewayAddrs []string
-	results      *resultsCollector
+	// allEOFsReceived flips to true when the gateway has delivered every
+	// expected per-query EOF for this client. It is checked by the ingest
+	// path to distinguish "scenario already finished, abort remaining sends
+	// gracefully" from a real I/O error.
+	allEOFsReceived atomic.Bool
+	config          ClientConfig
+	gatewayAddrs    []string
+	results         *resultsCollector
 
 	writeMu       sync.Mutex
 	ctx           context.Context
@@ -202,6 +207,11 @@ func (client *Client) Run() error {
 	go client.readerLoop()
 
 	if err := client.sendTransactions(); err != nil {
+		if client.allEOFsReceived.Load() {
+			slog.Info("All query EOFs received before finishing transactions; ingest aborted cleanly",
+				"client_id", client.clientID)
+			return nil
+		}
 		if client.running.Load() {
 			return err
 		}
@@ -210,6 +220,11 @@ func (client *Client) Run() error {
 	slog.Info("All transactions sent", "client_id", client.clientID)
 
 	if err := client.sendAccounts(); err != nil {
+		if client.allEOFsReceived.Load() {
+			slog.Info("All query EOFs received before finishing accounts; ingest aborted cleanly",
+				"client_id", client.clientID)
+			return nil
+		}
 		if client.running.Load() {
 			return err
 		}
@@ -218,6 +233,9 @@ func (client *Client) Run() error {
 	slog.Info("All accounts sent", "client_id", client.clientID)
 
 	if err := client.waitForAllQueryEOFs(); err != nil {
+		if client.allEOFsReceived.Load() {
+			return nil
+		}
 		if client.running.Load() {
 			return err
 		}
@@ -262,6 +280,10 @@ func (client *Client) readerLoop() {
 			if client.hasAllQueryEOFs() {
 				slog.Info("Received all query EOF markers", "client_id", client.clientID)
 				client.signalAllQueryEOFs()
+				// Done: the gateway will close the TCP session right after our
+				// ACK of this last batch; leaving the loop here avoids racing
+				// the close and reporting it as an I/O error.
+				return
 			}
 		default:
 			client.setIOError(fmt.Errorf("unexpected message type from gateway: %d", msgType))
@@ -313,7 +335,13 @@ func (client *Client) signalAllQueryEOFs() {
 	select {
 	case <-client.allQueryEOFCh:
 	default:
+		client.allEOFsReceived.Store(true)
 		close(client.allQueryEOFCh)
+		// Unblock any in-flight ingest waits (sendTransactions / sendAccounts
+		// stuck on an IngestAck that won't come — the gateway already closed
+		// the session at the EOF). Run() will distinguish this from a real
+		// I/O error by inspecting allEOFsReceived.
+		client.cancel()
 	}
 }
 
