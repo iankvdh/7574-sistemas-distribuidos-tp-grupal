@@ -32,10 +32,23 @@ const (
 	// RingTokenMessage transporta el token del anillo entre réplicas de una misma strategy.
 	// Payload = JSON del RingToken.
 	RingTokenMessage
-	// InnerBatch agrupa N payloads de un mismo item_kind (TransactionMessage o
-	// AccountMessage) en una única publicación AMQP. El cuerpo binario:
+	// InnerBatch agrupa N payloads de un mismo item_kind en una única publicación
+	// AMQP. El cuerpo binario:
 	//   1B item_kind | 2B (LE) count | { 4B (LE) len | len bytes payload } × count
+	// El número de query al que pertenece el batch (cuando aplica) viaja en
+	// Envelope.QueryID; 0 indica "sin query asociada".
 	InnerBatch
+	// ShardedTxMessage transporta una transacción ya shardeada por una de sus
+	// cuentas (origen o destino). Item dentro de un InnerBatch emitido por
+	// el Sharder del pipeline de Q4.
+	ShardedTxMessage
+	// SuspiciousPathMessage transporta una terna (cuenta origen, cuenta intermedia,
+	// cuenta destino). Item dentro de un InnerBatch emitido por el Path-Finder.
+	SuspiciousPathMessage
+	// Query4PairItem transporta un par (cuenta origen, cuenta destino) que alcanzó
+	// el umbral de cuentas intermedias. Item dentro de un InnerBatch emitido
+	// por el Counter al exchange `results`.
+	Query4PairItem
 )
 
 var (
@@ -48,6 +61,7 @@ type Envelope struct {
 	ClientID  ClientID  `json:"c"`
 	Kind      MsgKind   `json:"k"`
 	Total     uint32    `json:"t,omitempty"`
+	QueryID   uint8     `json:"q,omitempty"`
 	Payload   []byte    `json:"p,omitempty"`
 }
 
@@ -58,11 +72,16 @@ type QueryResultItem struct {
 }
 
 func SerializeEnvelope(kind MsgKind, gatewayID GatewayID, clientID ClientID, total uint32, payload []byte) (*middleware.Message, error) {
+	return SerializeEnvelopeWithQuery(kind, gatewayID, clientID, total, 0, payload)
+}
+
+func SerializeEnvelopeWithQuery(kind MsgKind, gatewayID GatewayID, clientID ClientID, total uint32, queryID uint8, payload []byte) (*middleware.Message, error) {
 	body, err := json.Marshal(Envelope{
 		GatewayID: gatewayID,
 		ClientID:  clientID,
 		Kind:      kind,
 		Total:     total,
+		QueryID:   queryID,
 		Payload:   payload,
 	})
 	if err != nil {
@@ -128,18 +147,31 @@ func SerializeRingToken(gatewayID GatewayID, clientID ClientID, tokenJSON []byte
 	return SerializeEnvelope(RingTokenMessage, gatewayID, clientID, 0, tokenJSON)
 }
 
+func validInnerBatchItemKind(kind MsgKind) bool {
+	switch kind {
+	case TransactionMessage, AccountMessage, ShardedTxMessage, SuspiciousPathMessage, Query4PairItem:
+		return true
+	default:
+		return false
+	}
+}
+
 // SerializeInnerBatch agrupa N payloads de un mismo item_kind en un envelope
 // InnerBatch. items NO debe estar vacío y todos sus elementos deben venir ya
-// serializados con la forma esperada por item_kind.
-func SerializeInnerBatch(itemKind MsgKind, gatewayID GatewayID, clientID ClientID, items [][]byte) (*middleware.Message, error) {
+// serializados con la forma esperada por item_kind. El queryID se propaga en
+// el envelope (Envelope.QueryID); 0 indica "sin query asociada" — comportamiento
+// por default para todos los flujos pre-Q4. Los nodos del pipeline de Q4 usan
+// queryID=4 desde el Sharder y propagan ese valor a través de Path-Finder y
+// Counter.
+func SerializeInnerBatch(queryID uint8, itemKind MsgKind, gatewayID GatewayID, clientID ClientID, items [][]byte) (*middleware.Message, error) {
 	if len(items) == 0 {
 		return nil, errors.New("inner batch must contain at least one item")
 	}
 	if len(items) > 0xFFFF {
 		return nil, errors.New("inner batch exceeds max items (65535)")
 	}
-	if itemKind != TransactionMessage && itemKind != AccountMessage {
-		return nil, errors.New("inner batch only supports TransactionMessage or AccountMessage items")
+	if !validInnerBatchItemKind(itemKind) {
+		return nil, errors.New("inner batch unsupported item kind")
 	}
 
 	total := 1 + 2
@@ -157,12 +189,12 @@ func SerializeInnerBatch(itemKind MsgKind, gatewayID GatewayID, clientID ClientI
 		buf = append(buf, lenBuf[:]...)
 		buf = append(buf, it...)
 	}
-	return SerializeEnvelope(InnerBatch, gatewayID, clientID, 0, buf)
+	return SerializeEnvelopeWithQuery(InnerBatch, gatewayID, clientID, 0, queryID, buf)
 }
 
 // DeserializeInnerBatch parsea el payload binario de un envelope InnerBatch.
-// Retorna el item_kind original y la lista de payloads sin decodificar (el
-// caller los pasa a DeserializeTransaction / DeserializeAccount según corresponda).
+// Retorna el item_kind original y la lista de payloads sin decodificar. El
+// QueryID está en env.QueryID y debe ser leído por el caller cuando aplique.
 func DeserializeInnerBatch(env *Envelope) (MsgKind, [][]byte, error) {
 	if env == nil || env.Kind != InnerBatch {
 		return 0, nil, ErrUnexpectedKind
@@ -172,28 +204,36 @@ func DeserializeInnerBatch(env *Envelope) (MsgKind, [][]byte, error) {
 		return 0, nil, ErrMalformedEnvelope
 	}
 	itemKind := MsgKind(p[0])
-	if itemKind != TransactionMessage && itemKind != AccountMessage {
+	if !validInnerBatchItemKind(itemKind) {
 		return 0, nil, ErrMalformedEnvelope
 	}
 	count := binary.LittleEndian.Uint16(p[1:3])
+	items, err := readBatchItems(p[3:], int(count))
+	if err != nil {
+		return 0, nil, err
+	}
+	return itemKind, items, nil
+}
+
+func readBatchItems(p []byte, count int) ([][]byte, error) {
 	items := make([][]byte, 0, count)
-	off := 3
-	for i := 0; i < int(count); i++ {
+	off := 0
+	for i := 0; i < count; i++ {
 		if off+4 > len(p) {
-			return 0, nil, ErrMalformedEnvelope
+			return nil, ErrMalformedEnvelope
 		}
 		itemLen := binary.LittleEndian.Uint32(p[off : off+4])
 		off += 4
 		if off+int(itemLen) > len(p) {
-			return 0, nil, ErrMalformedEnvelope
+			return nil, ErrMalformedEnvelope
 		}
 		items = append(items, p[off:off+int(itemLen)])
 		off += int(itemLen)
 	}
 	if off != len(p) {
-		return 0, nil, ErrMalformedEnvelope
+		return nil, ErrMalformedEnvelope
 	}
-	return itemKind, items, nil
+	return items, nil
 }
 
 func SerializeFinalQueryResultBatch(gatewayID GatewayID, clientID ClientID, items []QueryResultItem) (*middleware.Message, error) {
