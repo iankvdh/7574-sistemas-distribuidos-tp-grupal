@@ -6,6 +6,7 @@ package filter
 
 import (
 	"fmt"
+	"log/slog"
 
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/eof"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/messageprotocol/external"
@@ -17,12 +18,14 @@ import (
 type Predicate func(transaction.Transaction) bool
 
 type Filter struct {
-	name        string
-	predicate   Predicate
-	cfg         strategy.StrategyConfig
-	state       map[inner.ClientID]*filterState
-	matchCount  int
-	coordinator *eof.RingCoordinator
+	name              string
+	predicate         Predicate
+	cfg               strategy.StrategyConfig
+	state             map[inner.ClientID]*filterState
+	matchCount        int
+	coordinator       *eof.RingCoordinator
+	matchProjection   *Projection
+	noMatchProjection *Projection
 }
 
 type filterState struct {
@@ -39,6 +42,16 @@ func New(name string, predicate Predicate) *Filter {
 }
 
 func (f *Filter) Name() string { return f.name }
+
+func (f *Filter) WithMatchProjection(p Projection) *Filter {
+	f.matchProjection = &p
+	return f
+}
+
+func (f *Filter) WithNoMatchProjection(p Projection) *Filter {
+	f.noMatchProjection = &p
+	return f
+}
 
 func (f *Filter) Init(cfg strategy.StrategyConfig) error {
 	f.cfg = cfg
@@ -69,9 +82,13 @@ func (f *Filter) ProcessMessage(env *inner.Envelope) ([]strategy.OutputMessage, 
 		if f.matchCount == 0 {
 			return nil, strategy.LocalCounts{Processed: 1, Matched: 1}, nil
 		}
+		body, err := f.project(tx, f.matchProjection, env.Payload)
+		if err != nil {
+			return nil, strategy.LocalCounts{}, fmt.Errorf("project match: %w", err)
+		}
 		return []strategy.OutputMessage{{
 			OutputIndices: rangeIndices(0, f.matchCount),
-			Body:          env.Payload,
+			Body:          body,
 			ClientID:      env.ClientID,
 		}}, strategy.LocalCounts{Processed: 1, Matched: 1}, nil
 	}
@@ -81,11 +98,27 @@ func (f *Filter) ProcessMessage(env *inner.Envelope) ([]strategy.OutputMessage, 
 	if totalOutputs == f.matchCount {
 		return nil, strategy.LocalCounts{Processed: 1, NotMatched: 1}, nil
 	}
+	body, err := f.project(tx, f.noMatchProjection, env.Payload)
+	if err != nil {
+		return nil, strategy.LocalCounts{}, fmt.Errorf("project no-match: %w", err)
+	}
 	return []strategy.OutputMessage{{
 		OutputIndices: rangeIndices(f.matchCount, totalOutputs),
-		Body:          env.Payload,
+		Body:          body,
 		ClientID:      env.ClientID,
 	}}, strategy.LocalCounts{Processed: 1, NotMatched: 1}, nil
+}
+
+func (f *Filter) project(tx *transaction.Transaction, proj *Projection, original []byte) ([]byte, error) {
+	if proj == nil {
+		return original, nil
+	}
+	proj.Apply(tx)
+	result, err := external.SerializeTransaction(tx)
+	if err == nil {
+		slog.Debug("projection applied", "filter", f.name, "before_bytes", len(original), "after_bytes", len(result))
+	}
+	return result, err
 }
 
 func (f *Filter) OnUpstreamEOF(env *inner.Envelope) (strategy.EOFOutcome, error) {

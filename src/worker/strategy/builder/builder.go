@@ -19,7 +19,9 @@ func Build(name string) (strategy.Strategy, error) {
 	case "joiner_usd":
 		return joiner.NewEOFJoiner("joiner_usd"), nil
 	case "filter_wire_ach":
-		return filter.New("filter_wire_ach", filter.IsWireOrACH), nil
+		return filter.New("filter_wire_ach", filter.IsWireOrACH).
+			WithMatchProjection(filter.WithoutPaymentFormat).
+			WithNoMatchProjection(filter.WithoutPaymentFormat), nil
 	case "filter_amount_lt_50":
 		threshold, err := filter.ParseAmountThreshold()
 		if err != nil {
@@ -32,16 +34,21 @@ func Build(name string) (strategy.Strategy, error) {
 		if err != nil {
 			return nil, err
 		}
-		return filter.New("filter_period1", filter.InDateRange(start, end)), nil
+		return filter.New("filter_period1", filter.InDateRange(start, end)).
+			WithMatchProjection(filter.WithoutDate).
+			WithNoMatchProjection(filter.WithoutPaymentFormat), nil
 	case "filter_period2":
 		defStart, defEnd := filter.Period2Defaults()
 		start, end, err := filter.ParsePeriodRange("PERIOD2_START", "PERIOD2_END", defStart, defEnd)
 		if err != nil {
 			return nil, err
 		}
-		return filter.New("filter_period2", filter.InDateRange(start, end)), nil
+		return filter.New("filter_period2", filter.InDateRange(start, end)).
+			WithMatchProjection(filter.WithoutDate).
+			WithNoMatchProjection(filter.WithoutDate), nil
 	case "filter_currency_usd_p1", "filter_currency_usd_p2", "filter_currency_usd_other_periods":
-		return filter.New(name, filter.IsUSDPredicate()), nil
+		return filter.New(name, filter.IsUSDPredicate()).
+			WithMatchProjection(filter.WithoutPaymentCurrency), nil
 	default:
 		return nil, fmt.Errorf("unknown STRATEGY: %s", name)
 	}
