@@ -83,21 +83,12 @@ func New(cfg config.WorkerConfig) (*Worker, error) {
 		}
 	}
 
-	matchCount := cfg.OutputsMatchCount
-	if matchCount == 0 {
-		matchCount = len(outputs)
-	}
-	if matchCount > len(outputs) {
-		closeAll(input, ringIn, ringOut, outputs)
-		return nil, errors.New("OUTPUTS_MATCH_COUNT exceeds number of OUTPUT_* outputConfigs")
-	}
-
 	ctx := strategy.Context{
 		OutputCount:  len(outputs),
 		ReplicaID:    cfg.ReplicaID,
 		NReplicas:    cfg.NReplicas,
 		StrategyName: cfg.StrategyName,
-		MatchCount:   matchCount,
+		MatchCount:   cfg.OutputsMatchCount,
 	}
 	if err := strat.Init(ctx); err != nil {
 		closeAll(input, ringIn, ringOut, outputs)
