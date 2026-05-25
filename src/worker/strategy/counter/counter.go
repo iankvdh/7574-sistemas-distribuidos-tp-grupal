@@ -12,6 +12,7 @@ import (
 )
 
 const defaultMinIntermediates = 5
+const queryID = 4
 
 type accountKey struct {
 	Bank    uint32
@@ -136,6 +137,7 @@ func (c *Counter) OnUpstreamEOF(envelope *inner.Envelope) (strategy.EOFOutcome, 
 		EOFs: []eof.EOFEmit{{
 			OutputIndex: 0,
 			RoutingKey:  c.routingKeyFor(envelope.ClientID),
+			QueryID:     queryID,
 		}},
 	}, nil
 }

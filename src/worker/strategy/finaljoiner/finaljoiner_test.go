@@ -9,10 +9,20 @@ import (
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy"
 )
 
-func newInited(t *testing.T, queryID, expectedEOFs, outputCount int) *FinalJoiner {
+// newInited builds a FinalJoiner configured with per-query EOF cuotas. Pass 0
+// for queries you want disabled in the test.
+func newInited(t *testing.T, expectedQ1, expectedQ4, outputCount int) *FinalJoiner {
 	t.Helper()
-	t.Setenv("QUERY_ID", itoa(queryID))
-	t.Setenv("EXPECTED_EOFS", itoa(expectedEOFs))
+	if expectedQ1 > 0 {
+		t.Setenv("EXPECTED_EOFS_Q1", itoa(expectedQ1))
+	} else {
+		os.Unsetenv("EXPECTED_EOFS_Q1")
+	}
+	if expectedQ4 > 0 {
+		t.Setenv("EXPECTED_EOFS_Q4", itoa(expectedQ4))
+	} else {
+		os.Unsetenv("EXPECTED_EOFS_Q4")
+	}
 	j := New()
 	if err := j.Init(strategy.StrategyConfig{
 		OutputCount:  outputCount,
@@ -38,24 +48,16 @@ func itoa(n int) string {
 	return string(digits)
 }
 
-func TestFinalJoinerInitRequiresQueryID(t *testing.T) {
-	os.Unsetenv("QUERY_ID")
-	t.Setenv("EXPECTED_EOFS", "1")
+func TestFinalJoinerInitRequiresAtLeastOneQuery(t *testing.T) {
+	os.Unsetenv("EXPECTED_EOFS_Q1")
+	os.Unsetenv("EXPECTED_EOFS_Q4")
 	if err := New().Init(strategy.StrategyConfig{OutputCount: 1, NReplicas: 1}); err == nil {
-		t.Fatalf("expected error when QUERY_ID missing")
-	}
-}
-
-func TestFinalJoinerInitRequiresExpectedEOFs(t *testing.T) {
-	t.Setenv("QUERY_ID", "4")
-	os.Unsetenv("EXPECTED_EOFS")
-	if err := New().Init(strategy.StrategyConfig{OutputCount: 1, NReplicas: 1}); err == nil {
-		t.Fatalf("expected error when EXPECTED_EOFS missing")
+		t.Fatalf("expected error when no EXPECTED_EOFS_Q<n> is set")
 	}
 }
 
 func TestFinalJoinerProcessQ1FormatsRow(t *testing.T) {
-	j := newInited(t, 1, 1, 1)
+	j := newInited(t, 1, 0, 1)
 
 	row := &inner.Query1Row{
 		SourceBank: 11, SourceAccount: "ACC-A",
@@ -92,7 +94,7 @@ func TestFinalJoinerProcessQ1FormatsRow(t *testing.T) {
 }
 
 func TestFinalJoinerProcessQ4DedupesAndDefersUntilEOF(t *testing.T) {
-	j := newInited(t, 4, 1, 1)
+	j := newInited(t, 0, 1, 1)
 
 	feed := func(bank uint32, account string) {
 		acc := &inner.Query4Account{Bank: bank, Account: account}
@@ -108,14 +110,13 @@ func TestFinalJoinerProcessQ4DedupesAndDefersUntilEOF(t *testing.T) {
 		}
 	}
 
-	// Two pairs sharing a source — dedupe should collapse the source.
 	feed(7, "A")
 	feed(9, "B")
 	feed(7, "A") // dup, no emit
 	feed(9, "C")
 
 	outcome, err := j.OnUpstreamEOF(&inner.Envelope{
-		Kind: inner.InternalEOF, ClientID: "c-1", GatewayID: 1, Total: 0,
+		Kind: inner.InternalEOF, ClientID: "c-1", GatewayID: 1, QueryID: 4, Total: 0,
 	})
 	if err != nil {
 		t.Fatalf("OnUpstreamEOF: %v", err)
@@ -127,7 +128,6 @@ func TestFinalJoinerProcessQ4DedupesAndDefersUntilEOF(t *testing.T) {
 		t.Fatalf("expected 3 deduped outputs, got %d (%+v)", len(outcome.Outputs), outcome.Outputs)
 	}
 
-	// Sorted by (bank, account).
 	wants := []string{"7,A", "9,B", "9,C"}
 	for i, o := range outcome.Outputs {
 		if string(o.Body) != wants[i] {
@@ -136,21 +136,86 @@ func TestFinalJoinerProcessQ4DedupesAndDefersUntilEOF(t *testing.T) {
 		if o.BatchQueryID != 4 {
 			t.Fatalf("output[%d]: BatchQueryID got %d want 4", i, o.BatchQueryID)
 		}
-		if len(o.OutputIndices) != 1 || o.OutputIndices[0] != 0 {
-			t.Fatalf("output[%d]: OutputIndices %v want [0]", i, o.OutputIndices)
+	}
+
+	if len(outcome.EOFs) != 1 || outcome.EOFs[0].QueryID != 4 {
+		t.Fatalf("expected 1 EOFEmit for Q4, got %+v", outcome.EOFs)
+	}
+}
+
+func TestFinalJoinerHandlesQ1AndQ4InSameInstance(t *testing.T) {
+	j := newInited(t, 2, 2, 1) // 2 EOFs cuota per query
+
+	// Q1 item — should emit immediately.
+	q1 := &inner.Query1Row{SourceBank: 1, SourceAccount: "x", DestBank: 2, DestAccount: "y", Amount: 1}
+	q1Payload, _ := inner.SerializeQuery1Row(q1)
+	out, _, err := j.ProcessMessage(&inner.Envelope{
+		Kind: inner.Query1RowItem, ClientID: "c", GatewayID: 1, QueryID: 1, Payload: q1Payload,
+	})
+	if err != nil || len(out) != 1 {
+		t.Fatalf("Q1 ProcessMessage: err=%v out=%d", err, len(out))
+	}
+
+	// Q4 item — should buffer.
+	q4 := &inner.Query4Account{Bank: 3, Account: "M"}
+	q4Payload, _ := inner.SerializeQuery4Account(q4)
+	out, _, err = j.ProcessMessage(&inner.Envelope{
+		Kind: inner.Query4AccountItem, ClientID: "c", GatewayID: 1, QueryID: 4, Payload: q4Payload,
+	})
+	if err != nil || len(out) != 0 {
+		t.Fatalf("Q4 ProcessMessage: err=%v out=%d (want 0)", err, len(out))
+	}
+
+	// First EOF of EACH query — neither should fire yet (cuota 2 each).
+	for _, qid := range []uint8{1, 4} {
+		outcome, err := j.OnUpstreamEOF(&inner.Envelope{
+			Kind: inner.InternalEOF, ClientID: "c", GatewayID: 1, QueryID: qid, Total: 0,
+		})
+		if err != nil {
+			t.Fatalf("first EOF Q%d: %v", qid, err)
+		}
+		if outcome.Action.Kind != eof.ActionNone {
+			t.Fatalf("first EOF Q%d should not emit yet, got %d", qid, outcome.Action.Kind)
 		}
 	}
 
-	if len(outcome.EOFs) != 1 {
-		t.Fatalf("expected 1 EOFEmit, got %d", len(outcome.EOFs))
+	// Second EOF for Q1 → fires (no Outputs because Q1 is streaming).
+	outcome, err := j.OnUpstreamEOF(&inner.Envelope{
+		Kind: inner.InternalEOF, ClientID: "c", GatewayID: 1, QueryID: 1, Total: 0,
+	})
+	if err != nil {
+		t.Fatalf("second EOF Q1: %v", err)
 	}
-	if outcome.EOFs[0].QueryID != 4 {
-		t.Fatalf("EOF QueryID got %d want 4", outcome.EOFs[0].QueryID)
+	if outcome.Action.Kind != eof.ActionEmitEOFs {
+		t.Fatalf("Q1 second EOF should fire, got %d", outcome.Action.Kind)
+	}
+	if len(outcome.EOFs) != 1 || outcome.EOFs[0].QueryID != 1 {
+		t.Fatalf("Q1 EOFEmit: %+v", outcome.EOFs)
+	}
+	if len(outcome.Outputs) != 0 {
+		t.Fatalf("Q1 should not emit deferred Outputs, got %d", len(outcome.Outputs))
+	}
+
+	// Second EOF for Q4 → fires WITH deferred outputs (the buffered account).
+	outcome, err = j.OnUpstreamEOF(&inner.Envelope{
+		Kind: inner.InternalEOF, ClientID: "c", GatewayID: 1, QueryID: 4, Total: 0,
+	})
+	if err != nil {
+		t.Fatalf("second EOF Q4: %v", err)
+	}
+	if outcome.Action.Kind != eof.ActionEmitEOFs {
+		t.Fatalf("Q4 second EOF should fire, got %d", outcome.Action.Kind)
+	}
+	if len(outcome.Outputs) != 1 || string(outcome.Outputs[0].Body) != "3,M" {
+		t.Fatalf("Q4 deferred outputs: %+v", outcome.Outputs)
+	}
+	if len(outcome.EOFs) != 1 || outcome.EOFs[0].QueryID != 4 {
+		t.Fatalf("Q4 EOFEmit: %+v", outcome.EOFs)
 	}
 }
 
 func TestFinalJoinerProcessRoutesToCorrectGateway(t *testing.T) {
-	j := newInited(t, 1, 1, 2) // 2 gateway outputs
+	j := newInited(t, 1, 0, 2) // 2 gateway outputs
 
 	for gw := 1; gw <= 2; gw++ {
 		row := &inner.Query1Row{SourceBank: 1, SourceAccount: "x", DestBank: 2, DestAccount: "y", Amount: 1}
@@ -169,7 +234,7 @@ func TestFinalJoinerProcessRoutesToCorrectGateway(t *testing.T) {
 }
 
 func TestFinalJoinerProcessRejectsUnknownGateway(t *testing.T) {
-	j := newInited(t, 1, 1, 1)
+	j := newInited(t, 1, 0, 1)
 
 	row := &inner.Query1Row{SourceBank: 1, SourceAccount: "x", DestBank: 2, DestAccount: "y", Amount: 1}
 	payload, _ := inner.SerializeQuery1Row(row)
@@ -183,8 +248,8 @@ func TestFinalJoinerProcessRejectsUnknownGateway(t *testing.T) {
 	}
 }
 
-func TestFinalJoinerDropsMismatchedQueryID(t *testing.T) {
-	j := newInited(t, 4, 1, 1)
+func TestFinalJoinerDropsMessagesForUnconfiguredQuery(t *testing.T) {
+	j := newInited(t, 0, 1, 1) // only Q4 active
 
 	row := &inner.Query1Row{SourceBank: 1, SourceAccount: "x", DestBank: 2, DestAccount: "y", Amount: 1}
 	payload, _ := inner.SerializeQuery1Row(row)
@@ -193,55 +258,31 @@ func TestFinalJoinerDropsMismatchedQueryID(t *testing.T) {
 		Kind: inner.Query1RowItem, ClientID: "c", GatewayID: 1, QueryID: 1, Payload: payload,
 	})
 	if err != nil {
-		t.Fatalf("expected silent drop, got error: %v", err)
+		t.Fatalf("expected silent drop for unconfigured query, got error: %v", err)
 	}
 	if len(out) != 0 || counts.Matched != 0 {
-		t.Fatalf("expected no output for mismatched QueryID, got %+v counts=%+v", out, counts)
+		t.Fatalf("expected no output for unconfigured query, got %+v counts=%+v", out, counts)
 	}
 }
 
-func TestFinalJoinerEOFAccumulatesAndEmitsAfterN(t *testing.T) {
-	j := newInited(t, 1, 3, 1) // need 3 EOFs per client (Q1, no deferred outputs)
+func TestFinalJoinerDropsEOFsForUnconfiguredQuery(t *testing.T) {
+	j := newInited(t, 1, 0, 1) // only Q1 active
 
-	// First two EOFs: no emit.
-	for i := 0; i < 2; i++ {
-		outcome, err := j.OnUpstreamEOF(&inner.Envelope{
-			Kind: inner.InternalEOF, ClientID: "c-x", GatewayID: 1, Total: 0,
-		})
-		if err != nil {
-			t.Fatalf("EOF %d: %v", i, err)
-		}
-		if outcome.Action.Kind != eof.ActionNone {
-			t.Fatalf("EOF %d: expected ActionNone, got %d", i, outcome.Action.Kind)
-		}
-	}
-
-	// Third EOF triggers emit.
 	outcome, err := j.OnUpstreamEOF(&inner.Envelope{
-		Kind: inner.InternalEOF, ClientID: "c-x", GatewayID: 1, Total: 0,
+		Kind: inner.InternalEOF, ClientID: "c", GatewayID: 1, QueryID: 4, Total: 0,
 	})
 	if err != nil {
-		t.Fatalf("third EOF: %v", err)
+		t.Fatalf("expected silent drop, got error: %v", err)
 	}
-	if outcome.Action.Kind != eof.ActionEmitEOFs {
-		t.Fatalf("expected ActionEmitEOFs, got %d", outcome.Action.Kind)
-	}
-	if len(outcome.EOFs) != 1 {
-		t.Fatalf("expected 1 EOFEmit, got %d", len(outcome.EOFs))
-	}
-	emit := outcome.EOFs[0]
-	if emit.OutputIndex != 0 {
-		t.Fatalf("OutputIndex got %d want 0", emit.OutputIndex)
-	}
-	if emit.QueryID != 1 {
-		t.Fatalf("QueryID got %d want 1", emit.QueryID)
+	if outcome.Action.Kind != eof.ActionNone {
+		t.Fatalf("expected ActionNone, got %d", outcome.Action.Kind)
 	}
 }
 
 func TestFinalJoinerEOFForUnknownGatewayFails(t *testing.T) {
-	j := newInited(t, 1, 1, 1)
+	j := newInited(t, 1, 0, 1)
 	_, err := j.OnUpstreamEOF(&inner.Envelope{
-		Kind: inner.InternalEOF, ClientID: "c", GatewayID: 9, Total: 0,
+		Kind: inner.InternalEOF, ClientID: "c", GatewayID: 9, QueryID: 1, Total: 0,
 	})
 	if err == nil {
 		t.Fatalf("expected error for GatewayID out of range on EOF")

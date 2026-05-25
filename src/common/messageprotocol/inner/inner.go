@@ -142,8 +142,11 @@ func SerializeAccountMessage(gatewayID GatewayID, clientID ClientID, payload []b
 }
 
 // SerializeInternalEOF emite un EOF interno con total agregado (count emitido a la output).
-func SerializeInternalEOF(gatewayID GatewayID, clientID ClientID, total uint32) (*middleware.Message, error) {
-	return SerializeEnvelope(InternalEOF, gatewayID, clientID, total, nil)
+// queryID se propaga en el envelope para que los consumidores polimórficos (p.ej. un
+// FinalJoiner compartido entre queries) puedan acumular EOFs por (clientID, queryID).
+// Pasar 0 cuando el productor no participa de una query concreta.
+func SerializeInternalEOF(gatewayID GatewayID, clientID ClientID, total uint32, queryID uint8) (*middleware.Message, error) {
+	return SerializeEnvelopeWithQuery(InternalEOF, gatewayID, clientID, total, queryID, nil)
 }
 
 // SerializeRingToken envuelve el token JSON del anillo en un envelope.

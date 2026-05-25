@@ -18,8 +18,8 @@ services:
       counter_q4_0: { condition: service_started }
       counter_q4_1: { condition: service_started }
       counter_q4_2: { condition: service_started }
-      final_joiner_q4_0: { condition: service_started }
-      final_joiner_q4_1: { condition: service_started }
+      final_joiner_0: { condition: service_started }
+      final_joiner_1: { condition: service_started }
     env_file:
       - .env
     environment:
@@ -57,8 +57,8 @@ services:
       counter_q4_0: { condition: service_started }
       counter_q4_1: { condition: service_started }
       counter_q4_2: { condition: service_started }
-      final_joiner_q4_0: { condition: service_started }
-      final_joiner_q4_1: { condition: service_started }
+      final_joiner_0: { condition: service_started }
+      final_joiner_1: { condition: service_started }
     env_file:
       - .env
     environment:
@@ -306,7 +306,7 @@ services:
       - MIN_INTERMEDIATES=5
       - N_FINAL_JOINERS=2
       - N_PATH_FINDERS=3
-  final_joiner_q4_0:
+  final_joiner_0:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
     depends_on: { rabbitmq: { condition: service_healthy } }
     env_file:
@@ -320,9 +320,8 @@ services:
       - OUTPUT_0=final_queue:final_1
       - OUTPUT_1=final_queue:final_2
       - LOG_LEVEL=info
-      - EXPECTED_EOFS=3
-      - QUERY_ID=4
-  final_joiner_q4_1:
+      - EXPECTED_EOFS_Q4=3
+  final_joiner_1:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
     depends_on: { rabbitmq: { condition: service_healthy } }
     env_file:
@@ -336,8 +335,7 @@ services:
       - OUTPUT_0=final_queue:final_1
       - OUTPUT_1=final_queue:final_2
       - LOG_LEVEL=info
-      - EXPECTED_EOFS=3
-      - QUERY_ID=4
+      - EXPECTED_EOFS_Q4=3
   rabbitmq:
     build: { context: ./src/rabbitmq, dockerfile: Dockerfile }
     volumes:
