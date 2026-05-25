@@ -40,7 +40,7 @@ type workerSpec struct {
 	Name       string
 	Strategy   string
 	Replicas   int
-	Input      string
+	Inputs     []string
 	MatchCount int
 	Outputs    []string
 	Env        map[string]string
@@ -77,6 +77,8 @@ var strategiesWithRing = map[string]struct{}{
 	"sharder_q1":                        {},
 	"max_q2":                            {},
 	"bank_aggregator":                   {},
+	"sum_q3":                            {},
+	"filter_q3":                         {},
 }
 
 func strategyUsesRing(strategy string) bool {
@@ -159,7 +161,7 @@ func parseSpec(src string) (*spec, error) {
 		case section == "workers" && indent == 4:
 			currentList = ""
 			key, value := splitKV(trimmed)
-			if value == "" && (key == "outputs" || key == "env" || key == "volumes") {
+			if value == "" && (key == "outputs" || key == "env" || key == "volumes" || key == "inputs") {
 				currentList = key
 				continue
 			}
@@ -173,6 +175,8 @@ func parseSpec(src string) (*spec, error) {
 				switch currentList {
 				case "outputs":
 					cur.Outputs = append(cur.Outputs, value)
+				case "inputs":
+					cur.Inputs = append(cur.Inputs, value)
 				case "volumes":
 					cur.Volumes = append(cur.Volumes, value)
 				}
@@ -204,7 +208,9 @@ func applyWorkerField(ws *workerSpec, key, value string) {
 	case "replicas":
 		ws.Replicas, _ = strconv.Atoi(value)
 	case "input":
-		ws.Input = value
+		// Legacy single-input form. Stored as a singleton slice so the renderer
+		// can treat single- and multi-input workers uniformly.
+		ws.Inputs = []string{value}
 	case "match_count":
 		ws.MatchCount, _ = strconv.Atoi(value)
 	}
@@ -363,8 +369,15 @@ func writeWorker(w io.Writer, ws workerSpec, replica int, logLevel string) {
 	fmt.Fprintf(w, "      - STRATEGY=%s\n", ws.Strategy)
 	fmt.Fprintf(w, "      - REPLICA_ID=%d\n", replica)
 	fmt.Fprintf(w, "      - N_REPLICAS=%d\n", ws.Replicas)
-	input := strings.ReplaceAll(ws.Input, "{REPLICA_ID}", strconv.Itoa(replica))
-	fmt.Fprintf(w, "      - INPUT=%s\n", input)
+	if len(ws.Inputs) == 1 {
+		input := strings.ReplaceAll(ws.Inputs[0], "{REPLICA_ID}", strconv.Itoa(replica))
+		fmt.Fprintf(w, "      - INPUT=%s\n", input)
+	} else {
+		for j, raw := range ws.Inputs {
+			input := strings.ReplaceAll(raw, "{REPLICA_ID}", strconv.Itoa(replica))
+			fmt.Fprintf(w, "      - INPUT_%d=%s\n", j, input)
+		}
+	}
 	fmt.Fprintf(w, "      - OUTPUTS_MATCH_COUNT=%d\n", ws.MatchCount)
 	for j, o := range ws.Outputs {
 		fmt.Fprintf(w, "      - OUTPUT_%d=%s\n", j, o)

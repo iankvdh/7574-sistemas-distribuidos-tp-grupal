@@ -17,20 +17,14 @@ services:
       filter_currency_usd_p2_0: { condition: service_started }
       filter_currency_usd_p2_1: { condition: service_started }
       filter_currency_usd_p2_2: { condition: service_started }
-      filter_currency_usd_other_periods_0: { condition: service_started }
-      filter_currency_usd_other_periods_1: { condition: service_started }
-      filter_currency_usd_other_periods_2: { condition: service_started }
-      joiner_usd_0: { condition: service_started }
-      joiner_usd_1: { condition: service_started }
-      joiner_usd_2: { condition: service_started }
-      max_q2_0: { condition: service_started }
-      max_q2_1: { condition: service_started }
-      max_q2_2: { condition: service_started }
-      bank_aggregator_0: { condition: service_started }
-      bank_aggregator_1: { condition: service_started }
-      bank_aggregator_2: { condition: service_started }
-      aggregator_q2_0: { condition: service_started }
-      aggregator_q2_1: { condition: service_started }
+      sum_q3_0: { condition: service_started }
+      sum_q3_1: { condition: service_started }
+      sum_q3_2: { condition: service_started }
+      aggregator_q3_0: { condition: service_started }
+      aggregator_q3_1: { condition: service_started }
+      filter_q3_0: { condition: service_started }
+      filter_q3_1: { condition: service_started }
+      filter_q3_2: { condition: service_started }
       final_joiner_0: { condition: service_started }
       final_joiner_1: { condition: service_started }
     env_file:
@@ -69,20 +63,14 @@ services:
       filter_currency_usd_p2_0: { condition: service_started }
       filter_currency_usd_p2_1: { condition: service_started }
       filter_currency_usd_p2_2: { condition: service_started }
-      filter_currency_usd_other_periods_0: { condition: service_started }
-      filter_currency_usd_other_periods_1: { condition: service_started }
-      filter_currency_usd_other_periods_2: { condition: service_started }
-      joiner_usd_0: { condition: service_started }
-      joiner_usd_1: { condition: service_started }
-      joiner_usd_2: { condition: service_started }
-      max_q2_0: { condition: service_started }
-      max_q2_1: { condition: service_started }
-      max_q2_2: { condition: service_started }
-      bank_aggregator_0: { condition: service_started }
-      bank_aggregator_1: { condition: service_started }
-      bank_aggregator_2: { condition: service_started }
-      aggregator_q2_0: { condition: service_started }
-      aggregator_q2_1: { condition: service_started }
+      sum_q3_0: { condition: service_started }
+      sum_q3_1: { condition: service_started }
+      sum_q3_2: { condition: service_started }
+      aggregator_q3_0: { condition: service_started }
+      aggregator_q3_1: { condition: service_started }
+      filter_q3_0: { condition: service_started }
+      filter_q3_1: { condition: service_started }
+      filter_q3_2: { condition: service_started }
       final_joiner_0: { condition: service_started }
       final_joiner_1: { condition: service_started }
     env_file:
@@ -190,7 +178,7 @@ services:
       - N_REPLICAS=3
       - INPUT=queue:period1_for_currency_usd_p1
       - OUTPUTS_MATCH_COUNT=1
-      - OUTPUT_0=sharded_queues:joiner_usd_input:3
+      - OUTPUT_0=queue:q3_p1_usd
       - LOG_LEVEL=info
       - RING_QUEUE_IN=ring_filter_currency_usd_p1_0
       - RING_QUEUE_OUT=ring_filter_currency_usd_p1_1
@@ -205,7 +193,7 @@ services:
       - N_REPLICAS=3
       - INPUT=queue:period1_for_currency_usd_p1
       - OUTPUTS_MATCH_COUNT=1
-      - OUTPUT_0=sharded_queues:joiner_usd_input:3
+      - OUTPUT_0=queue:q3_p1_usd
       - LOG_LEVEL=info
       - RING_QUEUE_IN=ring_filter_currency_usd_p1_1
       - RING_QUEUE_OUT=ring_filter_currency_usd_p1_2
@@ -220,7 +208,7 @@ services:
       - N_REPLICAS=3
       - INPUT=queue:period1_for_currency_usd_p1
       - OUTPUTS_MATCH_COUNT=1
-      - OUTPUT_0=sharded_queues:joiner_usd_input:3
+      - OUTPUT_0=queue:q3_p1_usd
       - LOG_LEVEL=info
       - RING_QUEUE_IN=ring_filter_currency_usd_p1_2
       - RING_QUEUE_OUT=ring_filter_currency_usd_p1_0
@@ -283,7 +271,7 @@ services:
       - N_REPLICAS=3
       - INPUT=queue:period2_transactions
       - OUTPUTS_MATCH_COUNT=1
-      - OUTPUT_0=sharded_queues:joiner_usd_input:3
+      - OUTPUT_0=queue:q3_p2_for_filter
       - LOG_LEVEL=info
       - RING_QUEUE_IN=ring_filter_currency_usd_p2_0
       - RING_QUEUE_OUT=ring_filter_currency_usd_p2_1
@@ -298,7 +286,7 @@ services:
       - N_REPLICAS=3
       - INPUT=queue:period2_transactions
       - OUTPUTS_MATCH_COUNT=1
-      - OUTPUT_0=sharded_queues:joiner_usd_input:3
+      - OUTPUT_0=queue:q3_p2_for_filter
       - LOG_LEVEL=info
       - RING_QUEUE_IN=ring_filter_currency_usd_p2_1
       - RING_QUEUE_OUT=ring_filter_currency_usd_p2_2
@@ -313,228 +301,144 @@ services:
       - N_REPLICAS=3
       - INPUT=queue:period2_transactions
       - OUTPUTS_MATCH_COUNT=1
-      - OUTPUT_0=sharded_queues:joiner_usd_input:3
+      - OUTPUT_0=queue:q3_p2_for_filter
       - LOG_LEVEL=info
       - RING_QUEUE_IN=ring_filter_currency_usd_p2_2
       - RING_QUEUE_OUT=ring_filter_currency_usd_p2_0
-  filter_currency_usd_other_periods_0:
+  sum_q3_0:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
     depends_on: { rabbitmq: { condition: service_healthy } }
     env_file:
       - .env
     environment:
-      - STRATEGY=filter_currency_usd_other_periods
+      - STRATEGY=sum_q3
       - REPLICA_ID=0
       - N_REPLICAS=3
-      - INPUT=queue:other_dates_transactions
-      - OUTPUTS_MATCH_COUNT=1
-      - OUTPUT_0=sharded_queues:joiner_usd_input:3
+      - INPUT=queue:q3_p1_usd
+      - OUTPUTS_MATCH_COUNT=0
+      - OUTPUT_0=direct_exchange:q3_avg_global_input
       - LOG_LEVEL=info
-      - RING_QUEUE_IN=ring_filter_currency_usd_other_periods_0
-      - RING_QUEUE_OUT=ring_filter_currency_usd_other_periods_1
-  filter_currency_usd_other_periods_1:
+      - RING_QUEUE_IN=ring_sum_q3_0
+      - RING_QUEUE_OUT=ring_sum_q3_1
+      - K_AGGREGATORS_Q3=2
+  sum_q3_1:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
     depends_on: { rabbitmq: { condition: service_healthy } }
     env_file:
       - .env
     environment:
-      - STRATEGY=filter_currency_usd_other_periods
+      - STRATEGY=sum_q3
       - REPLICA_ID=1
       - N_REPLICAS=3
-      - INPUT=queue:other_dates_transactions
-      - OUTPUTS_MATCH_COUNT=1
-      - OUTPUT_0=sharded_queues:joiner_usd_input:3
+      - INPUT=queue:q3_p1_usd
+      - OUTPUTS_MATCH_COUNT=0
+      - OUTPUT_0=direct_exchange:q3_avg_global_input
       - LOG_LEVEL=info
-      - RING_QUEUE_IN=ring_filter_currency_usd_other_periods_1
-      - RING_QUEUE_OUT=ring_filter_currency_usd_other_periods_2
-  filter_currency_usd_other_periods_2:
+      - RING_QUEUE_IN=ring_sum_q3_1
+      - RING_QUEUE_OUT=ring_sum_q3_2
+      - K_AGGREGATORS_Q3=2
+  sum_q3_2:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
     depends_on: { rabbitmq: { condition: service_healthy } }
     env_file:
       - .env
     environment:
-      - STRATEGY=filter_currency_usd_other_periods
+      - STRATEGY=sum_q3
       - REPLICA_ID=2
       - N_REPLICAS=3
-      - INPUT=queue:other_dates_transactions
-      - OUTPUTS_MATCH_COUNT=1
-      - OUTPUT_0=sharded_queues:joiner_usd_input:3
-      - LOG_LEVEL=info
-      - RING_QUEUE_IN=ring_filter_currency_usd_other_periods_2
-      - RING_QUEUE_OUT=ring_filter_currency_usd_other_periods_0
-  joiner_usd_0:
-    build: { context: ./src/, dockerfile: worker/Dockerfile }
-    depends_on: { rabbitmq: { condition: service_healthy } }
-    env_file:
-      - .env
-    environment:
-      - STRATEGY=joiner_usd
-      - REPLICA_ID=0
-      - N_REPLICAS=3
-      - INPUT=queue:joiner_usd_input_0
+      - INPUT=queue:q3_p1_usd
       - OUTPUTS_MATCH_COUNT=0
-      - OUTPUT_0=queue:q2_input
+      - OUTPUT_0=direct_exchange:q3_avg_global_input
       - LOG_LEVEL=info
-      - RING_QUEUE_IN=ring_joiner_usd_0
-      - RING_QUEUE_OUT=ring_joiner_usd_1
-      - EXPECTED_EOFS=3
-  joiner_usd_1:
+      - RING_QUEUE_IN=ring_sum_q3_2
+      - RING_QUEUE_OUT=ring_sum_q3_0
+      - K_AGGREGATORS_Q3=2
+  aggregator_q3_0:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
     depends_on: { rabbitmq: { condition: service_healthy } }
     env_file:
       - .env
     environment:
-      - STRATEGY=joiner_usd
-      - REPLICA_ID=1
-      - N_REPLICAS=3
-      - INPUT=queue:joiner_usd_input_1
-      - OUTPUTS_MATCH_COUNT=0
-      - OUTPUT_0=queue:q2_input
-      - LOG_LEVEL=info
-      - RING_QUEUE_IN=ring_joiner_usd_1
-      - RING_QUEUE_OUT=ring_joiner_usd_2
-      - EXPECTED_EOFS=3
-  joiner_usd_2:
-    build: { context: ./src/, dockerfile: worker/Dockerfile }
-    depends_on: { rabbitmq: { condition: service_healthy } }
-    env_file:
-      - .env
-    environment:
-      - STRATEGY=joiner_usd
-      - REPLICA_ID=2
-      - N_REPLICAS=3
-      - INPUT=queue:joiner_usd_input_2
-      - OUTPUTS_MATCH_COUNT=0
-      - OUTPUT_0=queue:q2_input
-      - LOG_LEVEL=info
-      - RING_QUEUE_IN=ring_joiner_usd_2
-      - RING_QUEUE_OUT=ring_joiner_usd_0
-      - EXPECTED_EOFS=3
-  max_q2_0:
-    build: { context: ./src/, dockerfile: worker/Dockerfile }
-    depends_on: { rabbitmq: { condition: service_healthy } }
-    env_file:
-      - .env
-    environment:
-      - STRATEGY=max_q2
-      - REPLICA_ID=0
-      - N_REPLICAS=3
-      - INPUT=queue:q2_input
-      - OUTPUTS_MATCH_COUNT=0
-      - OUTPUT_0=direct_exchange:q2_agg_input
-      - LOG_LEVEL=info
-      - RING_QUEUE_IN=ring_max_q2_0
-      - RING_QUEUE_OUT=ring_max_q2_1
-      - K_AGGREGATORS_Q2=2
-  max_q2_1:
-    build: { context: ./src/, dockerfile: worker/Dockerfile }
-    depends_on: { rabbitmq: { condition: service_healthy } }
-    env_file:
-      - .env
-    environment:
-      - STRATEGY=max_q2
-      - REPLICA_ID=1
-      - N_REPLICAS=3
-      - INPUT=queue:q2_input
-      - OUTPUTS_MATCH_COUNT=0
-      - OUTPUT_0=direct_exchange:q2_agg_input
-      - LOG_LEVEL=info
-      - RING_QUEUE_IN=ring_max_q2_1
-      - RING_QUEUE_OUT=ring_max_q2_2
-      - K_AGGREGATORS_Q2=2
-  max_q2_2:
-    build: { context: ./src/, dockerfile: worker/Dockerfile }
-    depends_on: { rabbitmq: { condition: service_healthy } }
-    env_file:
-      - .env
-    environment:
-      - STRATEGY=max_q2
-      - REPLICA_ID=2
-      - N_REPLICAS=3
-      - INPUT=queue:q2_input
-      - OUTPUTS_MATCH_COUNT=0
-      - OUTPUT_0=direct_exchange:q2_agg_input
-      - LOG_LEVEL=info
-      - RING_QUEUE_IN=ring_max_q2_2
-      - RING_QUEUE_OUT=ring_max_q2_0
-      - K_AGGREGATORS_Q2=2
-  bank_aggregator_0:
-    build: { context: ./src/, dockerfile: worker/Dockerfile }
-    depends_on: { rabbitmq: { condition: service_healthy } }
-    env_file:
-      - .env
-    environment:
-      - STRATEGY=bank_aggregator
-      - REPLICA_ID=0
-      - N_REPLICAS=3
-      - INPUT=queue:all_accounts
-      - OUTPUTS_MATCH_COUNT=0
-      - OUTPUT_0=direct_exchange:q2_agg_input
-      - LOG_LEVEL=info
-      - RING_QUEUE_IN=ring_bank_aggregator_0
-      - RING_QUEUE_OUT=ring_bank_aggregator_1
-      - K_AGGREGATORS_Q2=2
-  bank_aggregator_1:
-    build: { context: ./src/, dockerfile: worker/Dockerfile }
-    depends_on: { rabbitmq: { condition: service_healthy } }
-    env_file:
-      - .env
-    environment:
-      - STRATEGY=bank_aggregator
-      - REPLICA_ID=1
-      - N_REPLICAS=3
-      - INPUT=queue:all_accounts
-      - OUTPUTS_MATCH_COUNT=0
-      - OUTPUT_0=direct_exchange:q2_agg_input
-      - LOG_LEVEL=info
-      - RING_QUEUE_IN=ring_bank_aggregator_1
-      - RING_QUEUE_OUT=ring_bank_aggregator_2
-      - K_AGGREGATORS_Q2=2
-  bank_aggregator_2:
-    build: { context: ./src/, dockerfile: worker/Dockerfile }
-    depends_on: { rabbitmq: { condition: service_healthy } }
-    env_file:
-      - .env
-    environment:
-      - STRATEGY=bank_aggregator
-      - REPLICA_ID=2
-      - N_REPLICAS=3
-      - INPUT=queue:all_accounts
-      - OUTPUTS_MATCH_COUNT=0
-      - OUTPUT_0=direct_exchange:q2_agg_input
-      - LOG_LEVEL=info
-      - RING_QUEUE_IN=ring_bank_aggregator_2
-      - RING_QUEUE_OUT=ring_bank_aggregator_0
-      - K_AGGREGATORS_Q2=2
-  aggregator_q2_0:
-    build: { context: ./src/, dockerfile: worker/Dockerfile }
-    depends_on: { rabbitmq: { condition: service_healthy } }
-    env_file:
-      - .env
-    environment:
-      - STRATEGY=aggregator_q2
+      - STRATEGY=aggregator_q3
       - REPLICA_ID=0
       - N_REPLICAS=2
-      - INPUT=direct_exchange:q2_agg_input:0
+      - INPUT=direct_exchange:q3_avg_global_input:0
+      - OUTPUTS_MATCH_COUNT=0
+      - OUTPUT_0=direct_exchange:q3_averages
+      - LOG_LEVEL=info
+      - EXPECTED_PARTIAL_EOFS=3
+      - N_FILTER_Q3=3
+  aggregator_q3_1:
+    build: { context: ./src/, dockerfile: worker/Dockerfile }
+    depends_on: { rabbitmq: { condition: service_healthy } }
+    env_file:
+      - .env
+    environment:
+      - STRATEGY=aggregator_q3
+      - REPLICA_ID=1
+      - N_REPLICAS=2
+      - INPUT=direct_exchange:q3_avg_global_input:1
+      - OUTPUTS_MATCH_COUNT=0
+      - OUTPUT_0=direct_exchange:q3_averages
+      - LOG_LEVEL=info
+      - EXPECTED_PARTIAL_EOFS=3
+      - N_FILTER_Q3=3
+  filter_q3_0:
+    build: { context: ./src/, dockerfile: worker/Dockerfile }
+    depends_on: { rabbitmq: { condition: service_healthy } }
+    env_file:
+      - .env
+    environment:
+      - STRATEGY=filter_q3
+      - REPLICA_ID=0
+      - N_REPLICAS=3
+      - INPUT_0=queue:q3_p2_for_filter
+      - INPUT_1=direct_exchange:q3_averages:0
       - OUTPUTS_MATCH_COUNT=0
       - OUTPUT_0=direct_exchange:results
       - LOG_LEVEL=info
-      - EXPECTED_PARTIAL_EOFS=6
+      - RING_QUEUE_IN=ring_filter_q3_0
+      - RING_QUEUE_OUT=ring_filter_q3_1
+      - AMOUNT_THRESHOLD_PCT=0.01
+      - BUFFER_DIR=/tmp
       - N_FINAL_JOINERS=2
-  aggregator_q2_1:
+  filter_q3_1:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
     depends_on: { rabbitmq: { condition: service_healthy } }
     env_file:
       - .env
     environment:
-      - STRATEGY=aggregator_q2
+      - STRATEGY=filter_q3
       - REPLICA_ID=1
-      - N_REPLICAS=2
-      - INPUT=direct_exchange:q2_agg_input:1
+      - N_REPLICAS=3
+      - INPUT_0=queue:q3_p2_for_filter
+      - INPUT_1=direct_exchange:q3_averages:1
       - OUTPUTS_MATCH_COUNT=0
       - OUTPUT_0=direct_exchange:results
       - LOG_LEVEL=info
-      - EXPECTED_PARTIAL_EOFS=6
+      - RING_QUEUE_IN=ring_filter_q3_1
+      - RING_QUEUE_OUT=ring_filter_q3_2
+      - AMOUNT_THRESHOLD_PCT=0.01
+      - BUFFER_DIR=/tmp
+      - N_FINAL_JOINERS=2
+  filter_q3_2:
+    build: { context: ./src/, dockerfile: worker/Dockerfile }
+    depends_on: { rabbitmq: { condition: service_healthy } }
+    env_file:
+      - .env
+    environment:
+      - STRATEGY=filter_q3
+      - REPLICA_ID=2
+      - N_REPLICAS=3
+      - INPUT_0=queue:q3_p2_for_filter
+      - INPUT_1=direct_exchange:q3_averages:2
+      - OUTPUTS_MATCH_COUNT=0
+      - OUTPUT_0=direct_exchange:results
+      - LOG_LEVEL=info
+      - RING_QUEUE_IN=ring_filter_q3_2
+      - RING_QUEUE_OUT=ring_filter_q3_0
+      - AMOUNT_THRESHOLD_PCT=0.01
+      - BUFFER_DIR=/tmp
       - N_FINAL_JOINERS=2
   final_joiner_0:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
@@ -550,7 +454,7 @@ services:
       - OUTPUT_0=final_queue:final_1
       - OUTPUT_1=final_queue:final_2
       - LOG_LEVEL=info
-      - EXPECTED_EOFS_Q2=2
+      - EXPECTED_EOFS_Q3=3
   final_joiner_1:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
     depends_on: { rabbitmq: { condition: service_healthy } }
@@ -565,7 +469,7 @@ services:
       - OUTPUT_0=final_queue:final_1
       - OUTPUT_1=final_queue:final_2
       - LOG_LEVEL=info
-      - EXPECTED_EOFS_Q2=2
+      - EXPECTED_EOFS_Q3=3
   rabbitmq:
     build: { context: ./src/rabbitmq, dockerfile: Dockerfile }
     volumes:

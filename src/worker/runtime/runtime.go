@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -21,7 +22,7 @@ import (
 type Worker struct {
 	cfg                 config.WorkerConfig
 	strategy            strategy.Strategy
-	input               middleware.Middleware
+	inputs              []middleware.Middleware
 	ringIn              middleware.Middleware
 	ringOut             middleware.Middleware
 	outputs             []OutputTarget
@@ -32,9 +33,15 @@ type Worker struct {
 	strategyMu          sync.Mutex
 	upstreamEOFMu       sync.Mutex
 
-	// Stores last upstream EOF message for each client, to allow re-enqueuing if
-	// the strategy requests it. Cleared on successful publish of EOFs.
-	upstreamEOFs map[inner.ClientID]middleware.Message
+	// Stores last upstream EOF message for each client (and the input it came
+	// from), to allow re-enqueuing to the right input if the strategy requests
+	// it. Cleared on successful publish of EOFs.
+	upstreamEOFs map[inner.ClientID]cachedEOF
+}
+
+type cachedEOF struct {
+	inputIndex int
+	msg        middleware.Message
 }
 
 type outputTargetBuffer struct {
@@ -67,14 +74,26 @@ func New(cfg config.WorkerConfig) (*Worker, error) {
 
 	conn := middleware.ConnSettings{Hostname: cfg.MomHost, Port: cfg.MomPort}
 
-	input, err := BuildInputMiddleware(cfg.InputConfig, conn)
-	if err != nil {
-		return nil, err
+	if len(cfg.InputConfigs) == 0 {
+		return nil, errors.New("worker requires at least one input")
+	}
+	inputs := make([]middleware.Middleware, 0, len(cfg.InputConfigs))
+	for i, ic := range cfg.InputConfigs {
+		mw, err := BuildInputMiddleware(ic, conn)
+		if err != nil {
+			for _, opened := range inputs {
+				_ = opened.Close()
+			}
+			return nil, fmt.Errorf("open input %d (%s): %w", i, ic.Name, err)
+		}
+		inputs = append(inputs, mw)
 	}
 
 	outputTargets, err := BuildOutputTargets(cfg.Outputs, conn)
 	if err != nil {
-		_ = input.Close()
+		for _, mw := range inputs {
+			_ = mw.Close()
+		}
 		return nil, err
 	}
 
@@ -82,19 +101,19 @@ func New(cfg config.WorkerConfig) (*Worker, error) {
 	if cfg.RingQueueIn != "" {
 		ringIn, err = middleware.CreateQueueMiddleware(cfg.RingQueueIn, conn)
 		if err != nil {
-			closeAll(input, nil, nil, outputTargets)
+			closeAll(inputs, nil, nil, outputTargets)
 			return nil, err
 		}
 	}
 	if cfg.RingQueueOut != "" {
 		ringOut, err = middleware.CreateQueueMiddleware(cfg.RingQueueOut, conn)
 		if err != nil {
-			closeAll(input, ringIn, nil, outputTargets)
+			closeAll(inputs, ringIn, nil, outputTargets)
 			return nil, err
 		}
 	}
 
-	err = initStrategy(outputTargets, cfg, strat, input, ringIn, ringOut)
+	err = initStrategy(outputTargets, cfg, strat, inputs, ringIn, ringOut)
 	if err != nil {
 		return nil, err
 	}
@@ -104,30 +123,31 @@ func New(cfg config.WorkerConfig) (*Worker, error) {
 	w := &Worker{
 		cfg:                 cfg,
 		strategy:            strat,
-		input:               input,
+		inputs:              inputs,
 		ringIn:              ringIn,
 		ringOut:             ringOut,
 		outputs:             outputTargets,
 		outputTargetBuffers: buffers,
 		ctx:                 runCtx,
 		cancel:              cancel,
-		upstreamEOFs:        map[inner.ClientID]middleware.Message{},
+		upstreamEOFs:        map[inner.ClientID]cachedEOF{},
 	}
 	return w, nil
 }
 
-func initStrategy(outputTargets []OutputTarget, cfg config.WorkerConfig, strat strategy.Strategy, input middleware.Middleware, ringIn middleware.Middleware, ringOut middleware.Middleware) error {
+func initStrategy(outputTargets []OutputTarget, cfg config.WorkerConfig, strat strategy.Strategy, inputs []middleware.Middleware, ringIn middleware.Middleware, ringOut middleware.Middleware) error {
 	strategyCfg := strategy.StrategyConfig{
 		OutputCount:  len(outputTargets),
 		ReplicaID:    cfg.ReplicaID,
 		NReplicas:    cfg.NReplicas,
 		StrategyName: cfg.StrategyName,
 		MatchCount:   cfg.OutputsMatchCount,
+		NumInputs:    len(cfg.InputConfigs),
 		RingQueueIn:  cfg.RingQueueIn,
 		RingQueueOut: cfg.RingQueueOut,
 	}
 	if err := strat.Init(strategyCfg); err != nil {
-		closeAll(input, ringIn, ringOut, outputTargets)
+		closeAll(inputs, ringIn, ringOut, outputTargets)
 		return err
 	}
 	return nil
@@ -159,12 +179,16 @@ func (w *Worker) Run() error {
 	w.waitingGroup.Add(1)
 	go w.handleSignals()
 
+	inputNames := make([]string, 0, len(w.cfg.InputConfigs))
+	for _, ic := range w.cfg.InputConfigs {
+		inputNames = append(inputNames, ic.Name)
+	}
 	slog.Info(
 		"Worker started",
 		"strategy", w.cfg.StrategyName,
 		"replica_id", w.cfg.ReplicaID,
 		"n_replicas", w.cfg.NReplicas,
-		"input", w.cfg.Input,
+		"inputs", inputNames,
 		"outputs", len(w.outputs),
 		"ring_in", w.cfg.RingQueueIn,
 		"ring_out", w.cfg.RingQueueOut,
@@ -175,10 +199,21 @@ func (w *Worker) Run() error {
 		go w.consumeRing()
 	}
 
-	err := w.input.StartConsuming(w.handleInputMessage)
-	if err != nil && w.ctx.Err() == nil {
-		slog.Error("Input consumer stopped unexpectedly", "err", err)
+	var inputWG sync.WaitGroup
+	for i := range w.inputs {
+		inputWG.Add(1)
+		idx := i
+		go func() {
+			defer inputWG.Done()
+			err := w.inputs[idx].StartConsuming(func(msg middleware.Message, ack func(), nack func()) {
+				w.handleInputMessage(idx, msg, ack, nack)
+			})
+			if err != nil && w.ctx.Err() == nil {
+				slog.Error("Input consumer stopped unexpectedly", "input_index", idx, "err", err)
+			}
+		}()
 	}
+	inputWG.Wait()
 	return nil
 }
 
@@ -190,16 +225,17 @@ func (w *Worker) consumeRing() {
 	}
 }
 
-func (w *Worker) handleInputMessage(msg middleware.Message, ack func(), nack func()) {
+func (w *Worker) handleInputMessage(inputIndex int, msg middleware.Message, ack func(), nack func()) {
 	envelope, err := inner.DeserializeEnvelope(&msg)
 	if err != nil {
-		slog.Error("Malformed envelope in input queue", "err", err)
+		slog.Error("Malformed envelope in input queue", "input_index", inputIndex, "err", err)
 		ack()
 		return
 	}
+	envelope.InputIndex = inputIndex
 
 	if isEOFKind(envelope.Kind) {
-		w.cacheUpstreamEOF(envelope.ClientID, msg)
+		w.cacheUpstreamEOF(envelope.ClientID, inputIndex, msg)
 		w.strategyMu.Lock()
 		outcome, err := w.strategy.OnUpstreamEOF(envelope)
 		if err != nil {
@@ -249,11 +285,12 @@ func (w *Worker) handleInputMessage(msg middleware.Message, ack func(), nack fun
 func (w *Worker) processBatchItems(parent *inner.Envelope, itemKind inner.MsgKind, items [][]byte) error {
 	for _, payload := range items {
 		item := &inner.Envelope{
-			Kind:      itemKind,
-			GatewayID: parent.GatewayID,
-			ClientID:  parent.ClientID,
-			QueryID:   parent.QueryID,
-			Payload:   payload,
+			Kind:       itemKind,
+			GatewayID:  parent.GatewayID,
+			ClientID:   parent.ClientID,
+			QueryID:    parent.QueryID,
+			Payload:    payload,
+			InputIndex: parent.InputIndex,
 		}
 		if err := w.processSingleItem(item); err != nil {
 			return err
@@ -320,13 +357,13 @@ func (w *Worker) applyEOFOutcome(env *inner.Envelope, outcome strategy.EOFOutcom
 		}
 		return w.forwardToken(env, outcome.Action.Token)
 	case eof.ActionEmitEOFs:
-		if err := w.appendOutputMessages(env.GatewayID, outcome.Outputs); err != nil {
+		if err := w.emitOutcomeOutputs(env.GatewayID, outcome); err != nil {
 			return err
 		}
 		w.clearUpstreamEOF(env.ClientID)
 		return w.publishEOFs(env, outcome.EOFs)
 	case eof.ActionEmitEOFsAndForwardToken:
-		if err := w.appendOutputMessages(env.GatewayID, outcome.Outputs); err != nil {
+		if err := w.emitOutcomeOutputs(env.GatewayID, outcome); err != nil {
 			return err
 		}
 		if err := w.flushClient(env.ClientID); err != nil {
@@ -360,6 +397,30 @@ func (w *Worker) forwardToken(env *inner.Envelope, token *eof.Token) error {
 		return err
 	}
 	return w.ringOut.Send(*msg)
+}
+
+func (w *Worker) emitOutcomeOutputs(gatewayID inner.GatewayID, outcome strategy.EOFOutcome) error {
+	if outcome.OutputsIterator != nil {
+		for om := range outcome.OutputsIterator {
+			if err := w.appendSingleOutputMessage(gatewayID, om); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	return w.appendOutputMessages(gatewayID, outcome.Outputs)
+}
+
+func (w *Worker) appendSingleOutputMessage(gatewayID inner.GatewayID, om strategy.OutputMessage) error {
+	for _, idx := range om.OutputIndices {
+		if idx < 0 || idx >= len(w.outputTargetBuffers) {
+			return errors.New("strategy returned invalid output index")
+		}
+		if err := w.appendToShard(idx, gatewayID, om); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (w *Worker) appendOutputMessages(gatewayID inner.GatewayID, outputMessages []strategy.OutputMessage) error {
@@ -537,13 +598,16 @@ func (w *Worker) reenqueueUpstreamEOF(clientID inner.ClientID) error {
 	if !ok {
 		return errors.New("no cached upstream EOF to re-enqueue")
 	}
+	if cached.inputIndex < 0 || cached.inputIndex >= len(w.inputs) {
+		return errors.New("cached upstream EOF references invalid input index")
+	}
 	w.clearUpstreamEOF(clientID)
-	return w.input.Send(cached)
+	return w.inputs[cached.inputIndex].Send(cached.msg)
 }
 
-func (w *Worker) cacheUpstreamEOF(clientID inner.ClientID, msg middleware.Message) {
+func (w *Worker) cacheUpstreamEOF(clientID inner.ClientID, inputIndex int, msg middleware.Message) {
 	w.upstreamEOFMu.Lock()
-	w.upstreamEOFs[clientID] = msg
+	w.upstreamEOFs[clientID] = cachedEOF{inputIndex: inputIndex, msg: msg}
 	w.upstreamEOFMu.Unlock()
 }
 
@@ -576,8 +640,10 @@ func (w *Worker) shutdownWatcher() {
 	w.flushAll()
 	w.strategyMu.Unlock()
 
-	_ = w.input.StopConsuming()
-	_ = w.input.Close()
+	for _, mw := range w.inputs {
+		_ = mw.StopConsuming()
+		_ = mw.Close()
+	}
 	if w.ringIn != nil {
 		_ = w.ringIn.StopConsuming()
 		_ = w.ringIn.Close()
@@ -592,9 +658,11 @@ func (w *Worker) shutdownWatcher() {
 	}
 }
 
-func closeAll(input middleware.Middleware, ringIn middleware.Middleware, ringOut middleware.Middleware, outputs []OutputTarget) {
-	if input != nil {
-		_ = input.Close()
+func closeAll(inputs []middleware.Middleware, ringIn middleware.Middleware, ringOut middleware.Middleware, outputs []OutputTarget) {
+	for _, mw := range inputs {
+		if mw != nil {
+			_ = mw.Close()
+		}
 	}
 	if ringIn != nil {
 		_ = ringIn.Close()

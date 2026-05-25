@@ -95,7 +95,6 @@ func (m *MaxQ2) outcomeFor(clientID inner.ClientID, action eof.Action) strategy.
 	switch action.Kind {
 	case eof.ActionEmitEOFs, eof.ActionEmitEOFsAndForwardToken:
 		st := m.stateFor(clientID)
-		rk := m.routingKeyFor(clientID)
 		outputs := make([]strategy.OutputMessage, 0, len(st.maxes))
 		for bankID, pm := range st.maxes {
 			body, err := inner.SerializeQ2PartialMax(&inner.Q2PartialMax{
@@ -110,24 +109,24 @@ func (m *MaxQ2) outcomeFor(clientID inner.ClientID, action eof.Action) strategy.
 				OutputIndices: []int{0},
 				Body:          body,
 				ClientID:      clientID,
-				RoutingKey:    rk,
+				RoutingKey:    m.routingKeyFor(clientID, bankID),
 				BatchItemKind: inner.Q2PartialMaxItem,
 				BatchQueryID:  queryID,
 			})
 		}
 		outcome.Outputs = outputs
-		outcome.EOFs = []eof.EOFEmit{{
-			OutputIndex: 0,
-			RoutingKey:  rk,
-			QueryID:     queryID,
-		}}
+		emits := make([]eof.EOFEmit, m.kAggregators)
+		for i := range m.kAggregators {
+			emits[i] = eof.EOFEmit{OutputIndex: 0, RoutingKey: m.rkCache[i], QueryID: queryID}
+		}
+		outcome.EOFs = emits
 		delete(m.state, clientID)
 	}
 	return outcome
 }
 
-func (m *MaxQ2) routingKeyFor(clientID inner.ClientID) string {
-	return m.rkCache[hashing.Shard(string(clientID), m.kAggregators)]
+func (m *MaxQ2) routingKeyFor(clientID inner.ClientID, bankID uint32) string {
+	return m.rkCache[hashing.Shard(string(clientID)+"-"+strconv.FormatUint(uint64(bankID), 10), m.kAggregators)]
 }
 
 func (m *MaxQ2) stateFor(clientID inner.ClientID) *clientState {

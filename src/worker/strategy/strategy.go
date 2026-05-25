@@ -1,6 +1,8 @@
 package strategy
 
 import (
+	"iter"
+
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/eof"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/messageprotocol/inner"
 )
@@ -28,14 +30,16 @@ type StrategyConfig struct {
 	// MatchCount splits outputs into match [0, MatchCount) and no-match
 	// [MatchCount, OutputCount). Filters use it; other strategies ignore it.
 	MatchCount   int
+	NumInputs    int
 	RingQueueIn  string
 	RingQueueOut string
 }
 
 type EOFOutcome struct {
-	Action  eof.Action
-	EOFs    []eof.EOFEmit
-	Outputs []OutputMessage // data messages to emit before downstream EOFs
+	Action          eof.Action
+	EOFs            []eof.EOFEmit
+	Outputs         []OutputMessage // data messages to emit before downstream EOFs
+	OutputsIterator iter.Seq[OutputMessage]
 }
 
 type Strategy interface {
