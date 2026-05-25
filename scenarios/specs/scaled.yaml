@@ -196,6 +196,6 @@ workers:
       - final_queue:final_1
       - final_queue:final_2
     env:
-      EXPECTED_EOFS_Q1: "4"      # = N_REPLICAS de sharder_q1
+      EXPECTED_EOFS_Q1: "1"      # solo el initiator del ring de sharder_q1 emite EOF
       EXPECTED_EOFS_Q2: "1"      # aggregator_q2 está shardeado por cliente; sólo 1 emite por cliente
       EXPECTED_EOFS_Q4: "4"      # = K_COUNTERS (replicas de counter_q4)
