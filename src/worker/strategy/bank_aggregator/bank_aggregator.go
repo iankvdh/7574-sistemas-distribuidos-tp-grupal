@@ -89,7 +89,6 @@ func (b *BankAggregator) outcomeFor(clientID inner.ClientID, action eof.Action) 
 	switch action.Kind {
 	case eof.ActionEmitEOFs, eof.ActionEmitEOFsAndForwardToken:
 		st := b.stateFor(clientID)
-		rk := b.routingKeyFor(clientID)
 		outputs := make([]strategy.OutputMessage, 0, len(st.bankNames))
 		for bankID, name := range st.bankNames {
 			body, err := inner.SerializeQ2BankName(&inner.Q2BankName{BankID: bankID, BankName: name})
@@ -100,24 +99,24 @@ func (b *BankAggregator) outcomeFor(clientID inner.ClientID, action eof.Action) 
 				OutputIndices: []int{0},
 				Body:          body,
 				ClientID:      clientID,
-				RoutingKey:    rk,
+				RoutingKey:    b.routingKeyFor(clientID, bankID),
 				BatchItemKind: inner.Q2BankNameItem,
 				BatchQueryID:  queryID,
 			})
 		}
 		outcome.Outputs = outputs
-		outcome.EOFs = []eof.EOFEmit{{
-			OutputIndex: 0,
-			RoutingKey:  rk,
-			QueryID:     queryID,
-		}}
+		emits := make([]eof.EOFEmit, b.kAggregators)
+		for i := range b.kAggregators {
+			emits[i] = eof.EOFEmit{OutputIndex: 0, RoutingKey: b.rkCache[i], QueryID: queryID}
+		}
+		outcome.EOFs = emits
 		delete(b.state, clientID)
 	}
 	return outcome
 }
 
-func (b *BankAggregator) routingKeyFor(clientID inner.ClientID) string {
-	return b.rkCache[hashing.Shard(string(clientID), b.kAggregators)]
+func (b *BankAggregator) routingKeyFor(clientID inner.ClientID, bankID uint32) string {
+	return b.rkCache[hashing.Shard(string(clientID)+"-"+strconv.FormatUint(uint64(bankID), 10), b.kAggregators)]
 }
 
 func (b *BankAggregator) stateFor(clientID inner.ClientID) *clientState {
