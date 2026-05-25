@@ -196,21 +196,35 @@ func Query4Rows(transactions []transaction.Transaction) []string {
 		}
 	}
 
-	participatingAccounts := make(map[accountKey]struct{})
+	type pathKey struct {
+		source accountKey
+		dest   accountKey
+	}
+	intermediaries := make(map[pathKey]map[accountKey]struct{})
 	for source := range candidateSources {
 		for intermediate := range senderToDestinations[source] {
 			nextHops, hasOutgoing := senderToDestinations[intermediate]
 			if !hasOutgoing {
 				continue
 			}
-
-			for destination := range nextHops {
-				if source == destination {
+			for dest := range nextHops {
+				if source == dest {
 					continue
 				}
-				participatingAccounts[source] = struct{}{}
-				participatingAccounts[destination] = struct{}{}
+				key := pathKey{source, dest}
+				if intermediaries[key] == nil {
+					intermediaries[key] = make(map[accountKey]struct{})
+				}
+				intermediaries[key][intermediate] = struct{}{}
 			}
+		}
+	}
+
+	participatingAccounts := make(map[accountKey]struct{})
+	for key, mids := range intermediaries {
+		if len(mids) >= 5 {
+			participatingAccounts[key.source] = struct{}{}
+			participatingAccounts[key.dest] = struct{}{}
 		}
 	}
 

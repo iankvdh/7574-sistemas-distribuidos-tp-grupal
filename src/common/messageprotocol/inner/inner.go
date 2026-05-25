@@ -49,6 +49,10 @@ const (
 	// el umbral de cuentas intermedias. Item dentro de un InnerBatch emitido
 	// por el Counter al exchange `results`.
 	Query4PairItem
+	// Query4AccountItem transporta una cuenta individual (Bank, Account) que
+	// participa en el patrón scatter de Q4. Item dentro de un InnerBatch emitido
+	// por el PathFinder al Counter.
+	Query4AccountItem
 )
 
 var (
@@ -149,7 +153,7 @@ func SerializeRingToken(gatewayID GatewayID, clientID ClientID, tokenJSON []byte
 
 func validInnerBatchItemKind(kind MsgKind) bool {
 	switch kind {
-	case TransactionMessage, AccountMessage, ShardedTxMessage, SuspiciousPathMessage, Query4PairItem:
+	case TransactionMessage, AccountMessage, ShardedTxMessage, SuspiciousPathMessage, Query4PairItem, Query4AccountItem:
 		return true
 	default:
 		return false

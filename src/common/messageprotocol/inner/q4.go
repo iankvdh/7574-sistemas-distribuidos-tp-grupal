@@ -195,6 +195,35 @@ func DeserializeQuery4Pair(payload []byte) (*Query4Pair, error) {
 	}, nil
 }
 
+type Query4Account struct {
+	Bank    uint32
+	Account string
+}
+
+func SerializeQuery4Account(a *Query4Account) ([]byte, error) {
+	acc, err := serializer.SerializeShortString(a.Account)
+	if err != nil {
+		return nil, err
+	}
+	buf := make([]byte, 0, 4+len(acc))
+	buf = append(buf, serializer.SerializeUint32(a.Bank)...)
+	buf = append(buf, acc...)
+	return buf, nil
+}
+
+func DeserializeQuery4Account(payload []byte) (*Query4Account, error) {
+	r := bytes.NewReader(payload)
+	bank, err := readQ4Uint32(r)
+	if err != nil {
+		return nil, err
+	}
+	acc, err := readQ4ShortString(r)
+	if err != nil {
+		return nil, err
+	}
+	return &Query4Account{Bank: bank, Account: acc}, nil
+}
+
 func readQ4Uint32(r io.Reader) (uint32, error) {
 	buf, err := safeio.ReadAll(r, serializer.UINT32_SIZE)
 	if err != nil {
