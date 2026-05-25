@@ -1,10 +1,3 @@
-// Package sharder_q1 implements the terminal node of the Query 1 pipeline.
-// For each USD transaction below the configured amount threshold (already
-// filtered upstream) it emits a Query1Row item to the `results` direct
-// exchange, sharded by client. Each client maps to exactly one final_joiner
-// shard via FNV-1a mod N_FINAL_JOINERS — so on EOF only that shard's routing
-// key is emitted (unlike sharder_q4, whose payloads are spread across all
-// downstream replicas).
 package sharder_q1
 
 import (
@@ -29,7 +22,6 @@ type Sharder struct {
 	cfg             strategy.StrategyConfig
 	nFinalJoiners   int
 	ringCoordinator *eof.RingCoordinator
-	accumulator     *eof.JoinerAccumulateCoordinator
 	state           map[inner.ClientID]*clientState
 	rkCache         []string
 }
@@ -57,13 +49,7 @@ func (s *Sharder) Init(cfg strategy.StrategyConfig) error {
 	for i := 0; i < n; i++ {
 		s.rkCache[i] = strconv.Itoa(i)
 	}
-	if cfg.NReplicas > 1 {
-		s.ringCoordinator = eof.NewBroadcastRingCoordinator(cfg.ReplicaID, cfg.NReplicas)
-	} else {
-		// Single replica: filter_amount_lt_50 sends 1 EOF, we forward 1 EOF
-		// to the routing key matching the client's shard.
-		s.accumulator = eof.NewJoinerAccumulateCoordinator(1, 1)
-	}
+	s.ringCoordinator = eof.NewRingCoordinator(cfg.ReplicaID, cfg.NReplicas)
 	return nil
 }
 
@@ -100,12 +86,8 @@ func (s *Sharder) ProcessMessage(envelope *inner.Envelope) ([]strategy.OutputMes
 }
 
 func (s *Sharder) OnUpstreamEOF(envelope *inner.Envelope) (strategy.EOFOutcome, error) {
-	if s.ringCoordinator != nil {
-		st := s.stateFor(envelope.ClientID)
-		action, _ := s.ringCoordinator.OnUpstreamEOF(envelope.ClientID, envelope.Total, st.processed, 0)
-		return s.outcomeFor(envelope.ClientID, action), nil
-	}
-	action := s.accumulator.OnUpstreamEOF(envelope.ClientID, envelope.Total)
+	st := s.stateFor(envelope.ClientID)
+	action, _ := s.ringCoordinator.OnUpstreamEOF(envelope.ClientID, envelope.Total, st.processed, 0)
 	return s.outcomeFor(envelope.ClientID, action), nil
 }
 
