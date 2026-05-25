@@ -15,6 +15,8 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"iter"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -126,23 +128,20 @@ func (f *FilterQ3) OnUpstreamEOF(envelope *inner.Envelope) (strategy.EOFOutcome,
 		return strategy.EOFOutcome{Action: action}, nil
 	}
 
-	// Ambos EOFs recibidos. Drenar el buffer en disco ahora con los averages ya
-	// completos.
-	var outputs []strategy.OutputMessage
-	if st.bufferFile != nil || st.bufferCount > 0 {
-		drained, err := f.drainBuffer(envelope.ClientID, st)
-		if err != nil {
-			return strategy.EOFOutcome{}, err
-		}
-		outputs = drained
+	if err := f.closeBufferForRead(st); err != nil {
+		return strategy.EOFOutcome{}, err
+	}
+	seq, err := f.drainSeq(envelope.ClientID, st)
+	if err != nil {
+		return strategy.EOFOutcome{}, err
 	}
 
 	rk := f.routingKeyFor(envelope.ClientID)
 	delete(f.state, envelope.ClientID)
 
 	return strategy.EOFOutcome{
-		Action:  eof.Action{Kind: eof.ActionEmitEOFs},
-		Outputs: outputs,
+		Action:     eof.Action{Kind: eof.ActionEmitEOFs},
+		OutputsSeq: seq,
 		EOFs: []eof.EOFEmit{{
 			OutputIndex: 0,
 			RoutingKey:  rk,
@@ -202,79 +201,90 @@ func (f *FilterQ3) appendToBuffer(st *clientState, payload []byte) error {
 	return nil
 }
 
-// drainBuffer flushea, cierra y reabre el archivo de spill del cliente; aplica
-// el filtro a cada tx y devuelve los OutputMessages a emitir. Elimina el
-// archivo al terminar.
-func (f *FilterQ3) drainBuffer(clientID inner.ClientID, st *clientState) ([]strategy.OutputMessage, error) {
+func (f *FilterQ3) closeBufferForRead(st *clientState) error {
 	if st.bufferFile == nil && st.bufferCount == 0 {
-		return nil, nil
+		return nil
 	}
 	if st.bufferWriter != nil {
 		if err := st.bufferWriter.Flush(); err != nil {
-			return nil, fmt.Errorf("flush buffer: %w", err)
+			return fmt.Errorf("flush buffer: %w", err)
 		}
 	}
 	if st.bufferFile != nil {
 		if err := st.bufferFile.Close(); err != nil {
-			return nil, fmt.Errorf("close buffer for write: %w", err)
+			return fmt.Errorf("close buffer for write: %w", err)
 		}
 	}
-	path := st.bufferPath
 	st.bufferFile = nil
 	st.bufferWriter = nil
+	return nil
+}
 
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, fmt.Errorf("reopen buffer file %q: %w", path, err)
+func (f *FilterQ3) drainSeq(clientID inner.ClientID, st *clientState) (iter.Seq[strategy.OutputMessage], error) {
+	if st.bufferCount == 0 {
+		return func(yield func(strategy.OutputMessage) bool) {}, nil
 	}
-	defer func() {
-		_ = file.Close()
-		_ = os.Remove(path)
-	}()
-
-	reader := bufio.NewReader(file)
-	outputs := make([]strategy.OutputMessage, 0, st.bufferCount)
+	path := st.bufferPath
 	rk := f.routingKeyFor(clientID)
-	for {
-		var lenBuf [4]byte
-		if _, err := io.ReadFull(reader, lenBuf[:]); err != nil {
-			if err == io.EOF {
-				break
+	averages := st.averages
+
+	return func(yield func(strategy.OutputMessage) bool) {
+		file, err := os.Open(path)
+		if err != nil {
+			slog.Error("filter_q3 reopen buffer file failed", "client_id", clientID, "path", path, "err", err)
+			return
+		}
+		defer func() {
+			_ = file.Close()
+			_ = os.Remove(path)
+		}()
+
+		reader := bufio.NewReader(file)
+		for {
+			var lenBuf [4]byte
+			if _, err := io.ReadFull(reader, lenBuf[:]); err != nil {
+				if err == io.EOF {
+					return
+				}
+				slog.Error("filter_q3 read buffer length failed", "client_id", clientID, "err", err)
+				return
 			}
-			return nil, fmt.Errorf("read buffer length: %w", err)
+			payloadLen := binary.BigEndian.Uint32(lenBuf[:])
+			payload := make([]byte, payloadLen)
+			if _, err := io.ReadFull(reader, payload); err != nil {
+				slog.Error("filter_q3 read buffer payload failed", "client_id", clientID, "err", err)
+				return
+			}
+			tx, err := external.DeserializeTransaction(payload)
+			if err != nil {
+				slog.Error("filter_q3 deserialize buffered tx failed", "client_id", clientID, "err", err)
+				return
+			}
+			avg, ok := averages[tx.PaymentFormat]
+			if !ok || tx.AmountPaid >= avg/100.0 {
+				continue
+			}
+			body, err := inner.SerializeQuery3Row(&inner.Query3Row{
+				SourceBank:    tx.FromBank,
+				SourceAccount: tx.FromAccount,
+				Amount:        tx.AmountPaid,
+			})
+			if err != nil {
+				slog.Error("filter_q3 serialize query3 row failed", "client_id", clientID, "err", err)
+				return
+			}
+			if !yield(strategy.OutputMessage{
+				OutputIndices: []int{0},
+				Body:          body,
+				ClientID:      clientID,
+				RoutingKey:    rk,
+				BatchItemKind: inner.Query3RowItem,
+				BatchQueryID:  queryID,
+			}) {
+				return
+			}
 		}
-		payloadLen := binary.BigEndian.Uint32(lenBuf[:])
-		payload := make([]byte, payloadLen)
-		if _, err := io.ReadFull(reader, payload); err != nil {
-			return nil, fmt.Errorf("read buffer payload: %w", err)
-		}
-		tx, err := external.DeserializeTransaction(payload)
-		if err != nil {
-			return nil, fmt.Errorf("deserialize buffered tx: %w", err)
-		}
-		avg, ok := st.averages[tx.PaymentFormat]
-		if !ok || tx.AmountPaid >= avg/100.0 {
-			continue
-		}
-		body, err := inner.SerializeQuery3Row(&inner.Query3Row{
-			SourceBank:    tx.FromBank,
-			SourceAccount: tx.FromAccount,
-			Amount:        tx.AmountPaid,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("serialize query3 row: %w", err)
-		}
-		outputs = append(outputs, strategy.OutputMessage{
-			OutputIndices: []int{0},
-			Body:          body,
-			ClientID:      clientID,
-			RoutingKey:    rk,
-			BatchItemKind: inner.Query3RowItem,
-			BatchQueryID:  queryID,
-		})
-	}
-	st.bufferCount = 0
-	return outputs, nil
+	}, nil
 }
 
 func (f *FilterQ3) routingKeyFor(clientID inner.ClientID) string {
