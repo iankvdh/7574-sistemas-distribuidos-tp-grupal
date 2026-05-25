@@ -1,10 +1,10 @@
 // Package sharder implements the first stage of the Query 4 pipeline. For
 // each transaction it emits two ShardedTx messages, one shardeada por la
 // cuenta origen y otra por la cuenta destino, hacia el direct exchange que
-// alimenta al Path-Finder. El sharding se hace con FNV-1a sobre la cadena
-// "bank|account". EOFs entre Sharder y Path-Finder usan el modo broadcast
-// del RingCoordinator: cada réplica emite un EOF a CADA réplica del
-// Path-Finder cuando se cierra el anillo.
+// alimenta al Suspicious Account Filter. El sharding se hace con FNV-1a sobre
+// la cadena "bank|account". EOFs entre Sharder y Suspicious Account Filter
+// usan el modo broadcast del RingCoordinator: cada réplica emite un EOF a
+// CADA réplica del Filter cuando se cierra el anillo.
 package sharder
 
 import (
@@ -22,11 +22,11 @@ import (
 const queryID uint8 = 4
 
 type Sharder struct {
-	cfg           strategy.StrategyConfig
-	kPathFinders  int
-	coordinator   *eof.RingCoordinator
-	state         map[inner.ClientID]*clientState
-	rkCache       []string
+	cfg                strategy.StrategyConfig
+	kSuspiciousFilters int
+	coordinator        *eof.RingCoordinator
+	state              map[inner.ClientID]*clientState
+	rkCache            []string
 }
 
 type clientState struct {
@@ -46,12 +46,12 @@ func (s *Sharder) Init(cfg strategy.StrategyConfig) error {
 	if cfg.OutputCount != 1 {
 		return fmt.Errorf("sharder_q4 expects exactly 1 output, got %d", cfg.OutputCount)
 	}
-	k, err := env.RequiredInt("K_PATH_FINDERS", true)
+	k, err := env.RequiredInt("K_SUSPICIOUS_FILTERS", true)
 	if err != nil {
 		return err
 	}
 	s.cfg = cfg
-	s.kPathFinders = k
+	s.kSuspiciousFilters = k
 	s.coordinator = eof.NewBroadcastRingCoordinator(cfg.ReplicaID, cfg.NReplicas)
 
 	s.rkCache = make([]string, k)
@@ -97,8 +97,8 @@ func (s *Sharder) ProcessMessage(env *inner.Envelope) ([]strategy.OutputMessage,
 		return nil, strategy.LocalCounts{}, fmt.Errorf("serialize sharded tx (dest): %w", err)
 	}
 
-	rkSource := s.rkCache[hashing.Shard(accountKey(tx.FromBank, tx.FromAccount), s.kPathFinders)]
-	rkDest := s.rkCache[hashing.Shard(accountKey(tx.ToBank, tx.ToAccount), s.kPathFinders)]
+	rkSource := s.rkCache[hashing.Shard(accountKey(tx.FromBank, tx.FromAccount), s.kSuspiciousFilters)]
+	rkDest := s.rkCache[hashing.Shard(accountKey(tx.ToBank, tx.ToAccount), s.kSuspiciousFilters)]
 
 	out := []strategy.OutputMessage{
 		{
@@ -144,8 +144,8 @@ func (s *Sharder) outcomeFor(clientID inner.ClientID, action eof.Action) strateg
 }
 
 func (s *Sharder) buildEOFEmits() []eof.EOFEmit {
-	emits := make([]eof.EOFEmit, 0, s.kPathFinders)
-	for i := 0; i < s.kPathFinders; i++ {
+	emits := make([]eof.EOFEmit, 0, s.kSuspiciousFilters)
+	for i := 0; i < s.kSuspiciousFilters; i++ {
 		emits = append(emits, eof.EOFEmit{
 			OutputIndex: 0,
 			RoutingKey:  s.rkCache[i],

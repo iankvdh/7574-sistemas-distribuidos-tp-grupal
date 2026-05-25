@@ -136,11 +136,11 @@ func TestFinalJoinerProcessQ2FormatsRow(t *testing.T) {
 func TestFinalJoinerProcessQ4DedupesAndDefersUntilEOF(t *testing.T) {
 	j := newInited(t, 0, 1, 1)
 
-	feed := func(bank uint32, account string) {
-		acc := &inner.Query4Account{Bank: bank, Account: account}
-		payload, _ := inner.SerializeQuery4Account(acc)
+	feed := func(srcBank uint32, src string, dstBank uint32, dst string) {
+		pair := &inner.Query4Pair{SourceBank: srcBank, SourceAccount: src, DestBank: dstBank, DestAccount: dst}
+		payload, _ := inner.SerializeQuery4Pair(pair)
 		out, _, err := j.ProcessMessage(&inner.Envelope{
-			Kind: inner.Query4AccountItem, ClientID: "c-1", GatewayID: 1, QueryID: 4, Payload: payload,
+			Kind: inner.Query4PairItem, ClientID: "c-1", GatewayID: 1, QueryID: 4, Payload: payload,
 		})
 		if err != nil {
 			t.Fatalf("ProcessMessage: %v", err)
@@ -150,10 +150,10 @@ func TestFinalJoinerProcessQ4DedupesAndDefersUntilEOF(t *testing.T) {
 		}
 	}
 
-	feed(7, "A")
-	feed(9, "B")
-	feed(7, "A") // dup, no emit
-	feed(9, "C")
+	feed(7, "A", 8, "B")
+	feed(9, "C", 10, "D")
+	feed(7, "A", 8, "B") // dup, no emit
+	feed(9, "C", 11, "E")
 
 	outcome, err := j.OnUpstreamEOF(&inner.Envelope{
 		Kind: inner.InternalEOF, ClientID: "c-1", GatewayID: 1, QueryID: 4, Total: 0,
@@ -168,7 +168,7 @@ func TestFinalJoinerProcessQ4DedupesAndDefersUntilEOF(t *testing.T) {
 		t.Fatalf("expected 3 deduped outputs, got %d (%+v)", len(outcome.Outputs), outcome.Outputs)
 	}
 
-	wants := []string{"7,A", "9,B", "9,C"}
+	wants := []string{"7,A,8,B", "9,C,10,D", "9,C,11,E"}
 	for i, o := range outcome.Outputs {
 		if string(o.Body) != wants[i] {
 			t.Fatalf("output[%d]: got %q want %q", i, string(o.Body), wants[i])
@@ -197,10 +197,10 @@ func TestFinalJoinerHandlesQ1AndQ4InSameInstance(t *testing.T) {
 	}
 
 	// Q4 item — should buffer.
-	q4 := &inner.Query4Account{Bank: 3, Account: "M"}
-	q4Payload, _ := inner.SerializeQuery4Account(q4)
+	q4 := &inner.Query4Pair{SourceBank: 3, SourceAccount: "M", DestBank: 4, DestAccount: "N"}
+	q4Payload, _ := inner.SerializeQuery4Pair(q4)
 	out, _, err = j.ProcessMessage(&inner.Envelope{
-		Kind: inner.Query4AccountItem, ClientID: "c", GatewayID: 1, QueryID: 4, Payload: q4Payload,
+		Kind: inner.Query4PairItem, ClientID: "c", GatewayID: 1, QueryID: 4, Payload: q4Payload,
 	})
 	if err != nil || len(out) != 0 {
 		t.Fatalf("Q4 ProcessMessage: err=%v out=%d (want 0)", err, len(out))
@@ -236,7 +236,7 @@ func TestFinalJoinerHandlesQ1AndQ4InSameInstance(t *testing.T) {
 		t.Fatalf("Q1 should not emit deferred Outputs, got %d", len(outcome.Outputs))
 	}
 
-	// Second EOF for Q4 → fires WITH deferred outputs (the buffered account).
+	// Second EOF for Q4 → fires WITH deferred outputs (the buffered pair).
 	outcome, err = j.OnUpstreamEOF(&inner.Envelope{
 		Kind: inner.InternalEOF, ClientID: "c", GatewayID: 1, QueryID: 4, Total: 0,
 	})
@@ -246,7 +246,7 @@ func TestFinalJoinerHandlesQ1AndQ4InSameInstance(t *testing.T) {
 	if outcome.Action.Kind != eof.ActionEmitEOFs {
 		t.Fatalf("Q4 second EOF should fire, got %d", outcome.Action.Kind)
 	}
-	if len(outcome.Outputs) != 1 || string(outcome.Outputs[0].Body) != "3,M" {
+	if len(outcome.Outputs) != 1 || string(outcome.Outputs[0].Body) != "3,M,4,N" {
 		t.Fatalf("Q4 deferred outputs: %+v", outcome.Outputs)
 	}
 	if len(outcome.EOFs) != 1 || outcome.EOFs[0].QueryID != 4 {
