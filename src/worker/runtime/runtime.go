@@ -320,9 +320,15 @@ func (w *Worker) applyEOFOutcome(env *inner.Envelope, outcome strategy.EOFOutcom
 		}
 		return w.forwardToken(env, outcome.Action.Token)
 	case eof.ActionEmitEOFs:
+		if err := w.appendOutputMessages(env.GatewayID, outcome.Outputs); err != nil {
+			return err
+		}
 		w.clearUpstreamEOF(env.ClientID)
 		return w.publishEOFs(env, outcome.EOFs)
 	case eof.ActionEmitEOFsAndForwardToken:
+		if err := w.appendOutputMessages(env.GatewayID, outcome.Outputs); err != nil {
+			return err
+		}
 		if err := w.flushClient(env.ClientID); err != nil {
 			return err
 		}

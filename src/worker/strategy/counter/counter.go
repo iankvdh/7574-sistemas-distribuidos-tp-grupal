@@ -24,8 +24,8 @@ type pairKey struct {
 }
 
 type pairState struct {
-	intermediates map[accountKey]struct{}
-	emitted       bool
+	intermediaries map[accountKey]struct{}
+	emitted        bool
 }
 
 type clientState struct {
@@ -59,71 +59,70 @@ func (c *Counter) Init(cfg strategy.StrategyConfig) error {
 	if err != nil {
 		return err
 	}
-	minIntermediates, err := env.IntWithDefault("MIN_INTERMEDIATES", defaultMinIntermediates, true)
+	minInterm, err := env.IntWithDefault("MIN_INTERMEDIATES", defaultMinIntermediates, true)
 	if err != nil {
 		return err
 	}
 	c.cfg = cfg
 	c.nPathFinders = n
 	c.nFinalJoiners = finalJoiners
-	c.minIntermediates = minIntermediates
+	c.minIntermediates = minInterm
 	c.coordinator = eof.NewJoinerAccumulateCoordinator(n, 1)
 	return nil
 }
 
 func (c *Counter) ProcessMessage(envelope *inner.Envelope) ([]strategy.OutputMessage, strategy.LocalCounts, error) {
 	if envelope.Kind != inner.SuspiciousPathMessage {
-		return nil, strategy.LocalCounts{}, fmt.Errorf("counter_q4 expects SuspiciousPathMessage, got kind=%d", envelope.Kind)
+		return nil, strategy.LocalCounts{Processed: 1}, nil
 	}
 	path, err := inner.DeserializeSuspiciousPath(envelope.Payload)
 	if err != nil {
 		return nil, strategy.LocalCounts{}, fmt.Errorf("deserialize suspicious path: %w", err)
 	}
 
-	key := pairKey{
-		Source: accountKey{Bank: path.SourceBank, Account: path.SourceAccount},
-		Dest:   accountKey{Bank: path.DestBank, Account: path.DestAccount},
-	}
-	mid := accountKey{Bank: path.IntermediateBank, Account: path.IntermediateAccount}
+	source := accountKey{Bank: path.SourceBank, Account: path.SourceAccount}
+	intermediate := accountKey{Bank: path.IntermediateBank, Account: path.IntermediateAccount}
+	dest := accountKey{Bank: path.DestBank, Account: path.DestAccount}
 
+	key := pairKey{Source: source, Dest: dest}
 	st := c.stateFor(envelope.ClientID)
 	ps := st.pairFor(key)
+
 	if ps.emitted {
 		return nil, strategy.LocalCounts{Processed: 1}, nil
 	}
-	if _, exists := ps.intermediates[mid]; exists {
+	ps.intermediaries[intermediate] = struct{}{}
+	if len(ps.intermediaries) < c.minIntermediates {
 		return nil, strategy.LocalCounts{Processed: 1}, nil
 	}
-	ps.intermediates[mid] = struct{}{}
-	if len(ps.intermediates) < c.minIntermediates {
-		return nil, strategy.LocalCounts{Processed: 1}, nil
-	}
-	ps.emitted = true
-	ps.intermediates = nil
 
-	pair := &inner.Query4Pair{
-		SourceBank:    key.Source.Bank,
-		SourceAccount: key.Source.Account,
-		DestBank:      key.Dest.Bank,
-		DestAccount:   key.Dest.Account,
-	}
-	body, err := inner.SerializeQuery4Pair(pair)
-	if err != nil {
-		return nil, strategy.LocalCounts{}, fmt.Errorf("serialize query4 pair: %w", err)
-	}
+	ps.emitted = true
+	ps.intermediaries = nil
 
 	qid := envelope.QueryID
 	if qid == 0 {
 		qid = 4
 	}
-	return []strategy.OutputMessage{{
-		OutputIndices: []int{0},
-		Body:          body,
-		ClientID:      envelope.ClientID,
-		RoutingKey:    c.routingKeyFor(envelope.ClientID),
-		BatchItemKind: inner.Query4PairItem,
-		BatchQueryID:  qid,
-	}}, strategy.LocalCounts{Processed: 1, Matched: 1}, nil
+	rk := c.routingKeyFor(envelope.ClientID)
+	outputs := make([]strategy.OutputMessage, 0, 2)
+	for _, acc := range []inner.Query4Account{
+		{Bank: source.Bank, Account: source.Account},
+		{Bank: dest.Bank, Account: dest.Account},
+	} {
+		body, err := inner.SerializeQuery4Account(&acc)
+		if err != nil {
+			return nil, strategy.LocalCounts{}, fmt.Errorf("serialize query4 account: %w", err)
+		}
+		outputs = append(outputs, strategy.OutputMessage{
+			OutputIndices: []int{0},
+			Body:          body,
+			ClientID:      envelope.ClientID,
+			RoutingKey:    rk,
+			BatchItemKind: inner.Query4AccountItem,
+			BatchQueryID:  qid,
+		})
+	}
+	return outputs, strategy.LocalCounts{Processed: 1, Matched: 1}, nil
 }
 
 func (c *Counter) OnUpstreamEOF(envelope *inner.Envelope) (strategy.EOFOutcome, error) {
@@ -158,11 +157,11 @@ func (c *Counter) stateFor(clientID inner.ClientID) *clientState {
 	return st
 }
 
-func (s *clientState) pairFor(k pairKey) *pairState {
-	p, ok := s.pairs[k]
+func (s *clientState) pairFor(key pairKey) *pairState {
+	ps, ok := s.pairs[key]
 	if !ok {
-		p = &pairState{intermediates: map[accountKey]struct{}{}}
-		s.pairs[k] = p
+		ps = &pairState{intermediaries: map[accountKey]struct{}{}}
+		s.pairs[key] = ps
 	}
-	return p
+	return ps
 }

@@ -77,62 +77,64 @@ func (p *PathFinder) ProcessMessage(envelope *inner.Envelope) ([]strategy.Output
 
 	source := accountKey{Bank: stx.FromBank, Account: stx.FromAccount}
 	dest := accountKey{Bank: stx.ToBank, Account: stx.ToAccount}
-
 	st := p.stateFor(envelope.ClientID)
-	var suspiciousPaths []*inner.SuspiciousPath
+
 	if stx.ShardedBySource {
+		// source = M (intermediate), dest = B. Add B to M.outSet.
+		// For each A already in M.inSet emit (A, M, B).
 		accSt := st.accountFor(source)
-		if _, exists := accSt.outSet[dest]; !exists {
-			accSt.outSet[dest] = struct{}{}
-			for in := range accSt.inSet {
-				suspiciousPaths = append(suspiciousPaths, &inner.SuspiciousPath{
-					SourceBank:          in.Bank,
-					SourceAccount:       in.Account,
-					IntermediateBank:    source.Bank,
-					IntermediateAccount: source.Account,
-					DestBank:            dest.Bank,
-					DestAccount:         dest.Account,
-				})
-			}
+		if _, exists := accSt.outSet[dest]; exists {
+			return nil, strategy.LocalCounts{Processed: 1}, nil
 		}
-	} else {
-		accSt := st.accountFor(dest)
-		if _, exists := accSt.inSet[source]; !exists {
-			accSt.inSet[source] = struct{}{}
-			for out := range accSt.outSet {
-				suspiciousPaths = append(suspiciousPaths, &inner.SuspiciousPath{
-					SourceBank:          source.Bank,
-					SourceAccount:       source.Account,
-					IntermediateBank:    dest.Bank,
-					IntermediateAccount: dest.Account,
-					DestBank:            out.Bank,
-					DestAccount:         out.Account,
-				})
+		accSt.outSet[dest] = struct{}{}
+		var outputs []strategy.OutputMessage
+		for inAcc := range accSt.inSet {
+			if inAcc == dest {
+				continue
 			}
+			outputs = p.appendTriple(outputs, envelope.ClientID, inAcc, source, dest)
 		}
+		return outputs, strategy.LocalCounts{Processed: 1}, nil
 	}
 
-	if len(suspiciousPaths) == 0 {
+	// dest = M (intermediate), source = A. Add A to M.inSet.
+	// For each B already in M.outSet emit (A, M, B).
+	accSt := st.accountFor(dest)
+	if _, exists := accSt.inSet[source]; exists {
 		return nil, strategy.LocalCounts{Processed: 1}, nil
 	}
-
-	outputs := make([]strategy.OutputMessage, 0, len(suspiciousPaths))
-	for _, c := range suspiciousPaths {
-		body, err := inner.SerializeSuspiciousPath(c)
-		if err != nil {
-			return nil, strategy.LocalCounts{}, fmt.Errorf("serialize suspicious path: %w", err)
+	accSt.inSet[source] = struct{}{}
+	var outputs []strategy.OutputMessage
+	for outAcc := range accSt.outSet {
+		if source == outAcc {
+			continue
 		}
-		shard := hashing.Shard(pairKey(c.SourceBank, c.SourceAccount, c.DestBank, c.DestAccount), p.kCounters)
-		outputs = append(outputs, strategy.OutputMessage{
-			OutputIndices: []int{0},
-			Body:          body,
-			ClientID:      envelope.ClientID,
-			RoutingKey:    p.rkCache[shard],
-			BatchItemKind: inner.SuspiciousPathMessage,
-			BatchQueryID:  queryID,
-		})
+		outputs = p.appendTriple(outputs, envelope.ClientID, source, dest, outAcc)
 	}
 	return outputs, strategy.LocalCounts{Processed: 1}, nil
+}
+
+func (p *PathFinder) appendTriple(outputs []strategy.OutputMessage, clientID inner.ClientID, src, mid, dst accountKey) []strategy.OutputMessage {
+	body, err := inner.SerializeSuspiciousPath(&inner.SuspiciousPath{
+		SourceBank:          src.Bank,
+		SourceAccount:       src.Account,
+		IntermediateBank:    mid.Bank,
+		IntermediateAccount: mid.Account,
+		DestBank:            dst.Bank,
+		DestAccount:         dst.Account,
+	})
+	if err != nil {
+		return outputs
+	}
+	shard := hashing.Shard(pairKey(src.Bank, src.Account, dst.Bank, dst.Account), p.kCounters)
+	return append(outputs, strategy.OutputMessage{
+		OutputIndices: []int{0},
+		Body:          body,
+		ClientID:      clientID,
+		RoutingKey:    p.rkCache[shard],
+		BatchItemKind: inner.SuspiciousPathMessage,
+		BatchQueryID:  queryID,
+	})
 }
 
 func (p *PathFinder) OnUpstreamEOF(envelope *inner.Envelope) (strategy.EOFOutcome, error) {
@@ -184,5 +186,5 @@ func (s *clientState) accountFor(k accountKey) *accountState {
 }
 
 func pairKey(srcBank uint32, srcAcc string, dstBank uint32, dstAcc string) string {
-	return fmt.Sprintf("%d-%s-%d-%s", srcBank, srcAcc, dstBank, dstAcc)
+	return fmt.Sprintf("%d|%s|%d|%s", srcBank, srcAcc, dstBank, dstAcc)
 }

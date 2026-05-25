@@ -98,14 +98,15 @@ workers:
     volumes:
       - ./results:/results
 
-  - name: sharder_q4
-    strategy: sharder_q4
-    replicas: 4
+  - name: scatter_agg_q4
+    strategy: scatter_agg_q4
+    replicas: 1
     input: queue:period1_usd_for_drain
     outputs:
       - direct_exchange:q4_account_shards
     env:
       K_PATH_FINDERS: "4"
+      MIN_SCATTER_DESTS: "5"
 
   - name: path_finder_q4
     strategy: path_finder_q4
@@ -115,7 +116,7 @@ workers:
       - direct_exchange:q4_pair_shards
     env:
       K_COUNTERS: "4"
-      N_SHARDERS: "4"
+      N_SHARDERS: "1"
 
   - name: counter_q4
     strategy: counter_q4

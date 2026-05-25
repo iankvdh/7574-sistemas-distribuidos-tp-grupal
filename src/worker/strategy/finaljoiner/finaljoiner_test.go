@@ -91,36 +91,73 @@ func TestFinalJoinerProcessQ1FormatsRow(t *testing.T) {
 	}
 }
 
-func TestFinalJoinerProcessQ4FormatsRow(t *testing.T) {
+func TestFinalJoinerProcessQ4DedupesAndDefersUntilEOF(t *testing.T) {
 	j := newInited(t, 4, 1, 1)
 
-	pair := &inner.Query4Pair{SourceBank: 7, SourceAccount: "A", DestBank: 9, DestAccount: "B"}
-	payload, _ := inner.SerializeQuery4Pair(pair)
-	out, _, err := j.ProcessMessage(&inner.Envelope{
-		Kind:      inner.Query4PairItem,
-		ClientID:  "c-1",
-		GatewayID: 1,
-		QueryID:   4,
-		Payload:   payload,
+	feed := func(bank uint32, account string) {
+		acc := &inner.Query4Account{Bank: bank, Account: account}
+		payload, _ := inner.SerializeQuery4Account(acc)
+		out, _, err := j.ProcessMessage(&inner.Envelope{
+			Kind: inner.Query4AccountItem, ClientID: "c-1", GatewayID: 1, QueryID: 4, Payload: payload,
+		})
+		if err != nil {
+			t.Fatalf("ProcessMessage: %v", err)
+		}
+		if len(out) != 0 {
+			t.Fatalf("Q4 should defer outputs to EOF, got %d", len(out))
+		}
+	}
+
+	// Two pairs sharing a source — dedupe should collapse the source.
+	feed(7, "A")
+	feed(9, "B")
+	feed(7, "A") // dup, no emit
+	feed(9, "C")
+
+	outcome, err := j.OnUpstreamEOF(&inner.Envelope{
+		Kind: inner.InternalEOF, ClientID: "c-1", GatewayID: 1, Total: 0,
 	})
 	if err != nil {
-		t.Fatalf("ProcessMessage: %v", err)
+		t.Fatalf("OnUpstreamEOF: %v", err)
 	}
-	if string(out[0].Body) != "7,A,9,B" {
-		t.Fatalf("unexpected row: %q", string(out[0].Body))
+	if outcome.Action.Kind != eof.ActionEmitEOFs {
+		t.Fatalf("expected ActionEmitEOFs, got %d", outcome.Action.Kind)
+	}
+	if len(outcome.Outputs) != 3 {
+		t.Fatalf("expected 3 deduped outputs, got %d (%+v)", len(outcome.Outputs), outcome.Outputs)
+	}
+
+	// Sorted by (bank, account).
+	wants := []string{"7,A", "9,B", "9,C"}
+	for i, o := range outcome.Outputs {
+		if string(o.Body) != wants[i] {
+			t.Fatalf("output[%d]: got %q want %q", i, string(o.Body), wants[i])
+		}
+		if o.BatchQueryID != 4 {
+			t.Fatalf("output[%d]: BatchQueryID got %d want 4", i, o.BatchQueryID)
+		}
+		if len(o.OutputIndices) != 1 || o.OutputIndices[0] != 0 {
+			t.Fatalf("output[%d]: OutputIndices %v want [0]", i, o.OutputIndices)
+		}
+	}
+
+	if len(outcome.EOFs) != 1 {
+		t.Fatalf("expected 1 EOFEmit, got %d", len(outcome.EOFs))
+	}
+	if outcome.EOFs[0].QueryID != 4 {
+		t.Fatalf("EOF QueryID got %d want 4", outcome.EOFs[0].QueryID)
 	}
 }
 
 func TestFinalJoinerProcessRoutesToCorrectGateway(t *testing.T) {
-	j := newInited(t, 4, 1, 2) // 2 gateway outputs
-
-	pair := &inner.Query4Pair{SourceBank: 1, SourceAccount: "x", DestBank: 2, DestAccount: "y"}
-	payload, _ := inner.SerializeQuery4Pair(pair)
+	j := newInited(t, 1, 1, 2) // 2 gateway outputs
 
 	for gw := 1; gw <= 2; gw++ {
+		row := &inner.Query1Row{SourceBank: 1, SourceAccount: "x", DestBank: 2, DestAccount: "y", Amount: 1}
+		payload, _ := inner.SerializeQuery1Row(row)
 		out, _, err := j.ProcessMessage(&inner.Envelope{
-			Kind: inner.Query4PairItem, ClientID: "c", GatewayID: inner.GatewayID(gw),
-			QueryID: 4, Payload: payload,
+			Kind: inner.Query1RowItem, ClientID: "c", GatewayID: inner.GatewayID(gw),
+			QueryID: 1, Payload: payload,
 		})
 		if err != nil {
 			t.Fatalf("gw=%d: %v", gw, err)
@@ -132,14 +169,14 @@ func TestFinalJoinerProcessRoutesToCorrectGateway(t *testing.T) {
 }
 
 func TestFinalJoinerProcessRejectsUnknownGateway(t *testing.T) {
-	j := newInited(t, 4, 1, 1)
+	j := newInited(t, 1, 1, 1)
 
-	pair := &inner.Query4Pair{SourceBank: 1, SourceAccount: "x", DestBank: 2, DestAccount: "y"}
-	payload, _ := inner.SerializeQuery4Pair(pair)
+	row := &inner.Query1Row{SourceBank: 1, SourceAccount: "x", DestBank: 2, DestAccount: "y", Amount: 1}
+	payload, _ := inner.SerializeQuery1Row(row)
 
 	_, _, err := j.ProcessMessage(&inner.Envelope{
-		Kind: inner.Query4PairItem, ClientID: "c", GatewayID: 5, // out of range
-		QueryID: 4, Payload: payload,
+		Kind: inner.Query1RowItem, ClientID: "c", GatewayID: 5, // out of range
+		QueryID: 1, Payload: payload,
 	})
 	if err == nil {
 		t.Fatalf("expected error for GatewayID out of range")
@@ -164,7 +201,7 @@ func TestFinalJoinerDropsMismatchedQueryID(t *testing.T) {
 }
 
 func TestFinalJoinerEOFAccumulatesAndEmitsAfterN(t *testing.T) {
-	j := newInited(t, 4, 3, 1) // need 3 EOFs per client
+	j := newInited(t, 1, 3, 1) // need 3 EOFs per client (Q1, no deferred outputs)
 
 	// First two EOFs: no emit.
 	for i := 0; i < 2; i++ {
@@ -196,8 +233,8 @@ func TestFinalJoinerEOFAccumulatesAndEmitsAfterN(t *testing.T) {
 	if emit.OutputIndex != 0 {
 		t.Fatalf("OutputIndex got %d want 0", emit.OutputIndex)
 	}
-	if emit.QueryID != 4 {
-		t.Fatalf("QueryID got %d want 4", emit.QueryID)
+	if emit.QueryID != 1 {
+		t.Fatalf("QueryID got %d want 1", emit.QueryID)
 	}
 }
 

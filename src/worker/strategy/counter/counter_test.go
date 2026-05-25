@@ -7,11 +7,11 @@ import (
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy"
 )
 
-func newCounter(t *testing.T, nPathFinders, nFinalJoiners, minIntermediates int) *Counter {
+func newCounter(t *testing.T, nPathFinders, nFinalJoiners int) *Counter {
 	t.Helper()
 	t.Setenv("N_PATH_FINDERS", itoa(nPathFinders))
 	t.Setenv("N_FINAL_JOINERS", itoa(nFinalJoiners))
-	t.Setenv("MIN_INTERMEDIATES", itoa(minIntermediates))
+	t.Setenv("MIN_INTERMEDIATES", "3") // use 3 in tests to keep fixtures small
 	c := New()
 	if err := c.Init(strategy.StrategyConfig{OutputCount: 1, NReplicas: 1}); err != nil {
 		t.Fatalf("Init failed: %v", err)
@@ -31,12 +31,12 @@ func itoa(n int) string {
 	return string(digits)
 }
 
-func feedTriplet(t *testing.T, c *Counter, srcAcc, midAcc, dstAcc string) []strategy.OutputMessage {
+func feedPath(t *testing.T, c *Counter, srcBank uint32, src string, midBank uint32, mid string, dstBank uint32, dst string) []strategy.OutputMessage {
 	t.Helper()
 	body, err := inner.SerializeSuspiciousPath(&inner.SuspiciousPath{
-		SourceBank: 1, SourceAccount: srcAcc,
-		IntermediateBank: 1, IntermediateAccount: midAcc,
-		DestBank: 1, DestAccount: dstAcc,
+		SourceBank: srcBank, SourceAccount: src,
+		IntermediateBank: midBank, IntermediateAccount: mid,
+		DestBank: dstBank, DestAccount: dst,
 	})
 	if err != nil {
 		t.Fatalf("serialize: %v", err)
@@ -45,6 +45,7 @@ func feedTriplet(t *testing.T, c *Counter, srcAcc, midAcc, dstAcc string) []stra
 		Kind:     inner.SuspiciousPathMessage,
 		ClientID: "client-x",
 		Payload:  body,
+		QueryID:  4,
 	})
 	if err != nil {
 		t.Fatalf("ProcessMessage: %v", err)
@@ -52,61 +53,85 @@ func feedTriplet(t *testing.T, c *Counter, srcAcc, midAcc, dstAcc string) []stra
 	return out
 }
 
-func TestCounterEmitsOnceUmbralAlcanzado(t *testing.T) {
-	c := newCounter(t, 1, 1, 3)
+// TestCounterEmitsAtThreshold verifies that accounts are emitted exactly when
+// the intermediary count reaches MIN_INTERMEDIATES.
+func TestCounterEmitsAtThreshold(t *testing.T) {
+	c := newCounter(t, 1, 1) // MIN_INTERMEDIATES=3
 
-	// 2 intermediarios distintos: aún por debajo del umbral.
-	if out := feedTriplet(t, c, "S", "I1", "D"); len(out) != 0 {
-		t.Fatalf("below threshold should not emit, got %d", len(out))
+	// pair (A,B): feed 2 intermediaries → no output yet
+	if out := feedPath(t, c, 1, "A", 9, "M1", 2, "B"); len(out) != 0 {
+		t.Fatalf("1st interm: expected 0 outputs, got %d", len(out))
 	}
-	if out := feedTriplet(t, c, "S", "I2", "D"); len(out) != 0 {
-		t.Fatalf("below threshold should not emit, got %d", len(out))
+	if out := feedPath(t, c, 1, "A", 9, "M2", 2, "B"); len(out) != 0 {
+		t.Fatalf("2nd interm: expected 0 outputs, got %d", len(out))
 	}
-	// El 3er intermediario distinto cierra el umbral; debe emitir.
-	out := feedTriplet(t, c, "S", "I3", "D")
-	if len(out) != 1 {
-		t.Fatalf("must emit when threshold reached, got %d", len(out))
+	// 3rd intermediary → emit A and B
+	out := feedPath(t, c, 1, "A", 9, "M3", 2, "B")
+	if len(out) != 2 {
+		t.Fatalf("3rd interm: expected 2 outputs (A and B), got %d", len(out))
 	}
-	if out[0].BatchItemKind != inner.Query4PairItem {
-		t.Fatalf("expected Query4PairItem, got %d", out[0].BatchItemKind)
-	}
-	if out[0].BatchQueryID != 4 {
-		t.Fatalf("expected BatchQueryID=4, got %d", out[0].BatchQueryID)
-	}
-	pair, err := inner.DeserializeQuery4Pair(out[0].Body)
-	if err != nil {
-		t.Fatalf("deserialize pair: %v", err)
-	}
-	if pair.SourceAccount != "S" || pair.DestAccount != "D" {
-		t.Fatalf("unexpected pair: %+v", pair)
-	}
-
-	// Más intermediarios para el mismo par: ya está emitido, no debe re-emitir.
-	if out := feedTriplet(t, c, "S", "I4", "D"); len(out) != 0 {
-		t.Fatalf("after emit, further triplets must not emit, got %d", len(out))
-	}
-	if out := feedTriplet(t, c, "S", "I5", "D"); len(out) != 0 {
-		t.Fatalf("after emit, further triplets must not emit, got %d", len(out))
+	for _, o := range out {
+		if o.BatchItemKind != inner.Query4AccountItem {
+			t.Fatalf("expected Query4AccountItem, got %d", o.BatchItemKind)
+		}
+		if o.BatchQueryID != 4 {
+			t.Fatalf("expected BatchQueryID=4, got %d", o.BatchQueryID)
+		}
 	}
 }
 
-func TestCounterDeduplicatesIntermediates(t *testing.T) {
-	c := newCounter(t, 1, 1, 3)
+// TestCounterDoesNotReemitAfterThreshold verifies the emitted=true guard.
+func TestCounterDoesNotReemitAfterThreshold(t *testing.T) {
+	c := newCounter(t, 1, 1)
 
-	// Tres mensajes con el mismo intermediario; el set sigue en 1.
-	if out := feedTriplet(t, c, "S", "I1", "D"); len(out) != 0 {
-		t.Fatalf("must not emit on first, got %d", len(out))
+	feedPath(t, c, 1, "A", 9, "M1", 2, "B")
+	feedPath(t, c, 1, "A", 9, "M2", 2, "B")
+	if out := feedPath(t, c, 1, "A", 9, "M3", 2, "B"); len(out) != 2 {
+		t.Fatalf("threshold: expected 2 outputs, got %d", len(out))
 	}
-	if out := feedTriplet(t, c, "S", "I1", "D"); len(out) != 0 {
-		t.Fatalf("duplicate must not change state, got %d", len(out))
-	}
-	if out := feedTriplet(t, c, "S", "I1", "D"); len(out) != 0 {
-		t.Fatalf("duplicate must not change state, got %d", len(out))
+	// extra paths for the same pair must not re-emit
+	if out := feedPath(t, c, 1, "A", 9, "M4", 2, "B"); len(out) != 0 {
+		t.Fatalf("post-threshold: expected 0 outputs, got %d", len(out))
 	}
 }
 
-func TestCounterEmitsEOFForClient(t *testing.T) {
-	c := newCounter(t, 2, 1, 5)
+// TestCounterDuplicateIntermediaryNotCounted verifies that the same M fed twice
+// only counts once.
+func TestCounterDuplicateIntermediaryNotCounted(t *testing.T) {
+	c := newCounter(t, 1, 1)
+
+	feedPath(t, c, 1, "A", 9, "M1", 2, "B")
+	feedPath(t, c, 1, "A", 9, "M1", 2, "B") // duplicate
+	feedPath(t, c, 1, "A", 9, "M2", 2, "B")
+	// only 2 distinct intermediaries so far → still below threshold=3
+	if out := feedPath(t, c, 1, "A", 9, "M2", 2, "B"); len(out) != 0 {
+		t.Fatalf("duplicate M: should not emit yet, got %d", len(out))
+	}
+	// 3rd distinct M → emit
+	if out := feedPath(t, c, 1, "A", 9, "M3", 2, "B"); len(out) != 2 {
+		t.Fatalf("3rd distinct M: expected 2 outputs, got %d", len(out))
+	}
+}
+
+// TestCounterIndependentPairs verifies that different (A,B) pairs are tracked
+// independently.
+func TestCounterIndependentPairs(t *testing.T) {
+	c := newCounter(t, 1, 1)
+
+	// pair (A,B): reaches threshold
+	feedPath(t, c, 1, "A", 9, "M1", 2, "B")
+	feedPath(t, c, 1, "A", 9, "M2", 2, "B")
+	feedPath(t, c, 1, "A", 9, "M3", 2, "B")
+
+	// pair (A,C): only 1 intermediary → no output
+	if out := feedPath(t, c, 1, "A", 9, "M1", 3, "C"); len(out) != 0 {
+		t.Fatalf("pair (A,C) with 1 interm: expected 0 outputs, got %d", len(out))
+	}
+}
+
+// TestCounterEmitsEOFAfterAllPathFinders verifies the N_PATH_FINDERS EOF gate.
+func TestCounterEmitsEOFAfterAllPathFinders(t *testing.T) {
+	c := newCounter(t, 2, 1)
 
 	if out, err := c.OnUpstreamEOF(&inner.Envelope{ClientID: "client-x"}); err != nil || len(out.EOFs) != 0 {
 		t.Fatalf("first EOF must not emit downstream: err=%v out=%+v", err, out)
@@ -119,6 +144,6 @@ func TestCounterEmitsEOFForClient(t *testing.T) {
 		t.Fatalf("expected 1 final EOF, got %d", len(outcome.EOFs))
 	}
 	if outcome.EOFs[0].RoutingKey == "" {
-		t.Fatalf("EOF must include the client's routing key")
+		t.Fatalf("EOF must include routing key")
 	}
 }

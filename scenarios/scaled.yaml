@@ -42,10 +42,7 @@ services:
       sharder_q1_2: { condition: service_started }
       sharder_q1_3: { condition: service_started }
       drain_period1_wire_ach: { condition: service_started }
-      sharder_q4_0: { condition: service_started }
-      sharder_q4_1: { condition: service_started }
-      sharder_q4_2: { condition: service_started }
-      sharder_q4_3: { condition: service_started }
+      scatter_agg_q4: { condition: service_started }
       path_finder_q4_0: { condition: service_started }
       path_finder_q4_1: { condition: service_started }
       path_finder_q4_2: { condition: service_started }
@@ -120,10 +117,7 @@ services:
       sharder_q1_2: { condition: service_started }
       sharder_q1_3: { condition: service_started }
       drain_period1_wire_ach: { condition: service_started }
-      sharder_q4_0: { condition: service_started }
-      sharder_q4_1: { condition: service_started }
-      sharder_q4_2: { condition: service_started }
-      sharder_q4_3: { condition: service_started }
+      scatter_agg_q4: { condition: service_started }
       path_finder_q4_0: { condition: service_started }
       path_finder_q4_1: { condition: service_started }
       path_finder_q4_2: { condition: service_started }
@@ -768,70 +762,21 @@ services:
       - DRAIN_OUTPUT_FILE=/results/drain_period1_wire_ach.csv
     volumes:
       - ./results:/results
-  sharder_q4_0:
+  scatter_agg_q4:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
     depends_on: { rabbitmq: { condition: service_healthy } }
     env_file:
       - .env
     environment:
-      - STRATEGY=sharder_q4
+      - STRATEGY=scatter_agg_q4
       - REPLICA_ID=0
-      - N_REPLICAS=4
+      - N_REPLICAS=1
       - INPUT=queue:period1_usd_for_drain
       - OUTPUTS_MATCH_COUNT=0
       - OUTPUT_0=direct_exchange:q4_account_shards
       - LOG_LEVEL=info
-      - RING_QUEUE_IN=ring_sharder_q4_0
-      - RING_QUEUE_OUT=ring_sharder_q4_1
       - K_PATH_FINDERS=4
-  sharder_q4_1:
-    build: { context: ./src/, dockerfile: worker/Dockerfile }
-    depends_on: { rabbitmq: { condition: service_healthy } }
-    env_file:
-      - .env
-    environment:
-      - STRATEGY=sharder_q4
-      - REPLICA_ID=1
-      - N_REPLICAS=4
-      - INPUT=queue:period1_usd_for_drain
-      - OUTPUTS_MATCH_COUNT=0
-      - OUTPUT_0=direct_exchange:q4_account_shards
-      - LOG_LEVEL=info
-      - RING_QUEUE_IN=ring_sharder_q4_1
-      - RING_QUEUE_OUT=ring_sharder_q4_2
-      - K_PATH_FINDERS=4
-  sharder_q4_2:
-    build: { context: ./src/, dockerfile: worker/Dockerfile }
-    depends_on: { rabbitmq: { condition: service_healthy } }
-    env_file:
-      - .env
-    environment:
-      - STRATEGY=sharder_q4
-      - REPLICA_ID=2
-      - N_REPLICAS=4
-      - INPUT=queue:period1_usd_for_drain
-      - OUTPUTS_MATCH_COUNT=0
-      - OUTPUT_0=direct_exchange:q4_account_shards
-      - LOG_LEVEL=info
-      - RING_QUEUE_IN=ring_sharder_q4_2
-      - RING_QUEUE_OUT=ring_sharder_q4_3
-      - K_PATH_FINDERS=4
-  sharder_q4_3:
-    build: { context: ./src/, dockerfile: worker/Dockerfile }
-    depends_on: { rabbitmq: { condition: service_healthy } }
-    env_file:
-      - .env
-    environment:
-      - STRATEGY=sharder_q4
-      - REPLICA_ID=3
-      - N_REPLICAS=4
-      - INPUT=queue:period1_usd_for_drain
-      - OUTPUTS_MATCH_COUNT=0
-      - OUTPUT_0=direct_exchange:q4_account_shards
-      - LOG_LEVEL=info
-      - RING_QUEUE_IN=ring_sharder_q4_3
-      - RING_QUEUE_OUT=ring_sharder_q4_0
-      - K_PATH_FINDERS=4
+      - MIN_SCATTER_DESTS=5
   path_finder_q4_0:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
     depends_on: { rabbitmq: { condition: service_healthy } }
@@ -846,7 +791,7 @@ services:
       - OUTPUT_0=direct_exchange:q4_pair_shards
       - LOG_LEVEL=info
       - K_COUNTERS=4
-      - N_SHARDERS=4
+      - N_SHARDERS=1
   path_finder_q4_1:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
     depends_on: { rabbitmq: { condition: service_healthy } }
@@ -861,7 +806,7 @@ services:
       - OUTPUT_0=direct_exchange:q4_pair_shards
       - LOG_LEVEL=info
       - K_COUNTERS=4
-      - N_SHARDERS=4
+      - N_SHARDERS=1
   path_finder_q4_2:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
     depends_on: { rabbitmq: { condition: service_healthy } }
@@ -876,7 +821,7 @@ services:
       - OUTPUT_0=direct_exchange:q4_pair_shards
       - LOG_LEVEL=info
       - K_COUNTERS=4
-      - N_SHARDERS=4
+      - N_SHARDERS=1
   path_finder_q4_3:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
     depends_on: { rabbitmq: { condition: service_healthy } }
@@ -891,7 +836,7 @@ services:
       - OUTPUT_0=direct_exchange:q4_pair_shards
       - LOG_LEVEL=info
       - K_COUNTERS=4
-      - N_SHARDERS=4
+      - N_SHARDERS=1
   counter_q4_0:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
     depends_on: { rabbitmq: { condition: service_healthy } }
