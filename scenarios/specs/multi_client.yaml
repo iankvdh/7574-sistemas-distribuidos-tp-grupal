@@ -106,7 +106,7 @@ workers:
 
   - name: sharder_q4
     strategy: sharder_q4
-    replicas: 1
+    replicas: 3
     input: queue:period1_usd_for_drain
     outputs:
       - direct_exchange:q4_account_shards

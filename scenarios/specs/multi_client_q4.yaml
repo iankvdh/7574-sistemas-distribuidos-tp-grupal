@@ -42,7 +42,7 @@ workers:
 
   - name: sharder_q4
     strategy: sharder_q4
-    replicas: 1
+    replicas: 3
     input: queue:period1_usd_for_drain
     outputs:
       - direct_exchange:q4_account_shards
@@ -56,7 +56,7 @@ workers:
     outputs:
       - direct_exchange:q4_suspicious_account_shards
     env:
-      N_SHARDERS: "1"
+      N_SHARDERS: "3"
       K_PATH_FINDERS: "3"
       SUSPICIOUS_THRESHOLD: "5"
 

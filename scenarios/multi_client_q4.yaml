@@ -11,7 +11,9 @@ services:
       filter_currency_usd_p1_0: { condition: service_started }
       filter_currency_usd_p1_1: { condition: service_started }
       filter_currency_usd_p1_2: { condition: service_started }
-      sharder_q4: { condition: service_started }
+      sharder_q4_0: { condition: service_started }
+      sharder_q4_1: { condition: service_started }
+      sharder_q4_2: { condition: service_started }
       suspicious_account_filter_0: { condition: service_started }
       suspicious_account_filter_1: { condition: service_started }
       suspicious_account_filter_2: { condition: service_started }
@@ -53,7 +55,9 @@ services:
       filter_currency_usd_p1_0: { condition: service_started }
       filter_currency_usd_p1_1: { condition: service_started }
       filter_currency_usd_p1_2: { condition: service_started }
-      sharder_q4: { condition: service_started }
+      sharder_q4_0: { condition: service_started }
+      sharder_q4_1: { condition: service_started }
+      sharder_q4_2: { condition: service_started }
       suspicious_account_filter_0: { condition: service_started }
       suspicious_account_filter_1: { condition: service_started }
       suspicious_account_filter_2: { condition: service_started }
@@ -204,7 +208,7 @@ services:
       - LOG_LEVEL=info
       - RING_QUEUE_IN=ring_filter_currency_usd_p1_2
       - RING_QUEUE_OUT=ring_filter_currency_usd_p1_0
-  sharder_q4:
+  sharder_q4_0:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
     depends_on: { rabbitmq: { condition: service_healthy } }
     env_file:
@@ -212,11 +216,45 @@ services:
     environment:
       - STRATEGY=sharder_q4
       - REPLICA_ID=0
-      - N_REPLICAS=1
+      - N_REPLICAS=3
       - INPUT=queue:period1_usd_for_drain
       - OUTPUTS_MATCH_COUNT=0
       - OUTPUT_0=direct_exchange:q4_account_shards
       - LOG_LEVEL=info
+      - RING_QUEUE_IN=ring_sharder_q4_0
+      - RING_QUEUE_OUT=ring_sharder_q4_1
+      - K_SUSPICIOUS_FILTERS=3
+  sharder_q4_1:
+    build: { context: ./src/, dockerfile: worker/Dockerfile }
+    depends_on: { rabbitmq: { condition: service_healthy } }
+    env_file:
+      - .env
+    environment:
+      - STRATEGY=sharder_q4
+      - REPLICA_ID=1
+      - N_REPLICAS=3
+      - INPUT=queue:period1_usd_for_drain
+      - OUTPUTS_MATCH_COUNT=0
+      - OUTPUT_0=direct_exchange:q4_account_shards
+      - LOG_LEVEL=info
+      - RING_QUEUE_IN=ring_sharder_q4_1
+      - RING_QUEUE_OUT=ring_sharder_q4_2
+      - K_SUSPICIOUS_FILTERS=3
+  sharder_q4_2:
+    build: { context: ./src/, dockerfile: worker/Dockerfile }
+    depends_on: { rabbitmq: { condition: service_healthy } }
+    env_file:
+      - .env
+    environment:
+      - STRATEGY=sharder_q4
+      - REPLICA_ID=2
+      - N_REPLICAS=3
+      - INPUT=queue:period1_usd_for_drain
+      - OUTPUTS_MATCH_COUNT=0
+      - OUTPUT_0=direct_exchange:q4_account_shards
+      - LOG_LEVEL=info
+      - RING_QUEUE_IN=ring_sharder_q4_2
+      - RING_QUEUE_OUT=ring_sharder_q4_0
       - K_SUSPICIOUS_FILTERS=3
   suspicious_account_filter_0:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
@@ -232,7 +270,7 @@ services:
       - OUTPUT_0=direct_exchange:q4_suspicious_account_shards
       - LOG_LEVEL=info
       - K_PATH_FINDERS=3
-      - N_SHARDERS=1
+      - N_SHARDERS=3
       - SUSPICIOUS_THRESHOLD=5
   suspicious_account_filter_1:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
@@ -248,7 +286,7 @@ services:
       - OUTPUT_0=direct_exchange:q4_suspicious_account_shards
       - LOG_LEVEL=info
       - K_PATH_FINDERS=3
-      - N_SHARDERS=1
+      - N_SHARDERS=3
       - SUSPICIOUS_THRESHOLD=5
   suspicious_account_filter_2:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
@@ -264,7 +302,7 @@ services:
       - OUTPUT_0=direct_exchange:q4_suspicious_account_shards
       - LOG_LEVEL=info
       - K_PATH_FINDERS=3
-      - N_SHARDERS=1
+      - N_SHARDERS=3
       - SUSPICIOUS_THRESHOLD=5
   path_finder_q4_0:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
