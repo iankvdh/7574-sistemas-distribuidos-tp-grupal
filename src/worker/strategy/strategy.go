@@ -33,8 +33,9 @@ type StrategyConfig struct {
 }
 
 type EOFOutcome struct {
-	Action eof.Action
-	EOFs   []eof.EOFEmit
+	Action  eof.Action
+	EOFs    []eof.EOFEmit
+	Outputs []OutputMessage // data messages to emit before downstream EOFs
 }
 
 type Strategy interface {

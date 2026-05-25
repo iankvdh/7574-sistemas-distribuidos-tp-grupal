@@ -12,6 +12,7 @@ package finaljoiner
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/env"
@@ -20,13 +21,29 @@ import (
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy"
 )
 
+type q4Account struct {
+	Bank    uint32
+	Account string
+}
+
+type clientQ4State struct {
+	gatewayID inner.GatewayID
+	accounts  map[q4Account]struct{}
+}
+
 type FinalJoiner struct {
 	cfg         strategy.StrategyConfig
 	queryID     uint8
 	coordinator *eof.JoinerAccumulateCoordinator
+	// Q4 acumula cuentas únicas por cliente hasta el EOF, momento en el que
+	// emite las filas ordenadas + el EOF al gateway. Para otros QueryIDs el
+	// FJ es forward-only (cada item se emite al vuelo).
+	q4State map[inner.ClientID]*clientQ4State
 }
 
-func New() *FinalJoiner { return &FinalJoiner{} }
+func New() *FinalJoiner {
+	return &FinalJoiner{q4State: map[inner.ClientID]*clientQ4State{}}
+}
 
 func (j *FinalJoiner) Name() string { return "final_joiner" }
 
@@ -47,18 +64,26 @@ func (j *FinalJoiner) Init(cfg strategy.StrategyConfig) error {
 	}
 	j.cfg = cfg
 	j.queryID = uint8(qid)
-	// One EOF goes out per client when the coordinator fires; the strategy
-	// addresses it to the per-gateway output in OnUpstreamEOF.
 	j.coordinator = eof.NewJoinerAccumulateCoordinator(expectedEOFs, 1)
 	return nil
 }
 
 func (j *FinalJoiner) ProcessMessage(envelope *inner.Envelope) ([]strategy.OutputMessage, strategy.LocalCounts, error) {
 	if envelope.QueryID != 0 && envelope.QueryID != j.queryID {
-		// Mismatched query — dropped silently. Useful if Q1 and Q4 ever share
-		// the same `results` exchange routing key space.
 		return nil, strategy.LocalCounts{Processed: 1}, nil
 	}
+
+	switch j.queryID {
+	case 4:
+		return j.processQ4Item(envelope)
+	default:
+		return j.processStreamingItem(envelope)
+	}
+}
+
+// processStreamingItem forwards a single item as a CSV row to the gateway's
+// per-replica output. Used by queries whose rows are emitted as-they-come (Q1).
+func (j *FinalJoiner) processStreamingItem(envelope *inner.Envelope) ([]strategy.OutputMessage, strategy.LocalCounts, error) {
 	row, err := j.formatRow(envelope.Kind, envelope.Payload)
 	if err != nil {
 		return nil, strategy.LocalCounts{}, err
@@ -75,6 +100,23 @@ func (j *FinalJoiner) ProcessMessage(envelope *inner.Envelope) ([]strategy.Outpu
 	}}, strategy.LocalCounts{Processed: 1, Matched: 1}, nil
 }
 
+// processQ4Item dedupes incoming (bank, account) entries per client. Q4's
+// counter emits both source and destination of each detected pair separately,
+// and the spec output is the set of distinct accounts involved in scatter
+// patterns. We buffer here and flush on EOF (see OnUpstreamEOF).
+func (j *FinalJoiner) processQ4Item(envelope *inner.Envelope) ([]strategy.OutputMessage, strategy.LocalCounts, error) {
+	if envelope.Kind != inner.Query4AccountItem {
+		return nil, strategy.LocalCounts{}, fmt.Errorf("Q4 expects Query4AccountItem, got kind=%d", envelope.Kind)
+	}
+	acc, err := inner.DeserializeQuery4Account(envelope.Payload)
+	if err != nil {
+		return nil, strategy.LocalCounts{}, fmt.Errorf("deserialize query4 account: %w", err)
+	}
+	state := j.q4StateFor(envelope.ClientID, envelope.GatewayID)
+	state.accounts[q4Account{Bank: acc.Bank, Account: acc.Account}] = struct{}{}
+	return nil, strategy.LocalCounts{Processed: 1, Matched: 1}, nil
+}
+
 func (j *FinalJoiner) OnUpstreamEOF(envelope *inner.Envelope) (strategy.EOFOutcome, error) {
 	action := j.coordinator.OnUpstreamEOF(envelope.ClientID, envelope.Total)
 	if action.Kind != eof.ActionEmitEOFs {
@@ -84,9 +126,16 @@ func (j *FinalJoiner) OnUpstreamEOF(envelope *inner.Envelope) (strategy.EOFOutco
 	if err != nil {
 		return strategy.EOFOutcome{}, err
 	}
+
+	var outputs []strategy.OutputMessage
+	if j.queryID == 4 {
+		outputs = j.flushQ4Outputs(envelope.ClientID, idx)
+	}
+
 	return strategy.EOFOutcome{
-		Action: eof.Action{Kind: eof.ActionEmitEOFs},
-		EOFs:   []eof.EOFEmit{{OutputIndex: idx, QueryID: j.queryID}},
+		Action:  eof.Action{Kind: eof.ActionEmitEOFs},
+		Outputs: outputs,
+		EOFs:    []eof.EOFEmit{{OutputIndex: idx, QueryID: j.queryID}},
 	}, nil
 }
 
@@ -119,19 +168,49 @@ func (j *FinalJoiner) formatRow(itemKind inner.MsgKind, payload []byte) (string,
 			row.DestBank, row.DestAccount,
 			strconv.FormatFloat(row.Amount, 'f', 2, 64),
 		), nil
-	case 4:
-		if itemKind != inner.Query4PairItem {
-			return "", fmt.Errorf("Q4 expects Query4PairItem, got kind=%d", itemKind)
-		}
-		pair, err := inner.DeserializeQuery4Pair(payload)
-		if err != nil {
-			return "", err
-		}
-		return fmt.Sprintf("%d,%s,%d,%s",
-			pair.SourceBank, pair.SourceAccount,
-			pair.DestBank, pair.DestAccount,
-		), nil
 	default:
 		return "", fmt.Errorf("formatter for QUERY_ID=%d not implemented", j.queryID)
 	}
+}
+
+func (j *FinalJoiner) q4StateFor(clientID inner.ClientID, gatewayID inner.GatewayID) *clientQ4State {
+	state, ok := j.q4State[clientID]
+	if !ok {
+		state = &clientQ4State{gatewayID: gatewayID, accounts: map[q4Account]struct{}{}}
+		j.q4State[clientID] = state
+	} else if gatewayID != 0 {
+		state.gatewayID = gatewayID
+	}
+	return state
+}
+
+// flushQ4Outputs builds a sorted, deduplicated list of OutputMessages for the
+// client's accumulated accounts and clears the in-memory state.
+func (j *FinalJoiner) flushQ4Outputs(clientID inner.ClientID, outputIdx int) []strategy.OutputMessage {
+	state := j.q4State[clientID]
+	if state == nil || len(state.accounts) == 0 {
+		delete(j.q4State, clientID)
+		return nil
+	}
+	accs := make([]q4Account, 0, len(state.accounts))
+	for a := range state.accounts {
+		accs = append(accs, a)
+	}
+	sort.Slice(accs, func(i, k int) bool {
+		if accs[i].Bank != accs[k].Bank {
+			return accs[i].Bank < accs[k].Bank
+		}
+		return accs[i].Account < accs[k].Account
+	})
+	outputs := make([]strategy.OutputMessage, 0, len(accs))
+	for _, a := range accs {
+		outputs = append(outputs, strategy.OutputMessage{
+			OutputIndices: []int{outputIdx},
+			Body:          []byte(fmt.Sprintf("%d,%s", a.Bank, a.Account)),
+			ClientID:      clientID,
+			BatchQueryID:  j.queryID,
+		})
+	}
+	delete(j.q4State, clientID)
+	return outputs
 }
