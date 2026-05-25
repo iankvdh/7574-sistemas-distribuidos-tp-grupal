@@ -63,6 +63,18 @@ const (
 	// nombre (BankName, FromAccount, MaxAmount). Emitido por aggregator_q2 al
 	// exchange `results` para consumo del final_joiner.
 	Q2ResultItem
+	// Q3PartialAvgItem transporta un parcial (PaymentFormat, Sum, Count) de los
+	// montos USD de Period 1 emitido por una réplica de average_local_q3 al
+	// cierre del ring hacia average_global_q3.
+	Q3PartialAvgItem
+	// Q3AverageItem transporta el promedio global (PaymentFormat, Average) de
+	// Period 1 USD emitido por average_global_q3 (broadcast) hacia las réplicas
+	// de filter_q3.
+	Q3AverageItem
+	// Query3RowItem transporta una fila final de Q3 (SourceBank, SourceAccount,
+	// Amount) emitida por filter_q3 al exchange `results` para consumo del
+	// final_joiner.
+	Query3RowItem
 )
 
 var (
@@ -166,7 +178,7 @@ func SerializeRingToken(gatewayID GatewayID, clientID ClientID, tokenJSON []byte
 
 func validInnerBatchItemKind(kind MsgKind) bool {
 	switch kind {
-	case TransactionMessage, AccountMessage, ShardedTxMessage, SuspiciousPathMessage, Query4PairItem, Query1RowItem, Q2PartialMaxItem, Q2BankNameItem, Q2ResultItem:
+	case TransactionMessage, AccountMessage, ShardedTxMessage, SuspiciousPathMessage, Query4PairItem, Query1RowItem, Q2PartialMaxItem, Q2BankNameItem, Q2ResultItem, Q3PartialAvgItem, Q3AverageItem, Query3RowItem:
 		return true
 	default:
 		return false
