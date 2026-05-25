@@ -13,25 +13,27 @@ import (
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy"
 )
 
-type q4Account struct {
-	Bank    uint32
-	Account string
+type q4Pair struct {
+	SourceBank    uint32
+	SourceAccount string
+	DestBank      uint32
+	DestAccount   string
 }
 
 // Q4Strategy is the terminal sink for the Q4 pipeline. It collects
-// Query4AccountItem messages from all counter_q4 shards, waits for N_COUNTERS
-// upstream EOFs, then sorts and writes each unique (Bank, Account) pair to
-// DRAIN_OUTPUT_FILE in "bank,account" CSV format.
+// Query4PairItem messages from all counter_q4 shards, waits for N_COUNTERS
+// upstream EOFs, then sorts and writes each unique (source, dest) pair to
+// DRAIN_OUTPUT_FILE in "src_bank,src_acc,dst_bank,dst_acc" CSV format.
 type Q4Strategy struct {
 	cfg         strategy.StrategyConfig
 	mu          sync.Mutex
 	file        *os.File
-	accounts    map[inner.ClientID]map[q4Account]struct{}
+	pairs       map[inner.ClientID]map[q4Pair]struct{}
 	coordinator *eof.JoinerAccumulateCoordinator
 }
 
 func NewQ4() *Q4Strategy {
-	return &Q4Strategy{accounts: map[inner.ClientID]map[q4Account]struct{}{}}
+	return &Q4Strategy{pairs: map[inner.ClientID]map[q4Pair]struct{}{}}
 }
 
 func (s *Q4Strategy) Name() string { return "drain_q4" }
@@ -56,20 +58,25 @@ func (s *Q4Strategy) Init(cfg strategy.StrategyConfig) error {
 }
 
 func (s *Q4Strategy) ProcessMessage(env *inner.Envelope) ([]strategy.OutputMessage, strategy.LocalCounts, error) {
-	if env.Kind != inner.Query4AccountItem {
+	if env.Kind != inner.Query4PairItem {
 		return nil, strategy.LocalCounts{Processed: 1}, nil
 	}
-	acc, err := inner.DeserializeQuery4Account(env.Payload)
+	pair, err := inner.DeserializeQuery4Pair(env.Payload)
 	if err != nil {
-		return nil, strategy.LocalCounts{}, fmt.Errorf("deserialize query4 account: %w", err)
+		return nil, strategy.LocalCounts{}, fmt.Errorf("deserialize query4 pair: %w", err)
 	}
 	s.mu.Lock()
-	m := s.accounts[env.ClientID]
+	m := s.pairs[env.ClientID]
 	if m == nil {
-		m = map[q4Account]struct{}{}
-		s.accounts[env.ClientID] = m
+		m = map[q4Pair]struct{}{}
+		s.pairs[env.ClientID] = m
 	}
-	m[q4Account{Bank: acc.Bank, Account: acc.Account}] = struct{}{}
+	m[q4Pair{
+		SourceBank:    pair.SourceBank,
+		SourceAccount: pair.SourceAccount,
+		DestBank:      pair.DestBank,
+		DestAccount:   pair.DestAccount,
+	}] = struct{}{}
 	s.mu.Unlock()
 	return nil, strategy.LocalCounts{Processed: 1, Matched: 1}, nil
 }
@@ -82,26 +89,32 @@ func (s *Q4Strategy) OnUpstreamEOF(env *inner.Envelope) (strategy.EOFOutcome, er
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	accSet := s.accounts[env.ClientID]
-	delete(s.accounts, env.ClientID)
+	pairSet := s.pairs[env.ClientID]
+	delete(s.pairs, env.ClientID)
 
-	accs := make([]q4Account, 0, len(accSet))
-	for a := range accSet {
-		accs = append(accs, a)
+	pairs := make([]q4Pair, 0, len(pairSet))
+	for p := range pairSet {
+		pairs = append(pairs, p)
 	}
-	sort.Slice(accs, func(i, j int) bool {
-		if accs[i].Bank != accs[j].Bank {
-			return accs[i].Bank < accs[j].Bank
+	sort.Slice(pairs, func(i, j int) bool {
+		if pairs[i].SourceBank != pairs[j].SourceBank {
+			return pairs[i].SourceBank < pairs[j].SourceBank
 		}
-		return accs[i].Account < accs[j].Account
+		if pairs[i].SourceAccount != pairs[j].SourceAccount {
+			return pairs[i].SourceAccount < pairs[j].SourceAccount
+		}
+		if pairs[i].DestBank != pairs[j].DestBank {
+			return pairs[i].DestBank < pairs[j].DestBank
+		}
+		return pairs[i].DestAccount < pairs[j].DestAccount
 	})
 
-	for _, a := range accs {
-		if _, err := fmt.Fprintf(s.file, "%d,%s\n", a.Bank, a.Account); err != nil {
+	for _, p := range pairs {
+		if _, err := fmt.Fprintf(s.file, "%d,%s,%d,%s\n", p.SourceBank, p.SourceAccount, p.DestBank, p.DestAccount); err != nil {
 			return strategy.EOFOutcome{}, err
 		}
 	}
-	if _, err := fmt.Fprintf(s.file, "# EOF client=%s count=%d\n", env.ClientID, len(accs)); err != nil {
+	if _, err := fmt.Fprintf(s.file, "# EOF client=%s count=%d\n", env.ClientID, len(pairs)); err != nil {
 		return strategy.EOFOutcome{}, err
 	}
 	return strategy.EOFOutcome{Action: eof.Action{Kind: eof.ActionNone}}, nil
