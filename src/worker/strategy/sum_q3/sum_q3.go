@@ -1,4 +1,4 @@
-package average_local_q3
+package sum_q3
 
 import (
 	"fmt"
@@ -24,7 +24,7 @@ type clientState struct {
 	partials  map[string]*partialAvg
 }
 
-type AverageLocalQ3 struct {
+type SumQ3 struct {
 	cfg             strategy.StrategyConfig
 	kAggregators    int
 	ringCoordinator *eof.RingCoordinator
@@ -32,18 +32,18 @@ type AverageLocalQ3 struct {
 	rkCache         []string
 }
 
-func New() *AverageLocalQ3 {
-	return &AverageLocalQ3{state: map[inner.ClientID]*clientState{}}
+func New() *SumQ3 {
+	return &SumQ3{state: map[inner.ClientID]*clientState{}}
 }
 
-func (a *AverageLocalQ3) Name() string { return "average_local_q3" }
+func (a *SumQ3) Name() string { return "sum_q3" }
 
-func (a *AverageLocalQ3) Init(cfg strategy.StrategyConfig) error {
+func (a *SumQ3) Init(cfg strategy.StrategyConfig) error {
 	if cfg.OutputCount != 1 {
-		return fmt.Errorf("average_local_q3 expects exactly 1 output, got %d", cfg.OutputCount)
+		return fmt.Errorf("sum_q3 expects exactly 1 output, got %d", cfg.OutputCount)
 	}
 	if cfg.NReplicas > 1 && (cfg.RingQueueIn == "" || cfg.RingQueueOut == "") {
-		return fmt.Errorf("average_local_q3 requires RING_QUEUE_IN/RING_QUEUE_OUT when N_REPLICAS>1")
+		return fmt.Errorf("sum_q3 requires RING_QUEUE_IN/RING_QUEUE_OUT when N_REPLICAS>1")
 	}
 	k, err := env.RequiredInt("K_AGGREGATORS_Q3", true)
 	if err != nil {
@@ -59,9 +59,9 @@ func (a *AverageLocalQ3) Init(cfg strategy.StrategyConfig) error {
 	return nil
 }
 
-func (a *AverageLocalQ3) ProcessMessage(envelope *inner.Envelope) ([]strategy.OutputMessage, strategy.LocalCounts, error) {
+func (a *SumQ3) ProcessMessage(envelope *inner.Envelope) ([]strategy.OutputMessage, strategy.LocalCounts, error) {
 	if envelope.Kind != inner.TransactionMessage {
-		return nil, strategy.LocalCounts{}, fmt.Errorf("average_local_q3 expects TransactionMessage, got kind=%d", envelope.Kind)
+		return nil, strategy.LocalCounts{}, fmt.Errorf("sum_q3 expects TransactionMessage, got kind=%d", envelope.Kind)
 	}
 	tx, err := external.DeserializeTransaction(envelope.Payload)
 	if err != nil {
@@ -81,13 +81,13 @@ func (a *AverageLocalQ3) ProcessMessage(envelope *inner.Envelope) ([]strategy.Ou
 	return nil, strategy.LocalCounts{Processed: 1, Matched: 1}, nil
 }
 
-func (a *AverageLocalQ3) OnUpstreamEOF(envelope *inner.Envelope) (strategy.EOFOutcome, error) {
+func (a *SumQ3) OnUpstreamEOF(envelope *inner.Envelope) (strategy.EOFOutcome, error) {
 	st := a.stateFor(envelope.ClientID)
 	action, _ := a.ringCoordinator.OnUpstreamEOF(envelope.ClientID, envelope.Total, st.processed, 0)
 	return a.outcomeFor(envelope.ClientID, action), nil
 }
 
-func (a *AverageLocalQ3) OnRingToken(token *eof.Token) (strategy.EOFOutcome, error) {
+func (a *SumQ3) OnRingToken(token *eof.Token) (strategy.EOFOutcome, error) {
 	if a.ringCoordinator == nil {
 		return strategy.EOFOutcome{Action: eof.Action{Kind: eof.ActionNone}}, nil
 	}
@@ -96,7 +96,7 @@ func (a *AverageLocalQ3) OnRingToken(token *eof.Token) (strategy.EOFOutcome, err
 	return a.outcomeFor(token.ClientID, action), nil
 }
 
-func (a *AverageLocalQ3) outcomeFor(clientID inner.ClientID, action eof.Action) strategy.EOFOutcome {
+func (a *SumQ3) outcomeFor(clientID inner.ClientID, action eof.Action) strategy.EOFOutcome {
 	outcome := strategy.EOFOutcome{Action: action}
 	switch action.Kind {
 	case eof.ActionEmitEOFs, eof.ActionEmitEOFsAndForwardToken:
@@ -132,11 +132,11 @@ func (a *AverageLocalQ3) outcomeFor(clientID inner.ClientID, action eof.Action) 
 	return outcome
 }
 
-func (a *AverageLocalQ3) routingKeyFor(clientID inner.ClientID) string {
+func (a *SumQ3) routingKeyFor(clientID inner.ClientID) string {
 	return a.rkCache[hashing.Shard(string(clientID), a.kAggregators)]
 }
 
-func (a *AverageLocalQ3) stateFor(clientID inner.ClientID) *clientState {
+func (a *SumQ3) stateFor(clientID inner.ClientID) *clientState {
 	st, ok := a.state[clientID]
 	if !ok {
 		st = &clientState{partials: map[string]*partialAvg{}}

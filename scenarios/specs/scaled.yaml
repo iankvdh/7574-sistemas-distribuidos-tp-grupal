@@ -37,7 +37,7 @@ workers:
     outputs:
       - queue:period1_usd_for_drain
       - sharded_queues:joiner_usd_input:4
-      - queue:q3_p1_usd                              # NEW: P1 USD para average_local_q3
+      - queue:q3_p1_usd                              # NEW: P1 USD para sum_q3
 
   - name: filter_period2
     strategy: filter_period2
@@ -190,8 +190,8 @@ workers:
       EXPECTED_PARTIAL_EOFS: "8" # = N_REPLICAS de max_q2 + N_REPLICAS de bank_aggregator
       N_FINAL_JOINERS: "2"
 
-  - name: average_local_q3
-    strategy: average_local_q3
+  - name: sum_q3
+    strategy: sum_q3
     replicas: 4
     input: queue:q3_p1_usd
     outputs:
@@ -199,14 +199,14 @@ workers:
     env:
       K_AGGREGATORS_Q3: "1"
 
-  - name: average_global_q3
-    strategy: average_global_q3
+  - name: aggregator_q3
+    strategy: aggregator_q3
     replicas: 1
     input: direct_exchange:q3_avg_global_input:0
     outputs:
       - queue:q3_filter_input
     env:
-      EXPECTED_PARTIAL_EOFS: "4"   # = N_REPLICAS de average_local_q3
+      EXPECTED_PARTIAL_EOFS: "4"   # = N_REPLICAS de sum_q3
       N_FILTER_Q3: "1"             # = N_REPLICAS de filter_q3
 
   - name: filter_q3
@@ -216,7 +216,7 @@ workers:
     outputs:
       - direct_exchange:results
     env:
-      EXPECTED_PARTIAL_EOFS: "2"   # 1 de average_global_q3 + 1 de filter_currency_usd_p2 (ring initiator)
+      EXPECTED_PARTIAL_EOFS: "2"   # 1 de aggregator_q3 + 1 de filter_currency_usd_p2 (ring initiator)
       N_FINAL_JOINERS: "2"
       BUFFER_DIR: "/tmp"
 

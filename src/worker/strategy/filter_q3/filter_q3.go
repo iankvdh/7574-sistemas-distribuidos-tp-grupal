@@ -1,5 +1,5 @@
 // Package filter_q3 implementa la última etapa de Q3: recibe el promedio
-// global por payment_format (de average_global_q3) y el stream de
+// global por payment_format (de aggregator_q3) y el stream de
 // transacciones Period 2 USD (de filter_currency_usd_p2). Emite las
 // transacciones cuyo monto es estrictamente menor a 1/100 del promedio de
 // Period 1 USD para el mismo payment_format.

@@ -5,8 +5,7 @@ import (
 
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy"
 	aggregator_q2 "github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/aggregator_q2"
-	average_global_q3 "github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/average_global_q3"
-	average_local_q3 "github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/average_local_q3"
+	aggregator_q3 "github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/aggregator_q3"
 	bank_aggregator "github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/bank_aggregator"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/counter"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/drain"
@@ -19,6 +18,7 @@ import (
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/pathfinder"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/sharder"
 	sharder_q1 "github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/sharder_q1"
+	sum_q3 "github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/sum_q3"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/suspicious_filter"
 )
 
@@ -78,10 +78,10 @@ func Build(name string) (strategy.Strategy, error) {
 		return bank_aggregator.New(), nil
 	case "aggregator_q2":
 		return aggregator_q2.New(), nil
-	case "average_local_q3":
-		return average_local_q3.New(), nil
-	case "average_global_q3":
-		return average_global_q3.New(), nil
+	case "sum_q3":
+		return sum_q3.New(), nil
+	case "aggregator_q3":
+		return aggregator_q3.New(), nil
 	case "filter_q3":
 		return filter_q3.New(), nil
 	default:

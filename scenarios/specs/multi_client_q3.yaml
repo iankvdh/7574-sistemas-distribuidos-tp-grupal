@@ -2,8 +2,8 @@
 #
 # Corre filter_period1 → filter_currency_usd_p1 (P1 USD) y
 # filter_period2 → filter_currency_usd_p2 (P2 USD) en paralelo. Conecta esos
-# streams a la rama Q3: average_local_q3 (parciales por payment_format) →
-# average_global_q3 (promedio global broadcast) → filter_q3 (compara cada P2
+# streams a la rama Q3: sum_q3 (parciales por payment_format) →
+# aggregator_q3 (promedio global broadcast) → filter_q3 (compara cada P2
 # USD contra avg/100) → final_joiner.
 #
 # El resto de las queries (Q1, Q2, Q4, Q5) NO tiene nodo consumiendo: los
@@ -56,8 +56,8 @@ workers:
     outputs:
       - queue:q3_filter_input
 
-  - name: average_local_q3
-    strategy: average_local_q3
+  - name: sum_q3
+    strategy: sum_q3
     replicas: 3
     input: queue:q3_p1_usd
     outputs:
@@ -65,14 +65,14 @@ workers:
     env:
       K_AGGREGATORS_Q3: "1"
 
-  - name: average_global_q3
-    strategy: average_global_q3
+  - name: aggregator_q3
+    strategy: aggregator_q3
     replicas: 1
     input: direct_exchange:q3_avg_global_input:0
     outputs:
       - queue:q3_filter_input
     env:
-      EXPECTED_PARTIAL_EOFS: "3"   # = N_REPLICAS de average_local_q3
+      EXPECTED_PARTIAL_EOFS: "3"   # = N_REPLICAS de sum_q3
       N_FILTER_Q3: "1"
 
   - name: filter_q3
@@ -82,7 +82,7 @@ workers:
     outputs:
       - direct_exchange:results
     env:
-      EXPECTED_PARTIAL_EOFS: "2"   # 1 de average_global_q3 + 1 de filter_currency_usd_p2
+      EXPECTED_PARTIAL_EOFS: "2"   # 1 de aggregator_q3 + 1 de filter_currency_usd_p2
       N_FINAL_JOINERS: "2"
       BUFFER_DIR: "/tmp"
 
