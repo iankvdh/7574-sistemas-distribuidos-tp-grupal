@@ -20,15 +20,14 @@ type accountKey struct {
 }
 
 type clientState struct {
-	edges     map[accountKey]map[accountKey]struct{}
-	processed uint64
+	edges map[accountKey]map[accountKey]struct{} // source → set of dests
 }
 
 type ScatterAgg struct {
 	cfg             strategy.StrategyConfig
 	kPathFinders    int
 	minScatterDests int
-	coordinator     *eof.RingCoordinator
+	coordinator     *eof.JoinerAccumulateCoordinator
 	state           map[inner.ClientID]*clientState
 	rkCache         []string
 }
@@ -40,9 +39,6 @@ func New() *ScatterAgg {
 func (s *ScatterAgg) Name() string { return "scatter_agg_q4" }
 
 func (s *ScatterAgg) Init(cfg strategy.StrategyConfig) error {
-	if cfg.NReplicas > 1 && (cfg.RingQueueIn == "" || cfg.RingQueueOut == "") {
-		return fmt.Errorf("scatter_agg_q4 requires RING_QUEUE_IN/RING_QUEUE_OUT when N_REPLICAS>1")
-	}
 	if cfg.OutputCount != 1 {
 		return fmt.Errorf("scatter_agg_q4 expects exactly 1 output, got %d", cfg.OutputCount)
 	}
@@ -57,7 +53,7 @@ func (s *ScatterAgg) Init(cfg strategy.StrategyConfig) error {
 	s.cfg = cfg
 	s.kPathFinders = k
 	s.minScatterDests = minDest
-	s.coordinator = eof.NewBroadcastRingCoordinator(cfg.ReplicaID, cfg.NReplicas)
+	s.coordinator = eof.NewJoinerAccumulateCoordinator(1, 1)
 
 	s.rkCache = make([]string, k)
 	for i := 0; i < k; i++ {
@@ -79,7 +75,6 @@ func (s *ScatterAgg) ProcessMessage(env *inner.Envelope) ([]strategy.OutputMessa
 	dest := accountKey{Bank: tx.ToBank, Account: tx.ToAccount}
 
 	st := s.stateFor(env.ClientID)
-	st.processed++
 	if st.edges[source] == nil {
 		st.edges[source] = map[accountKey]struct{}{}
 	}
@@ -89,26 +84,22 @@ func (s *ScatterAgg) ProcessMessage(env *inner.Envelope) ([]strategy.OutputMessa
 }
 
 func (s *ScatterAgg) OnUpstreamEOF(env *inner.Envelope) (strategy.EOFOutcome, error) {
-	st := s.stateFor(env.ClientID)
-	action, _ := s.coordinator.OnUpstreamEOF(env.ClientID, env.Total, st.processed, 0)
-	return s.outcomeFor(env.ClientID, action, st), nil
-}
-
-func (s *ScatterAgg) OnRingToken(token *eof.Token) (strategy.EOFOutcome, error) {
-	st := s.stateFor(token.ClientID)
-	action, _ := s.coordinator.OnRingToken(token, st.processed, 0)
-	return s.outcomeFor(token.ClientID, action, st), nil
-}
-
-func (s *ScatterAgg) outcomeFor(clientID inner.ClientID, action eof.Action, st *clientState) strategy.EOFOutcome {
-	outcome := strategy.EOFOutcome{Action: action}
-	switch action.Kind {
-	case eof.ActionEmitEOFs, eof.ActionEmitEOFsAndForwardToken:
-		outcome.Outputs = s.buildOutputs(clientID, st)
-		outcome.EOFs = s.buildEOFEmits()
-		delete(s.state, clientID)
+	action := s.coordinator.OnUpstreamEOF(env.ClientID, env.Total)
+	if action.Kind != eof.ActionEmitEOFs {
+		return strategy.EOFOutcome{Action: eof.Action{Kind: eof.ActionNone}}, nil
 	}
-	return outcome
+	st := s.stateFor(env.ClientID)
+	outputs := s.buildOutputs(env.ClientID, st)
+	delete(s.state, env.ClientID)
+	return strategy.EOFOutcome{
+		Action:  eof.Action{Kind: eof.ActionEmitEOFs},
+		EOFs:    s.buildEOFEmits(),
+		Outputs: outputs,
+	}, nil
+}
+
+func (s *ScatterAgg) OnRingToken(_ *eof.Token) (strategy.EOFOutcome, error) {
+	return strategy.EOFOutcome{Action: eof.Action{Kind: eof.ActionNone}}, nil
 }
 
 func (s *ScatterAgg) buildOutputs(clientID inner.ClientID, st *clientState) []strategy.OutputMessage {
