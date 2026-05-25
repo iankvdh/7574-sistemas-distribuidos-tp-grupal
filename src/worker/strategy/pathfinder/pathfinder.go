@@ -28,12 +28,12 @@ type clientState struct {
 }
 
 type PathFinder struct {
-	cfg         strategy.StrategyConfig
-	kCounters   int
-	nSharders   int
-	coordinator *eof.JoinerAccumulateCoordinator
-	state       map[inner.ClientID]*clientState
-	rkCache     []string
+	cfg                strategy.StrategyConfig
+	kCounters          int
+	nSuspiciousFilters int
+	coordinator        *eof.JoinerAccumulateCoordinator
+	state              map[inner.ClientID]*clientState
+	rkCache            []string
 }
 
 func New() *PathFinder {
@@ -50,13 +50,13 @@ func (p *PathFinder) Init(cfg strategy.StrategyConfig) error {
 	if err != nil {
 		return err
 	}
-	n, err := env.RequiredInt("N_SHARDERS", true)
+	n, err := env.RequiredInt("N_SUSPICIOUS_FILTERS", true)
 	if err != nil {
 		return err
 	}
 	p.cfg = cfg
 	p.kCounters = k
-	p.nSharders = n
+	p.nSuspiciousFilters = n
 	p.coordinator = eof.NewJoinerAccumulateCoordinator(n, 1)
 
 	p.rkCache = make([]string, k)
