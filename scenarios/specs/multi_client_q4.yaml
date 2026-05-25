@@ -1,7 +1,7 @@
 # Spec de test enfocado SOLO en Q4.
 #
 # Corre la pipeline mínima necesaria para Q4 — filter_period1 + filter_currency_usd_p1
-# producen `queue:period1_usd_for_drain`, que es la entrada de sharder_q4 →
+# producen `queue:period1_usd_transactions`, que es la entrada de sharder_q4 →
 # suspicious_account_filter → path_finder_q4 → counter_q4 → final_joiner_q4. El resto
 # de las queries (Q1, Q2, Q3, Q5) NO tiene ningún nodo consumiendo: los datos que les
 # llegarían se acumulan en sus colas previas. El cliente recibirá las filas + EOF de
@@ -38,12 +38,12 @@ workers:
     input: queue:period1_for_currency_usd_p1
     match_count: 1
     outputs:
-      - queue:period1_usd_for_drain
+      - queue:period1_usd_transactions
 
   - name: sharder_q4
     strategy: sharder_q4
     replicas: 3
-    input: queue:period1_usd_for_drain
+    input: queue:period1_usd_transactions
     outputs:
       - direct_exchange:q4_account_shards
     env:

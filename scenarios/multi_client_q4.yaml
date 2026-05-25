@@ -174,7 +174,7 @@ services:
       - N_REPLICAS=3
       - INPUT=queue:period1_for_currency_usd_p1
       - OUTPUTS_MATCH_COUNT=1
-      - OUTPUT_0=queue:period1_usd_for_drain
+      - OUTPUT_0=queue:period1_usd_transactions
       - LOG_LEVEL=info
       - RING_QUEUE_IN=ring_filter_currency_usd_p1_0
       - RING_QUEUE_OUT=ring_filter_currency_usd_p1_1
@@ -189,7 +189,7 @@ services:
       - N_REPLICAS=3
       - INPUT=queue:period1_for_currency_usd_p1
       - OUTPUTS_MATCH_COUNT=1
-      - OUTPUT_0=queue:period1_usd_for_drain
+      - OUTPUT_0=queue:period1_usd_transactions
       - LOG_LEVEL=info
       - RING_QUEUE_IN=ring_filter_currency_usd_p1_1
       - RING_QUEUE_OUT=ring_filter_currency_usd_p1_2
@@ -204,7 +204,7 @@ services:
       - N_REPLICAS=3
       - INPUT=queue:period1_for_currency_usd_p1
       - OUTPUTS_MATCH_COUNT=1
-      - OUTPUT_0=queue:period1_usd_for_drain
+      - OUTPUT_0=queue:period1_usd_transactions
       - LOG_LEVEL=info
       - RING_QUEUE_IN=ring_filter_currency_usd_p1_2
       - RING_QUEUE_OUT=ring_filter_currency_usd_p1_0
@@ -217,7 +217,7 @@ services:
       - STRATEGY=sharder_q4
       - REPLICA_ID=0
       - N_REPLICAS=3
-      - INPUT=queue:period1_usd_for_drain
+      - INPUT=queue:period1_usd_transactions
       - OUTPUTS_MATCH_COUNT=0
       - OUTPUT_0=direct_exchange:q4_account_shards
       - LOG_LEVEL=info
@@ -233,7 +233,7 @@ services:
       - STRATEGY=sharder_q4
       - REPLICA_ID=1
       - N_REPLICAS=3
-      - INPUT=queue:period1_usd_for_drain
+      - INPUT=queue:period1_usd_transactions
       - OUTPUTS_MATCH_COUNT=0
       - OUTPUT_0=direct_exchange:q4_account_shards
       - LOG_LEVEL=info
@@ -249,7 +249,7 @@ services:
       - STRATEGY=sharder_q4
       - REPLICA_ID=2
       - N_REPLICAS=3
-      - INPUT=queue:period1_usd_for_drain
+      - INPUT=queue:period1_usd_transactions
       - OUTPUTS_MATCH_COUNT=0
       - OUTPUT_0=direct_exchange:q4_account_shards
       - LOG_LEVEL=info

@@ -194,8 +194,7 @@ services:
       - REPLICA_ID=0
       - N_REPLICAS=3
       - INPUT=queue:period1_for_wire_ach
-      - OUTPUTS_MATCH_COUNT=1
-      - OUTPUT_0=queue:period1_wire_ach
+      - OUTPUTS_MATCH_COUNT=0
       - LOG_LEVEL=info
       - RING_QUEUE_IN=ring_filter_wire_ach_0
       - RING_QUEUE_OUT=ring_filter_wire_ach_1
@@ -209,8 +208,7 @@ services:
       - REPLICA_ID=1
       - N_REPLICAS=3
       - INPUT=queue:period1_for_wire_ach
-      - OUTPUTS_MATCH_COUNT=1
-      - OUTPUT_0=queue:period1_wire_ach
+      - OUTPUTS_MATCH_COUNT=0
       - LOG_LEVEL=info
       - RING_QUEUE_IN=ring_filter_wire_ach_1
       - RING_QUEUE_OUT=ring_filter_wire_ach_2
@@ -224,8 +222,7 @@ services:
       - REPLICA_ID=2
       - N_REPLICAS=3
       - INPUT=queue:period1_for_wire_ach
-      - OUTPUTS_MATCH_COUNT=1
-      - OUTPUT_0=queue:period1_wire_ach
+      - OUTPUTS_MATCH_COUNT=0
       - LOG_LEVEL=info
       - RING_QUEUE_IN=ring_filter_wire_ach_2
       - RING_QUEUE_OUT=ring_filter_wire_ach_0
@@ -239,9 +236,8 @@ services:
       - REPLICA_ID=0
       - N_REPLICAS=3
       - INPUT=queue:period1_for_currency_usd_p1
-      - OUTPUTS_MATCH_COUNT=2
-      - OUTPUT_0=queue:period1_usd_for_drain
-      - OUTPUT_1=sharded_queues:joiner_usd_input:3
+      - OUTPUTS_MATCH_COUNT=1
+      - OUTPUT_0=sharded_queues:joiner_usd_input:3
       - LOG_LEVEL=info
       - RING_QUEUE_IN=ring_filter_currency_usd_p1_0
       - RING_QUEUE_OUT=ring_filter_currency_usd_p1_1
@@ -255,9 +251,8 @@ services:
       - REPLICA_ID=1
       - N_REPLICAS=3
       - INPUT=queue:period1_for_currency_usd_p1
-      - OUTPUTS_MATCH_COUNT=2
-      - OUTPUT_0=queue:period1_usd_for_drain
-      - OUTPUT_1=sharded_queues:joiner_usd_input:3
+      - OUTPUTS_MATCH_COUNT=1
+      - OUTPUT_0=sharded_queues:joiner_usd_input:3
       - LOG_LEVEL=info
       - RING_QUEUE_IN=ring_filter_currency_usd_p1_1
       - RING_QUEUE_OUT=ring_filter_currency_usd_p1_2
@@ -271,9 +266,8 @@ services:
       - REPLICA_ID=2
       - N_REPLICAS=3
       - INPUT=queue:period1_for_currency_usd_p1
-      - OUTPUTS_MATCH_COUNT=2
-      - OUTPUT_0=queue:period1_usd_for_drain
-      - OUTPUT_1=sharded_queues:joiner_usd_input:3
+      - OUTPUTS_MATCH_COUNT=1
+      - OUTPUT_0=sharded_queues:joiner_usd_input:3
       - LOG_LEVEL=info
       - RING_QUEUE_IN=ring_filter_currency_usd_p1_2
       - RING_QUEUE_OUT=ring_filter_currency_usd_p1_0
@@ -335,9 +329,8 @@ services:
       - REPLICA_ID=0
       - N_REPLICAS=3
       - INPUT=queue:period2_transactions
-      - OUTPUTS_MATCH_COUNT=2
-      - OUTPUT_0=queue:period2_usd_for_drain
-      - OUTPUT_1=sharded_queues:joiner_usd_input:3
+      - OUTPUTS_MATCH_COUNT=1
+      - OUTPUT_0=sharded_queues:joiner_usd_input:3
       - LOG_LEVEL=info
       - RING_QUEUE_IN=ring_filter_currency_usd_p2_0
       - RING_QUEUE_OUT=ring_filter_currency_usd_p2_1
@@ -351,9 +344,8 @@ services:
       - REPLICA_ID=1
       - N_REPLICAS=3
       - INPUT=queue:period2_transactions
-      - OUTPUTS_MATCH_COUNT=2
-      - OUTPUT_0=queue:period2_usd_for_drain
-      - OUTPUT_1=sharded_queues:joiner_usd_input:3
+      - OUTPUTS_MATCH_COUNT=1
+      - OUTPUT_0=sharded_queues:joiner_usd_input:3
       - LOG_LEVEL=info
       - RING_QUEUE_IN=ring_filter_currency_usd_p2_1
       - RING_QUEUE_OUT=ring_filter_currency_usd_p2_2
@@ -367,9 +359,8 @@ services:
       - REPLICA_ID=2
       - N_REPLICAS=3
       - INPUT=queue:period2_transactions
-      - OUTPUTS_MATCH_COUNT=2
-      - OUTPUT_0=queue:period2_usd_for_drain
-      - OUTPUT_1=sharded_queues:joiner_usd_input:3
+      - OUTPUTS_MATCH_COUNT=1
+      - OUTPUT_0=sharded_queues:joiner_usd_input:3
       - LOG_LEVEL=info
       - RING_QUEUE_IN=ring_filter_currency_usd_p2_2
       - RING_QUEUE_OUT=ring_filter_currency_usd_p2_0
@@ -430,7 +421,6 @@ services:
       - INPUT=queue:joiner_usd_input_0
       - OUTPUTS_MATCH_COUNT=0
       - OUTPUT_0=queue:usd_for_amount_lt_50
-      - OUTPUT_1=queue:usd_for_drain
       - LOG_LEVEL=info
       - RING_QUEUE_IN=ring_joiner_usd_0
       - RING_QUEUE_OUT=ring_joiner_usd_1
@@ -447,7 +437,6 @@ services:
       - INPUT=queue:joiner_usd_input_1
       - OUTPUTS_MATCH_COUNT=0
       - OUTPUT_0=queue:usd_for_amount_lt_50
-      - OUTPUT_1=queue:usd_for_drain
       - LOG_LEVEL=info
       - RING_QUEUE_IN=ring_joiner_usd_1
       - RING_QUEUE_OUT=ring_joiner_usd_2
@@ -464,7 +453,6 @@ services:
       - INPUT=queue:joiner_usd_input_2
       - OUTPUTS_MATCH_COUNT=0
       - OUTPUT_0=queue:usd_for_amount_lt_50
-      - OUTPUT_1=queue:usd_for_drain
       - LOG_LEVEL=info
       - RING_QUEUE_IN=ring_joiner_usd_2
       - RING_QUEUE_OUT=ring_joiner_usd_0
