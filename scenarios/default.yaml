@@ -23,6 +23,9 @@ services:
       max_q2: { condition: service_started }
       bank_aggregator: { condition: service_started }
       aggregator_q2: { condition: service_started }
+      sum_q3: { condition: service_started }
+      aggregator_q3: { condition: service_started }
+      filter_q3: { condition: service_started }
       final_joiner: { condition: service_started }
     env_file:
       - .env
@@ -37,7 +40,7 @@ services:
       - BACKOFF_BASE_MS=200
       - BACKOFF_MAX_MS=3000
       - RESULTS_DIR=/results
-      - EXPECTED_QUERY_EOFS=3
+      - EXPECTED_QUERY_EOFS=4
       - LOG_LEVEL=info
     volumes:
       - ./datasets:/datasets
@@ -54,7 +57,7 @@ services:
       - GATEWAY_ID=1
       - SERVER_HOST=0.0.0.0
       - SERVER_PORT=5678
-      - EXPECTED_QUERY_EOFS=3
+      - EXPECTED_QUERY_EOFS=4
       - LOG_LEVEL=info
   filter_period1:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
@@ -93,9 +96,10 @@ services:
       - REPLICA_ID=0
       - N_REPLICAS=1
       - INPUT=direct_exchange:period1_transactions
-      - OUTPUTS_MATCH_COUNT=2
+      - OUTPUTS_MATCH_COUNT=3
       - OUTPUT_0=queue:period1_usd_for_drain
       - OUTPUT_1=sharded_queues:joiner_usd_input:1
+      - OUTPUT_2=queue:q3_p1_usd                              # NEW: P1 USD para sum_q3
       - LOG_LEVEL=info
   filter_period2:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
@@ -121,9 +125,10 @@ services:
       - REPLICA_ID=0
       - N_REPLICAS=1
       - INPUT=queue:period2_transactions
-      - OUTPUTS_MATCH_COUNT=2
+      - OUTPUTS_MATCH_COUNT=3
       - OUTPUT_0=direct_exchange:period2_usd_direct_exchange
       - OUTPUT_1=sharded_queues:joiner_usd_input:1
+      - OUTPUT_2=queue:q3_p2_for_filter                       # NEW: P2 USD para filter_q3 (competing consumers)
       - LOG_LEVEL=info
   filter_currency_usd_other_periods:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
@@ -329,6 +334,52 @@ services:
       - LOG_LEVEL=info
       - EXPECTED_PARTIAL_EOFS=2
       - N_FINAL_JOINERS=1
+  sum_q3:
+    build: { context: ./src/, dockerfile: worker/Dockerfile }
+    depends_on: { rabbitmq: { condition: service_healthy } }
+    env_file:
+      - .env
+    environment:
+      - STRATEGY=sum_q3
+      - REPLICA_ID=0
+      - N_REPLICAS=1
+      - INPUT=queue:q3_p1_usd
+      - OUTPUTS_MATCH_COUNT=0
+      - OUTPUT_0=direct_exchange:q3_avg_global_input
+      - LOG_LEVEL=info
+      - K_AGGREGATORS_Q3=1
+  aggregator_q3:
+    build: { context: ./src/, dockerfile: worker/Dockerfile }
+    depends_on: { rabbitmq: { condition: service_healthy } }
+    env_file:
+      - .env
+    environment:
+      - STRATEGY=aggregator_q3
+      - REPLICA_ID=0
+      - N_REPLICAS=1
+      - INPUT=direct_exchange:q3_avg_global_input:0
+      - OUTPUTS_MATCH_COUNT=0
+      - OUTPUT_0=direct_exchange:q3_averages
+      - LOG_LEVEL=info
+      - EXPECTED_PARTIAL_EOFS=1
+      - N_FILTER_Q3=1
+  filter_q3:
+    build: { context: ./src/, dockerfile: worker/Dockerfile }
+    depends_on: { rabbitmq: { condition: service_healthy } }
+    env_file:
+      - .env
+    environment:
+      - STRATEGY=filter_q3
+      - REPLICA_ID=0
+      - N_REPLICAS=1
+      - INPUT_0=queue:q3_p2_for_filter
+      - INPUT_1=direct_exchange:q3_averages:0
+      - OUTPUTS_MATCH_COUNT=0
+      - OUTPUT_0=direct_exchange:results
+      - LOG_LEVEL=info
+      - AMOUNT_THRESHOLD_PCT=0.01
+      - BUFFER_DIR=/tmp
+      - N_FINAL_JOINERS=1
   final_joiner:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
     depends_on: { rabbitmq: { condition: service_healthy } }
@@ -344,6 +395,7 @@ services:
       - LOG_LEVEL=info
       - EXPECTED_EOFS_Q1=1
       - EXPECTED_EOFS_Q2=1
+      - EXPECTED_EOFS_Q3=1
       - EXPECTED_EOFS_Q4=1
   rabbitmq:
     build: { context: ./src/rabbitmq, dockerfile: Dockerfile }

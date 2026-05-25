@@ -5,10 +5,12 @@ import (
 
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy"
 	aggregator_q2 "github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/aggregator_q2"
+	aggregator_q3 "github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/aggregator_q3"
 	bank_aggregator "github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/bank_aggregator"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/counter"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/drain"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/filter"
+	filter_q3 "github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/filter_q3"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/finaljoiner"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/joiner"
 	max_q2 "github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/max_q2"
@@ -16,6 +18,7 @@ import (
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/pathfinder"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/sharder"
 	sharder_q1 "github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/sharder_q1"
+	sum_q3 "github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/sum_q3"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/suspicious_filter"
 )
 
@@ -28,9 +31,7 @@ func Build(name string) (strategy.Strategy, error) {
 	case "joiner_usd":
 		return joiner.NewEOFJoiner("joiner_usd"), nil
 	case "filter_wire_ach":
-		return filter.New("filter_wire_ach", filter.IsWireOrACH).
-			WithMatchProjection(filter.WithoutPaymentFormat).
-			WithNoMatchProjection(filter.WithoutPaymentFormat), nil
+		return filter.New("filter_wire_ach", filter.IsWireOrACH), nil
 	case "filter_amount_lt_50":
 		threshold, err := filter.ParseAmountThreshold()
 		if err != nil {
@@ -44,8 +45,7 @@ func Build(name string) (strategy.Strategy, error) {
 			return nil, err
 		}
 		return filter.New("filter_period1", filter.InDateRange(start, end)).
-			WithMatchProjection(filter.WithoutDate).
-			WithNoMatchProjection(filter.WithoutPaymentFormat), nil
+			WithMatchProjection(filter.WithoutDate), nil
 	case "filter_period2":
 		defStart, defEnd := filter.Period2Defaults()
 		start, end, err := filter.ParsePeriodRange("PERIOD2_START", "PERIOD2_END", defStart, defEnd)
@@ -78,6 +78,12 @@ func Build(name string) (strategy.Strategy, error) {
 		return bank_aggregator.New(), nil
 	case "aggregator_q2":
 		return aggregator_q2.New(), nil
+	case "sum_q3":
+		return sum_q3.New(), nil
+	case "aggregator_q3":
+		return aggregator_q3.New(), nil
+	case "filter_q3":
+		return filter_q3.New(), nil
 	default:
 		return nil, fmt.Errorf("unknown STRATEGY: %s", name)
 	}

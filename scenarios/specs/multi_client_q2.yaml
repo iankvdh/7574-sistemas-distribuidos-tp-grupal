@@ -110,4 +110,4 @@ workers:
       - final_queue:final_1
       - final_queue:final_2
     env:
-      EXPECTED_EOFS_Q2: "1"      # aggregator_q2 está shardeado por cliente; sólo 1 emite por cliente
+      EXPECTED_EOFS_Q2: "2"      # = K_AGGREGATORS_Q2: todos los shards emiten EOF por cliente
