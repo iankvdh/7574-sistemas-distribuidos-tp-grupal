@@ -28,9 +28,6 @@ workers:
     strategy: filter_wire_ach
     replicas: 3
     input: queue:period1_for_wire_ach
-    match_count: 1
-    outputs:
-      - queue:period1_wire_ach
 
   - name: filter_currency_usd_p1
     strategy: filter_currency_usd_p1
@@ -38,7 +35,7 @@ workers:
     input: queue:period1_for_currency_usd_p1
     match_count: 2
     outputs:
-      - queue:period1_usd_for_drain
+      - queue:period1_usd_transactions
       - sharded_queues:joiner_usd_input:3
 
   - name: filter_period2
@@ -54,9 +51,8 @@ workers:
     strategy: filter_currency_usd_p2
     replicas: 3
     input: queue:period2_transactions
-    match_count: 2
+    match_count: 1
     outputs:
-      - queue:period2_usd_for_drain
       - sharded_queues:joiner_usd_input:3
 
   - name: filter_currency_usd_other_periods
@@ -73,7 +69,6 @@ workers:
     input: queue:joiner_usd_input_{REPLICA_ID}
     outputs:
       - queue:usd_for_amount_lt_50
-      - queue:usd_for_drain
       - queue:q2_input
     env:
       EXPECTED_EOFS: "3"
@@ -95,19 +90,10 @@ workers:
     env:
       N_FINAL_JOINERS: "2"
 
-  - name: drain_period1_wire_ach
-    strategy: drain
-    replicas: 1
-    input: queue:period1_wire_ach
-    env:
-      DRAIN_OUTPUT_FILE: /results/drain_period1_wire_ach.csv
-    volumes:
-      - ./results:/results
-
   - name: sharder_q4
     strategy: sharder_q4
     replicas: 3
-    input: queue:period1_usd_for_drain
+    input: queue:period1_usd_transactions
     outputs:
       - direct_exchange:q4_account_shards
     env:
@@ -144,24 +130,6 @@ workers:
       N_PATH_FINDERS: "3"
       N_FINAL_JOINERS: "2"
       MIN_INTERMEDIATES: "5"
-
-  - name: drain_period2_usd
-    strategy: drain
-    replicas: 1
-    input: queue:period2_usd_for_drain
-    env:
-      DRAIN_OUTPUT_FILE: /results/drain_period2_usd.csv
-    volumes:
-      - ./results:/results
-
-  - name: drain_usd_joined
-    strategy: drain
-    replicas: 1
-    input: queue:usd_for_drain
-    env:
-      DRAIN_OUTPUT_FILE: /results/drain_usd_joined.csv
-    volumes:
-      - ./results:/results
 
   - name: max_q2
     strategy: max_q2

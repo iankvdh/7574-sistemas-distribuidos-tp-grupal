@@ -38,17 +38,13 @@ workers:
     strategy: filter_wire_ach
     replicas: 3
     input: queue:period1_for_wire_ach
-    match_count: 1
-    outputs:
-      - queue:period1_wire_ach
 
   - name: filter_currency_usd_p1
     strategy: filter_currency_usd_p1
     replicas: 3
     input: queue:period1_for_currency_usd_p1
-    match_count: 2
+    match_count: 1
     outputs:
-      - queue:period1_usd_for_drain
       - sharded_queues:joiner_usd_input:3
 
   - name: filter_period2
@@ -64,9 +60,8 @@ workers:
     strategy: filter_currency_usd_p2
     replicas: 3
     input: queue:period2_transactions
-    match_count: 2
+    match_count: 1
     outputs:
-      - queue:period2_usd_for_drain
       - sharded_queues:joiner_usd_input:3
 
   - name: filter_currency_usd_other_periods
@@ -83,7 +78,6 @@ workers:
     input: queue:joiner_usd_input_{REPLICA_ID}
     outputs:
       - queue:usd_for_amount_lt_50
-      - queue:usd_for_drain
     env:
       EXPECTED_EOFS: "3"
 
