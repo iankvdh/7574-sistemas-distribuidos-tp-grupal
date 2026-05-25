@@ -77,14 +77,64 @@ func (p *PathFinder) ProcessMessage(envelope *inner.Envelope) ([]strategy.Output
 
 	source := accountKey{Bank: stx.FromBank, Account: stx.FromAccount}
 	dest := accountKey{Bank: stx.ToBank, Account: stx.ToAccount}
+	st := p.stateFor(envelope.ClientID)
 
-	clientState := p.stateFor(envelope.ClientID)
 	if stx.ShardedBySource {
-		clientState.accountFor(source).outSet[dest] = struct{}{}
-	} else {
-		clientState.accountFor(dest).inSet[source] = struct{}{}
+		// source = M (intermediate), dest = B. Add B to M.outSet.
+		// For each A already in M.inSet emit (A, M, B).
+		accSt := st.accountFor(source)
+		if _, exists := accSt.outSet[dest]; exists {
+			return nil, strategy.LocalCounts{Processed: 1}, nil
+		}
+		accSt.outSet[dest] = struct{}{}
+		var outputs []strategy.OutputMessage
+		for inAcc := range accSt.inSet {
+			if inAcc == dest {
+				continue
+			}
+			outputs = p.appendTriple(outputs, envelope.ClientID, inAcc, source, dest)
+		}
+		return outputs, strategy.LocalCounts{Processed: 1}, nil
 	}
-	return nil, strategy.LocalCounts{Processed: 1}, nil
+
+	// dest = M (intermediate), source = A. Add A to M.inSet.
+	// For each B already in M.outSet emit (A, M, B).
+	accSt := st.accountFor(dest)
+	if _, exists := accSt.inSet[source]; exists {
+		return nil, strategy.LocalCounts{Processed: 1}, nil
+	}
+	accSt.inSet[source] = struct{}{}
+	var outputs []strategy.OutputMessage
+	for outAcc := range accSt.outSet {
+		if source == outAcc {
+			continue
+		}
+		outputs = p.appendTriple(outputs, envelope.ClientID, source, dest, outAcc)
+	}
+	return outputs, strategy.LocalCounts{Processed: 1}, nil
+}
+
+func (p *PathFinder) appendTriple(outputs []strategy.OutputMessage, clientID inner.ClientID, src, mid, dst accountKey) []strategy.OutputMessage {
+	body, err := inner.SerializeSuspiciousPath(&inner.SuspiciousPath{
+		SourceBank:          src.Bank,
+		SourceAccount:       src.Account,
+		IntermediateBank:    mid.Bank,
+		IntermediateAccount: mid.Account,
+		DestBank:            dst.Bank,
+		DestAccount:         dst.Account,
+	})
+	if err != nil {
+		return outputs
+	}
+	shard := hashing.Shard(pairKey(src.Bank, src.Account, dst.Bank, dst.Account), p.kCounters)
+	return append(outputs, strategy.OutputMessage{
+		OutputIndices: []int{0},
+		Body:          body,
+		ClientID:      clientID,
+		RoutingKey:    p.rkCache[shard],
+		BatchItemKind: inner.SuspiciousPathMessage,
+		BatchQueryID:  queryID,
+	})
 }
 
 func (p *PathFinder) OnUpstreamEOF(envelope *inner.Envelope) (strategy.EOFOutcome, error) {
@@ -92,51 +142,11 @@ func (p *PathFinder) OnUpstreamEOF(envelope *inner.Envelope) (strategy.EOFOutcom
 	if action.Kind != eof.ActionEmitEOFs {
 		return strategy.EOFOutcome{Action: action}, nil
 	}
-	st := p.stateFor(envelope.ClientID)
-	outputs := p.buildScatterPaths(envelope.ClientID, st)
 	delete(p.state, envelope.ClientID)
 	return strategy.EOFOutcome{
-		Action:  eof.Action{Kind: eof.ActionEmitEOFs},
-		EOFs:    p.buildEOFEmits(),
-		Outputs: outputs,
+		Action: eof.Action{Kind: eof.ActionEmitEOFs},
+		EOFs:   p.buildEOFEmits(),
 	}, nil
-}
-
-func (p *PathFinder) buildScatterPaths(clientID inner.ClientID, st *clientState) []strategy.OutputMessage {
-	var outputs []strategy.OutputMessage
-	for intermediate, acc := range st.accounts {
-		if len(acc.inSet) == 0 || len(acc.outSet) == 0 {
-			continue
-		}
-		for source := range acc.inSet {
-			for dest := range acc.outSet {
-				if source == dest {
-					continue
-				}
-				body, err := inner.SerializeSuspiciousPath(&inner.SuspiciousPath{
-					SourceBank:          source.Bank,
-					SourceAccount:       source.Account,
-					IntermediateBank:    intermediate.Bank,
-					IntermediateAccount: intermediate.Account,
-					DestBank:            dest.Bank,
-					DestAccount:         dest.Account,
-				})
-				if err != nil {
-					continue
-				}
-				shard := hashing.Shard(pairKey(source.Bank, source.Account, dest.Bank, dest.Account), p.kCounters)
-				outputs = append(outputs, strategy.OutputMessage{
-					OutputIndices: []int{0},
-					Body:          body,
-					ClientID:      clientID,
-					RoutingKey:    p.rkCache[shard],
-					BatchItemKind: inner.SuspiciousPathMessage,
-					BatchQueryID:  queryID,
-				})
-			}
-		}
-	}
-	return outputs
 }
 
 func (p *PathFinder) OnRingToken(_ *eof.Token) (strategy.EOFOutcome, error) {

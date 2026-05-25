@@ -30,7 +30,7 @@ func itoa(n int) string {
 	return string(digits)
 }
 
-func feed(t *testing.T, pf *PathFinder, bySource bool, fromBank uint32, fromAcc string, toBank uint32, toAcc string) {
+func feed(t *testing.T, pf *PathFinder, bySource bool, fromBank uint32, fromAcc string, toBank uint32, toAcc string) []strategy.OutputMessage {
 	t.Helper()
 	body, err := inner.SerializeShardedTx(&inner.ShardedTx{
 		FromBank: fromBank, FromAccount: fromAcc,
@@ -48,9 +48,7 @@ func feed(t *testing.T, pf *PathFinder, bySource bool, fromBank uint32, fromAcc 
 	if err != nil {
 		t.Fatalf("ProcessMessage: %v", err)
 	}
-	if len(out) != 0 {
-		t.Fatalf("ProcessMessage must never emit online, got %d outputs", len(out))
-	}
+	return out
 }
 
 func triggerEOF(t *testing.T, pf *PathFinder, nSharders int) strategy.EOFOutcome {
@@ -84,50 +82,60 @@ func pathsIn(t *testing.T, outputs []strategy.OutputMessage) map[string]struct{}
 	return seen
 }
 
-// TestPathFinderEmitsTripleForNonEmptyInAndOut verifies that only intermediates
-// with both inSet ≠ ∅ AND outSet ≠ ∅ produce output triples.
-func TestPathFinderEmitsTripleForNonEmptyInAndOut(t *testing.T) {
+// TestPathFinderEmitsTripleOnline verifies that triples are emitted during
+// ProcessMessage, not held until EOF.
+func TestPathFinderEmitsTripleOnline(t *testing.T) {
 	pf := newWithKN(t, 1, 1)
 
-	// M: in={A}, out={B} → qualifies, should emit triple (A, M, B)
-	feed(t, pf, false, 1, "A", 9, "M") // A→M (byDest: M.inSet.add(A))
-	feed(t, pf, true, 9, "M", 2, "B")  // M→B (bySource: M.outSet.add(B))
-
-	// N: in={}, out={C} → NO inSet, must not emit
-	feed(t, pf, true, 5, "N", 6, "C")
-
-	outcome := triggerEOF(t, pf, 1)
-
-	if len(outcome.Outputs) != 1 {
-		t.Fatalf("expected 1 triple output, got %d", len(outcome.Outputs))
+	// A→M (ByDest): M.inSet={A}, outSet empty → no output yet
+	if out := feed(t, pf, false, 1, "A", 9, "M"); len(out) != 0 {
+		t.Fatalf("ByDest with empty outSet: expected 0 outputs, got %d", len(out))
 	}
-	paths := pathsIn(t, outcome.Outputs)
+	// M→B (BySource): M.outSet={B}, inSet={A} → emit (A,M,B)
+	out := feed(t, pf, true, 9, "M", 2, "B")
+	if len(out) != 1 {
+		t.Fatalf("BySource completing pair: expected 1 output, got %d", len(out))
+	}
+	paths := pathsIn(t, out)
 	if _, ok := paths["A|M|B"]; !ok {
-		t.Fatalf("expected triple A|M|B in outputs, got %v", paths)
+		t.Fatalf("expected triple A|M|B, got %v", paths)
+	}
+
+	// N only has outSet (no ByDest arrives) → must not emit
+	if out := feed(t, pf, true, 5, "N", 6, "C"); len(out) != 0 {
+		t.Fatalf("node with empty inSet must not emit, got %d outputs", len(out))
+	}
+
+	// EOF emits no data, only downstream EOFs
+	outcome := triggerEOF(t, pf, 1)
+	if len(outcome.Outputs) != 0 {
+		t.Fatalf("EOF must not carry data outputs, got %d", len(outcome.Outputs))
 	}
 }
 
-// TestPathFinderCrossProductForQualifyingIntermediate verifies that the cross
-// product inSet × outSet produces one triple per (source, intermediate, dest).
-func TestPathFinderCrossProductForQualifyingIntermediate(t *testing.T) {
+// TestPathFinderCrossProductEmittedOnline verifies the cross-product inSet×outSet
+// is emitted incrementally as each edge arrives.
+func TestPathFinderCrossProductEmittedOnline(t *testing.T) {
 	pf := newWithKN(t, 1, 1)
 
-	// M: in={P,Q}, out={X,Y} → 2×2 = 4 triples
-	feed(t, pf, false, 1, "P", 9, "M") // P→M
-	feed(t, pf, false, 1, "Q", 9, "M") // Q→M
-	feed(t, pf, true, 9, "M", 2, "X")  // M→X
-	feed(t, pf, true, 9, "M", 2, "Y")  // M→Y
-
-	outcome := triggerEOF(t, pf, 1)
-
-	if len(outcome.Outputs) != 4 {
-		t.Fatalf("expected 4 triple outputs (cross-product), got %d", len(outcome.Outputs))
+	// P→M and Q→M (ByDest): build inSet — no output yet
+	if out := feed(t, pf, false, 1, "P", 9, "M"); len(out) != 0 {
+		t.Fatalf("P→M: expected 0, got %d", len(out))
 	}
-	paths := pathsIn(t, outcome.Outputs)
-	for _, want := range []string{"P|M|X", "P|M|Y", "Q|M|X", "Q|M|Y"} {
-		if _, ok := paths[want]; !ok {
-			t.Fatalf("expected triple %s in outputs, got %v", want, paths)
-		}
+	if out := feed(t, pf, false, 1, "Q", 9, "M"); len(out) != 0 {
+		t.Fatalf("Q→M: expected 0, got %d", len(out))
+	}
+
+	// M→X (BySource): cross with inSet={P,Q} → 2 triples
+	out := feed(t, pf, true, 9, "M", 2, "X")
+	if len(out) != 2 {
+		t.Fatalf("M→X: expected 2 triples, got %d", len(out))
+	}
+
+	// M→Y (BySource): cross with inSet={P,Q} → 2 more triples
+	out = feed(t, pf, true, 9, "M", 2, "Y")
+	if len(out) != 2 {
+		t.Fatalf("M→Y: expected 2 triples, got %d", len(out))
 	}
 }
 
@@ -135,19 +143,19 @@ func TestPathFinderCrossProductForQualifyingIntermediate(t *testing.T) {
 func TestPathFinderSkipsWhenSourceEqualsDestination(t *testing.T) {
 	pf := newWithKN(t, 1, 1)
 
-	// M: in={A}, out={A, B} → pair (A,A) skipped, only (A,M,B) emitted
-	feed(t, pf, false, 1, "A", 9, "M") // A→M
-	feed(t, pf, true, 9, "M", 1, "A")  // M→A (same as source)
-	feed(t, pf, true, 9, "M", 2, "B")  // M→B
-
-	outcome := triggerEOF(t, pf, 1)
-
-	if len(outcome.Outputs) != 1 {
-		t.Fatalf("expected 1 triple (A≠B filter), got %d", len(outcome.Outputs))
+	feed(t, pf, false, 1, "A", 9, "M") // A→M: M.inSet={A}
+	// M→A (BySource): dest=A == source=A → skip
+	if out := feed(t, pf, true, 9, "M", 1, "A"); len(out) != 0 {
+		t.Fatalf("M→A where A is source: expected 0 (A==B), got %d", len(out))
 	}
-	paths := pathsIn(t, outcome.Outputs)
+	// M→B (BySource): dest=B ≠ source=A → emit (A,M,B)
+	out := feed(t, pf, true, 9, "M", 2, "B")
+	if len(out) != 1 {
+		t.Fatalf("M→B: expected 1 triple, got %d", len(out))
+	}
+	paths := pathsIn(t, out)
 	if _, ok := paths["A|M|B"]; !ok {
-		t.Fatalf("expected triple A|M|B, got %v", paths)
+		t.Fatalf("expected A|M|B, got %v", paths)
 	}
 }
 
@@ -156,17 +164,20 @@ func TestPathFinderSkipsWhenSourceEqualsDestination(t *testing.T) {
 func TestPathFinderDuplicateEdgesIgnored(t *testing.T) {
 	pf := newWithKN(t, 1, 1)
 
-	// Same edge fed 3 times — outSet deduplicates
+	// A→D three times — only first counts
 	feed(t, pf, true, 9, "A", 2, "D")
 	feed(t, pf, true, 9, "A", 2, "D")
 	feed(t, pf, true, 9, "A", 2, "D")
-	feed(t, pf, false, 1, "B", 9, "A") // B→A
 
-	outcome := triggerEOF(t, pf, 1)
+	// B→A: A.inSet={B}, A.outSet={D} → emit (B,A,D)
+	out := feed(t, pf, false, 1, "B", 9, "A")
+	if len(out) != 1 {
+		t.Fatalf("expected 1 triple (no duplicates), got %d", len(out))
+	}
 
-	// A: in={B}, out={D} → 1 triple (B, A, D)
-	if len(outcome.Outputs) != 1 {
-		t.Fatalf("expected 1 triple (no duplicates), got %d", len(outcome.Outputs))
+	// A→D again: already in outSet → no new triple
+	if out := feed(t, pf, true, 9, "A", 2, "D"); len(out) != 0 {
+		t.Fatalf("duplicate edge: expected 0, got %d", len(out))
 	}
 }
 
@@ -184,10 +195,13 @@ func TestPathFinderEmitsEOFsAcrossAllCounters(t *testing.T) {
 		t.Fatalf("first EOF must not emit downstream, got %d", len(outcome.EOFs))
 	}
 
-	// Second EOF: must emit K_COUNTERS=3 EOFs.
+	// Second EOF: must emit K_COUNTERS=3 EOFs and no data outputs.
 	outcome, err = pf.OnUpstreamEOF(&inner.Envelope{ClientID: "client-x", Total: 0})
 	if err != nil {
 		t.Fatalf("OnUpstreamEOF #2: %v", err)
+	}
+	if len(outcome.Outputs) != 0 {
+		t.Fatalf("EOF must carry no data outputs, got %d", len(outcome.Outputs))
 	}
 	if len(outcome.EOFs) != 3 {
 		t.Fatalf("expected 3 EOFEmits, got %d", len(outcome.EOFs))

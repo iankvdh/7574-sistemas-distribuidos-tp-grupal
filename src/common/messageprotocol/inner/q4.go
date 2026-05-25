@@ -142,59 +142,6 @@ func DeserializeSuspiciousPath(payload []byte) (*SuspiciousPath, error) {
 	}, nil
 }
 
-// Query4Pair representa un par (cuenta origen, cuenta destino) que el Counter
-// emite hacia el exchange `results` cuando se confirma que tiene al menos
-// MIN_INTERMEDIATES cuentas intermedias distintas.
-type Query4Pair struct {
-	SourceBank    uint32
-	SourceAccount string
-	DestBank      uint32
-	DestAccount   string
-}
-
-func SerializeQuery4Pair(p *Query4Pair) ([]byte, error) {
-	src, err := serializer.SerializeShortString(p.SourceAccount)
-	if err != nil {
-		return nil, err
-	}
-	dst, err := serializer.SerializeShortString(p.DestAccount)
-	if err != nil {
-		return nil, err
-	}
-	buf := make([]byte, 0, 8+len(src)+len(dst))
-	buf = append(buf, serializer.SerializeUint32(p.SourceBank)...)
-	buf = append(buf, src...)
-	buf = append(buf, serializer.SerializeUint32(p.DestBank)...)
-	buf = append(buf, dst...)
-	return buf, nil
-}
-
-func DeserializeQuery4Pair(payload []byte) (*Query4Pair, error) {
-	r := bytes.NewReader(payload)
-	srcBank, err := readQ4Uint32(r)
-	if err != nil {
-		return nil, err
-	}
-	srcAcc, err := readQ4ShortString(r)
-	if err != nil {
-		return nil, err
-	}
-	dstBank, err := readQ4Uint32(r)
-	if err != nil {
-		return nil, err
-	}
-	dstAcc, err := readQ4ShortString(r)
-	if err != nil {
-		return nil, err
-	}
-	return &Query4Pair{
-		SourceBank:    srcBank,
-		SourceAccount: srcAcc,
-		DestBank:      dstBank,
-		DestAccount:   dstAcc,
-	}, nil
-}
-
 type Query4Account struct {
 	Bank    uint32
 	Account string

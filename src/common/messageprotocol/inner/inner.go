@@ -45,13 +45,9 @@ const (
 	// SuspiciousPathMessage transporta una terna (cuenta origen, cuenta intermedia,
 	// cuenta destino). Item dentro de un InnerBatch emitido por el Path-Finder.
 	SuspiciousPathMessage
-	// Query4PairItem transporta un par (cuenta origen, cuenta destino) que alcanzó
-	// el umbral de cuentas intermedias. Item dentro de un InnerBatch emitido
-	// por el Counter al exchange `results`.
-	Query4PairItem
 	// Query4AccountItem transporta una cuenta individual (Bank, Account) que
 	// participa en el patrón scatter de Q4. Item dentro de un InnerBatch emitido
-	// por el PathFinder al Counter.
+	// por el Counter al drain.
 	Query4AccountItem
 )
 
@@ -153,7 +149,7 @@ func SerializeRingToken(gatewayID GatewayID, clientID ClientID, tokenJSON []byte
 
 func validInnerBatchItemKind(kind MsgKind) bool {
 	switch kind {
-	case TransactionMessage, AccountMessage, ShardedTxMessage, SuspiciousPathMessage, Query4PairItem, Query4AccountItem:
+	case TransactionMessage, AccountMessage, ShardedTxMessage, SuspiciousPathMessage, Query4AccountItem:
 		return true
 	default:
 		return false
