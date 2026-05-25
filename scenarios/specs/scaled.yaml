@@ -5,6 +5,8 @@
 clients: 2
 gateways: 2
 log_level: info
+# Q1 y Q4 únicas implementadas en la pipeline distribuida.
+expected_query_eofs: 2
 transactions: /datasets/LI-Small_Trans.csv
 accounts: /datasets/LI-Small_accounts.csv
 
@@ -147,7 +149,7 @@ workers:
     volumes:
       - ./results:/results
 
-  - name: final_joiner_q1
+  - name: final_joiner
     strategy: final_joiner
     replicas: 2
     input: direct_exchange:results:{REPLICA_ID}
@@ -155,16 +157,5 @@ workers:
       - final_queue:final_1
       - final_queue:final_2
     env:
-      QUERY_ID: "1"
-      EXPECTED_EOFS: "4"      # = N_REPLICAS de sharder_q1
-
-  - name: final_joiner_q4
-    strategy: final_joiner
-    replicas: 2
-    input: direct_exchange:results:{REPLICA_ID}
-    outputs:
-      - final_queue:final_1
-      - final_queue:final_2
-    env:
-      QUERY_ID: "4"
-      EXPECTED_EOFS: "4"      # = K_COUNTERS (replicas de counter_q4)
+      EXPECTED_EOFS_Q1: "4"      # = N_REPLICAS de sharder_q1
+      EXPECTED_EOFS_Q4: "4"      # = K_COUNTERS (replicas de counter_q4)

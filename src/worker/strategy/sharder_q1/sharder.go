@@ -125,6 +125,7 @@ func (s *Sharder) outcomeFor(clientID inner.ClientID, action eof.Action) strateg
 		outcome.EOFs = []eof.EOFEmit{{
 			OutputIndex: 0,
 			RoutingKey:  s.routingKeyFor(clientID),
+			QueryID:     queryID,
 		}}
 		delete(s.state, clientID)
 	}

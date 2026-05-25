@@ -53,10 +53,8 @@ services:
       counter_q4_3: { condition: service_started }
       drain_period2_usd: { condition: service_started }
       drain_usd_joined: { condition: service_started }
-      final_joiner_q1_0: { condition: service_started }
-      final_joiner_q1_1: { condition: service_started }
-      final_joiner_q4_0: { condition: service_started }
-      final_joiner_q4_1: { condition: service_started }
+      final_joiner_0: { condition: service_started }
+      final_joiner_1: { condition: service_started }
     env_file:
       - .env
     environment:
@@ -70,6 +68,7 @@ services:
       - BACKOFF_BASE_MS=200
       - BACKOFF_MAX_MS=3000
       - RESULTS_DIR=/results
+      - EXPECTED_QUERY_EOFS=2
       - LOG_LEVEL=info
     volumes:
       - ./datasets:/datasets
@@ -128,10 +127,8 @@ services:
       counter_q4_3: { condition: service_started }
       drain_period2_usd: { condition: service_started }
       drain_usd_joined: { condition: service_started }
-      final_joiner_q1_0: { condition: service_started }
-      final_joiner_q1_1: { condition: service_started }
-      final_joiner_q4_0: { condition: service_started }
-      final_joiner_q4_1: { condition: service_started }
+      final_joiner_0: { condition: service_started }
+      final_joiner_1: { condition: service_started }
     env_file:
       - .env
     environment:
@@ -145,6 +142,7 @@ services:
       - BACKOFF_BASE_MS=200
       - BACKOFF_MAX_MS=3000
       - RESULTS_DIR=/results
+      - EXPECTED_QUERY_EOFS=2
       - LOG_LEVEL=info
     volumes:
       - ./datasets:/datasets
@@ -161,6 +159,7 @@ services:
       - GATEWAY_ID=1
       - SERVER_HOST=0.0.0.0
       - SERVER_PORT=5678
+      - EXPECTED_QUERY_EOFS=2
       - LOG_LEVEL=info
   gateway_2:
     build: { context: ./src/, dockerfile: gateway/Dockerfile }
@@ -174,6 +173,7 @@ services:
       - GATEWAY_ID=2
       - SERVER_HOST=0.0.0.0
       - SERVER_PORT=5678
+      - EXPECTED_QUERY_EOFS=2
       - LOG_LEVEL=info
   filter_period1_0:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
@@ -931,7 +931,7 @@ services:
       - DRAIN_OUTPUT_FILE=/results/drain_usd_joined.csv
     volumes:
       - ./results:/results
-  final_joiner_q1_0:
+  final_joiner_0:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
     depends_on: { rabbitmq: { condition: service_healthy } }
     env_file:
@@ -945,9 +945,9 @@ services:
       - OUTPUT_0=final_queue:final_1
       - OUTPUT_1=final_queue:final_2
       - LOG_LEVEL=info
-      - EXPECTED_EOFS=4
-      - QUERY_ID=1
-  final_joiner_q1_1:
+      - EXPECTED_EOFS_Q1=4
+      - EXPECTED_EOFS_Q4=4
+  final_joiner_1:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
     depends_on: { rabbitmq: { condition: service_healthy } }
     env_file:
@@ -961,40 +961,8 @@ services:
       - OUTPUT_0=final_queue:final_1
       - OUTPUT_1=final_queue:final_2
       - LOG_LEVEL=info
-      - EXPECTED_EOFS=4
-      - QUERY_ID=1
-  final_joiner_q4_0:
-    build: { context: ./src/, dockerfile: worker/Dockerfile }
-    depends_on: { rabbitmq: { condition: service_healthy } }
-    env_file:
-      - .env
-    environment:
-      - STRATEGY=final_joiner
-      - REPLICA_ID=0
-      - N_REPLICAS=2
-      - INPUT=direct_exchange:results:0
-      - OUTPUTS_MATCH_COUNT=0
-      - OUTPUT_0=final_queue:final_1
-      - OUTPUT_1=final_queue:final_2
-      - LOG_LEVEL=info
-      - EXPECTED_EOFS=4
-      - QUERY_ID=4
-  final_joiner_q4_1:
-    build: { context: ./src/, dockerfile: worker/Dockerfile }
-    depends_on: { rabbitmq: { condition: service_healthy } }
-    env_file:
-      - .env
-    environment:
-      - STRATEGY=final_joiner
-      - REPLICA_ID=1
-      - N_REPLICAS=2
-      - INPUT=direct_exchange:results:1
-      - OUTPUTS_MATCH_COUNT=0
-      - OUTPUT_0=final_queue:final_1
-      - OUTPUT_1=final_queue:final_2
-      - LOG_LEVEL=info
-      - EXPECTED_EOFS=4
-      - QUERY_ID=4
+      - EXPECTED_EOFS_Q1=4
+      - EXPECTED_EOFS_Q4=4
   rabbitmq:
     build: { context: ./src/rabbitmq, dockerfile: Dockerfile }
     volumes:

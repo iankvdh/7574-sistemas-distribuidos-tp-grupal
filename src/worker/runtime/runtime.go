@@ -527,7 +527,7 @@ func (w *Worker) serializeEOF(target OutputTarget, env *inner.Envelope, e eof.EO
 		items := []inner.QueryResultItem{{QueryID: e.QueryID, Data: "EOF"}}
 		return inner.SerializeFinalQueryResultBatch(env.GatewayID, env.ClientID, items)
 	}
-	return inner.SerializeInternalEOF(env.GatewayID, env.ClientID, e.Total)
+	return inner.SerializeInternalEOF(env.GatewayID, env.ClientID, e.Total, e.QueryID)
 }
 
 func (w *Worker) reenqueueUpstreamEOF(clientID inner.ClientID) error {
