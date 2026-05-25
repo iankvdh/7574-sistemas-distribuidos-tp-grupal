@@ -53,6 +53,16 @@ const (
 	// (cuenta origen, cuenta destino, monto). Item dentro de un InnerBatch
 	// emitido por el Sharder de Q1 al exchange `results`.
 	Query1RowItem
+	// Q2PartialMaxItem transporta un parcial (BankID, FromAccount, MaxAmount)
+	// emitido por una réplica de max_q2 al cierre del ring hacia aggregator_q2.
+	Q2PartialMaxItem
+	// Q2BankNameItem transporta (BankID, BankName) extraído por bank_aggregator
+	// del catálogo de accounts hacia aggregator_q2.
+	Q2BankNameItem
+	// Q2ResultItem transporta el máximo global por banco ya joineado con su
+	// nombre (BankName, FromAccount, MaxAmount). Emitido por aggregator_q2 al
+	// exchange `results` para consumo del final_joiner.
+	Q2ResultItem
 )
 
 var (
@@ -156,7 +166,7 @@ func SerializeRingToken(gatewayID GatewayID, clientID ClientID, tokenJSON []byte
 
 func validInnerBatchItemKind(kind MsgKind) bool {
 	switch kind {
-	case TransactionMessage, AccountMessage, ShardedTxMessage, SuspiciousPathMessage, Query4AccountItem, Query1RowItem:
+	case TransactionMessage, AccountMessage, ShardedTxMessage, SuspiciousPathMessage, Query4AccountItem, Query1RowItem, Q2PartialMaxItem, Q2BankNameItem, Q2ResultItem:
 		return true
 	default:
 		return false

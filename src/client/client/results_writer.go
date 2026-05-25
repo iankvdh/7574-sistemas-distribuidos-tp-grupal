@@ -16,7 +16,7 @@ const writerBufferSize = 16384
 
 var queryHeaders = map[uint8]string{
 	1: "From Bank,Account,To Bank,Account.1,Amount Paid",
-	2: "From Bank,Account,Bank Name,Amount Paid",
+	2: "Bank ID,Account,Bank Name,Amount Paid",
 	3: "From Bank,Account,Payment Format,Amount Paid",
 	4: "Bank,Account",
 	5: "count",
