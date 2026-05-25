@@ -13,14 +13,16 @@ import (
 
 var supportedQueries = []uint8{1, 2, 4}
 
-type q4Account struct {
-	Bank    uint32
-	Account string
+type q4Pair struct {
+	SourceBank    uint32
+	SourceAccount string
+	DestBank      uint32
+	DestAccount   string
 }
 
 type clientQ4State struct {
 	gatewayID inner.GatewayID
-	accounts  map[q4Account]struct{}
+	pairs     map[q4Pair]struct{}
 }
 
 type FinalJoiner struct {
@@ -93,20 +95,24 @@ func (j *FinalJoiner) processStreamingItem(envelope *inner.Envelope) ([]strategy
 	}}, strategy.LocalCounts{Processed: 1, Matched: 1}, nil
 }
 
-// processQ4Item dedupes incoming (bank, account) entries per client. Q4's
-// counter emits both source and destination of each detected pair separately,
-// and the spec output is the set of distinct accounts involved in scatter
-// patterns. We buffer here and flush on EOF (see OnUpstreamEOF).
+// processQ4Item dedupes incoming (source, dest) pairs per client. Q4's counter
+// emits one Query4PairItem per detected scatter pair; we buffer the distinct
+// pairs here and flush them as CSV rows on EOF (see OnUpstreamEOF).
 func (j *FinalJoiner) processQ4Item(envelope *inner.Envelope) ([]strategy.OutputMessage, strategy.LocalCounts, error) {
-	if envelope.Kind != inner.Query4AccountItem {
-		return nil, strategy.LocalCounts{}, fmt.Errorf("Q4 expects Query4AccountItem, got kind=%d", envelope.Kind)
+	if envelope.Kind != inner.Query4PairItem {
+		return nil, strategy.LocalCounts{}, fmt.Errorf("Q4 expects Query4PairItem, got kind=%d", envelope.Kind)
 	}
-	acc, err := inner.DeserializeQuery4Account(envelope.Payload)
+	pair, err := inner.DeserializeQuery4Pair(envelope.Payload)
 	if err != nil {
-		return nil, strategy.LocalCounts{}, fmt.Errorf("deserialize query4 account: %w", err)
+		return nil, strategy.LocalCounts{}, fmt.Errorf("deserialize query4 pair: %w", err)
 	}
 	state := j.q4StateFor(envelope.ClientID, envelope.GatewayID)
-	state.accounts[q4Account{Bank: acc.Bank, Account: acc.Account}] = struct{}{}
+	state.pairs[q4Pair{
+		SourceBank:    pair.SourceBank,
+		SourceAccount: pair.SourceAccount,
+		DestBank:      pair.DestBank,
+		DestAccount:   pair.DestAccount,
+	}] = struct{}{}
 	return nil, strategy.LocalCounts{Processed: 1, Matched: 1}, nil
 }
 
@@ -187,7 +193,7 @@ func (j *FinalJoiner) formatRow(queryID uint8, itemKind inner.MsgKind, payload [
 func (j *FinalJoiner) q4StateFor(clientID inner.ClientID, gatewayID inner.GatewayID) *clientQ4State {
 	state, ok := j.q4State[clientID]
 	if !ok {
-		state = &clientQ4State{gatewayID: gatewayID, accounts: map[q4Account]struct{}{}}
+		state = &clientQ4State{gatewayID: gatewayID, pairs: map[q4Pair]struct{}{}}
 		j.q4State[clientID] = state
 	} else if gatewayID != 0 {
 		state.gatewayID = gatewayID
@@ -196,28 +202,34 @@ func (j *FinalJoiner) q4StateFor(clientID inner.ClientID, gatewayID inner.Gatewa
 }
 
 // flushQ4Outputs builds a sorted, deduplicated list of OutputMessages for the
-// client's accumulated accounts and clears the in-memory state.
+// client's accumulated pairs and clears the in-memory state.
 func (j *FinalJoiner) flushQ4Outputs(clientID inner.ClientID, outputIdx int, queryID uint8) []strategy.OutputMessage {
 	state := j.q4State[clientID]
-	if state == nil || len(state.accounts) == 0 {
+	if state == nil || len(state.pairs) == 0 {
 		delete(j.q4State, clientID)
 		return nil
 	}
-	accs := make([]q4Account, 0, len(state.accounts))
-	for a := range state.accounts {
-		accs = append(accs, a)
+	pairs := make([]q4Pair, 0, len(state.pairs))
+	for p := range state.pairs {
+		pairs = append(pairs, p)
 	}
-	sort.Slice(accs, func(i, k int) bool {
-		if accs[i].Bank != accs[k].Bank {
-			return accs[i].Bank < accs[k].Bank
+	sort.Slice(pairs, func(i, k int) bool {
+		if pairs[i].SourceBank != pairs[k].SourceBank {
+			return pairs[i].SourceBank < pairs[k].SourceBank
 		}
-		return accs[i].Account < accs[k].Account
+		if pairs[i].SourceAccount != pairs[k].SourceAccount {
+			return pairs[i].SourceAccount < pairs[k].SourceAccount
+		}
+		if pairs[i].DestBank != pairs[k].DestBank {
+			return pairs[i].DestBank < pairs[k].DestBank
+		}
+		return pairs[i].DestAccount < pairs[k].DestAccount
 	})
-	outputs := make([]strategy.OutputMessage, 0, len(accs))
-	for _, a := range accs {
+	outputs := make([]strategy.OutputMessage, 0, len(pairs))
+	for _, p := range pairs {
 		outputs = append(outputs, strategy.OutputMessage{
 			OutputIndices: []int{outputIdx},
-			Body:          []byte(fmt.Sprintf("%d,%s", a.Bank, a.Account)),
+			Body:          []byte(fmt.Sprintf("%d,%s,%d,%s", p.SourceBank, p.SourceAccount, p.DestBank, p.DestAccount)),
 			ClientID:      clientID,
 			BatchQueryID:  queryID,
 		})

@@ -220,31 +220,33 @@ func Query4Rows(transactions []transaction.Transaction) []string {
 		}
 	}
 
-	participatingAccounts := make(map[accountKey]struct{})
+	suspiciousPairs := make([]pathKey, 0)
 	for key, mids := range intermediaries {
 		if len(mids) >= 5 {
-			participatingAccounts[key.source] = struct{}{}
-			participatingAccounts[key.dest] = struct{}{}
+			suspiciousPairs = append(suspiciousPairs, key)
 		}
 	}
 
-	accounts := make([]accountKey, 0, len(participatingAccounts))
-	for key := range participatingAccounts {
-		accounts = append(accounts, key)
-	}
-
-	sort.Slice(accounts, func(i, j int) bool {
-		if accounts[i].Bank == accounts[j].Bank {
-			return accounts[i].Account < accounts[j].Account
+	sort.Slice(suspiciousPairs, func(i, j int) bool {
+		if suspiciousPairs[i].source.Bank != suspiciousPairs[j].source.Bank {
+			return suspiciousPairs[i].source.Bank < suspiciousPairs[j].source.Bank
 		}
-		return accounts[i].Bank < accounts[j].Bank
+		if suspiciousPairs[i].source.Account != suspiciousPairs[j].source.Account {
+			return suspiciousPairs[i].source.Account < suspiciousPairs[j].source.Account
+		}
+		if suspiciousPairs[i].dest.Bank != suspiciousPairs[j].dest.Bank {
+			return suspiciousPairs[i].dest.Bank < suspiciousPairs[j].dest.Bank
+		}
+		return suspiciousPairs[i].dest.Account < suspiciousPairs[j].dest.Account
 	})
 
-	rows := make([]string, 0, len(accounts))
-	for _, acc := range accounts {
+	rows := make([]string, 0, len(suspiciousPairs))
+	for _, p := range suspiciousPairs {
 		row := []string{
-			strconv.FormatUint(uint64(acc.Bank), 10),
-			acc.Account,
+			strconv.FormatUint(uint64(p.source.Bank), 10),
+			p.source.Account,
+			strconv.FormatUint(uint64(p.dest.Bank), 10),
+			p.dest.Account,
 		}
 		rows = append(rows, strings.Join(row, ","))
 	}

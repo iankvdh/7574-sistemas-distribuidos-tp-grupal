@@ -14,7 +14,8 @@ services:
       filter_amount_lt_50: { condition: service_started }
       sharder_q1: { condition: service_started }
       drain_period1_wire_ach: { condition: service_started }
-      scatter_agg_q4: { condition: service_started }
+      sharder_q4: { condition: service_started }
+      suspicious_account_filter: { condition: service_started }
       path_finder_q4: { condition: service_started }
       counter_q4: { condition: service_started }
       drain_period2_usd: { condition: service_started }
@@ -194,21 +195,36 @@ services:
       - DRAIN_OUTPUT_FILE=/results/drain_period1_wire_ach.csv
     volumes:
       - ./results:/results
-  scatter_agg_q4:
+  sharder_q4:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
     depends_on: { rabbitmq: { condition: service_healthy } }
     env_file:
       - .env
     environment:
-      - STRATEGY=scatter_agg_q4
+      - STRATEGY=sharder_q4
       - REPLICA_ID=0
       - N_REPLICAS=1
       - INPUT=queue:period1_usd_for_drain
       - OUTPUTS_MATCH_COUNT=0
       - OUTPUT_0=direct_exchange:q4_account_shards
       - LOG_LEVEL=info
+      - K_SUSPICIOUS_FILTERS=1
+  suspicious_account_filter:
+    build: { context: ./src/, dockerfile: worker/Dockerfile }
+    depends_on: { rabbitmq: { condition: service_healthy } }
+    env_file:
+      - .env
+    environment:
+      - STRATEGY=suspicious_account_filter
+      - REPLICA_ID=0
+      - N_REPLICAS=1
+      - INPUT=direct_exchange:q4_account_shards:0
+      - OUTPUTS_MATCH_COUNT=0
+      - OUTPUT_0=direct_exchange:q4_suspicious_account_shards
+      - LOG_LEVEL=info
       - K_PATH_FINDERS=1
-      - MIN_SCATTER_DESTS=5
+      - N_SHARDERS=1
+      - SUSPICIOUS_THRESHOLD=5
   path_finder_q4:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
     depends_on: { rabbitmq: { condition: service_healthy } }
@@ -218,12 +234,12 @@ services:
       - STRATEGY=path_finder_q4
       - REPLICA_ID=0
       - N_REPLICAS=1
-      - INPUT=direct_exchange:q4_account_shards:0
+      - INPUT=direct_exchange:q4_suspicious_account_shards:0
       - OUTPUTS_MATCH_COUNT=0
       - OUTPUT_0=direct_exchange:q4_pair_shards
       - LOG_LEVEL=info
       - K_COUNTERS=1
-      - N_SHARDERS=1
+      - N_SUSPICIOUS_FILTERS=1
   counter_q4:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
     depends_on: { rabbitmq: { condition: service_healthy } }
