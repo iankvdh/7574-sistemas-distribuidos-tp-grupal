@@ -10,6 +10,7 @@ import (
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/joiner"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/noop"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/pathfinder"
+	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/scatteragg"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/sharder"
 )
 
@@ -52,6 +53,8 @@ func Build(name string) (strategy.Strategy, error) {
 	case "filter_currency_usd_p1", "filter_currency_usd_p2", "filter_currency_usd_other_periods":
 		return filter.New(name, filter.IsUSDPredicate()).
 			WithMatchProjection(filter.WithoutPaymentCurrency), nil
+	case "scatter_agg_q4":
+		return scatteragg.New(), nil
 	case "sharder_q4":
 		return sharder.New(), nil
 	case "path_finder_q4":
