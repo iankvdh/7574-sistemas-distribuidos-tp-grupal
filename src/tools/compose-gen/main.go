@@ -77,7 +77,7 @@ var strategiesWithRing = map[string]struct{}{
 	"sharder_q1":                        {},
 	"max_q2":                            {},
 	"bank_aggregator":                   {},
-	"average_local_q3":                  {},
+	"sum_q3":                            {},
 }
 
 func strategyUsesRing(strategy string) bool {

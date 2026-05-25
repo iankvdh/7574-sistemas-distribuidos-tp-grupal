@@ -17,10 +17,10 @@ services:
       filter_currency_usd_p2_0: { condition: service_started }
       filter_currency_usd_p2_1: { condition: service_started }
       filter_currency_usd_p2_2: { condition: service_started }
-      average_local_q3_0: { condition: service_started }
-      average_local_q3_1: { condition: service_started }
-      average_local_q3_2: { condition: service_started }
-      average_global_q3: { condition: service_started }
+      sum_q3_0: { condition: service_started }
+      sum_q3_1: { condition: service_started }
+      sum_q3_2: { condition: service_started }
+      aggregator_q3: { condition: service_started }
       filter_q3: { condition: service_started }
       final_joiner_0: { condition: service_started }
       final_joiner_1: { condition: service_started }
@@ -60,10 +60,10 @@ services:
       filter_currency_usd_p2_0: { condition: service_started }
       filter_currency_usd_p2_1: { condition: service_started }
       filter_currency_usd_p2_2: { condition: service_started }
-      average_local_q3_0: { condition: service_started }
-      average_local_q3_1: { condition: service_started }
-      average_local_q3_2: { condition: service_started }
-      average_global_q3: { condition: service_started }
+      sum_q3_0: { condition: service_started }
+      sum_q3_1: { condition: service_started }
+      sum_q3_2: { condition: service_started }
+      aggregator_q3: { condition: service_started }
       filter_q3: { condition: service_started }
       final_joiner_0: { condition: service_started }
       final_joiner_1: { condition: service_started }
@@ -299,61 +299,61 @@ services:
       - LOG_LEVEL=info
       - RING_QUEUE_IN=ring_filter_currency_usd_p2_2
       - RING_QUEUE_OUT=ring_filter_currency_usd_p2_0
-  average_local_q3_0:
+  sum_q3_0:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
     depends_on: { rabbitmq: { condition: service_healthy } }
     env_file:
       - .env
     environment:
-      - STRATEGY=average_local_q3
+      - STRATEGY=sum_q3
       - REPLICA_ID=0
       - N_REPLICAS=3
       - INPUT=queue:q3_p1_usd
       - OUTPUTS_MATCH_COUNT=0
       - OUTPUT_0=direct_exchange:q3_avg_global_input
       - LOG_LEVEL=info
-      - RING_QUEUE_IN=ring_average_local_q3_0
-      - RING_QUEUE_OUT=ring_average_local_q3_1
+      - RING_QUEUE_IN=ring_sum_q3_0
+      - RING_QUEUE_OUT=ring_sum_q3_1
       - K_AGGREGATORS_Q3=1
-  average_local_q3_1:
+  sum_q3_1:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
     depends_on: { rabbitmq: { condition: service_healthy } }
     env_file:
       - .env
     environment:
-      - STRATEGY=average_local_q3
+      - STRATEGY=sum_q3
       - REPLICA_ID=1
       - N_REPLICAS=3
       - INPUT=queue:q3_p1_usd
       - OUTPUTS_MATCH_COUNT=0
       - OUTPUT_0=direct_exchange:q3_avg_global_input
       - LOG_LEVEL=info
-      - RING_QUEUE_IN=ring_average_local_q3_1
-      - RING_QUEUE_OUT=ring_average_local_q3_2
+      - RING_QUEUE_IN=ring_sum_q3_1
+      - RING_QUEUE_OUT=ring_sum_q3_2
       - K_AGGREGATORS_Q3=1
-  average_local_q3_2:
+  sum_q3_2:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
     depends_on: { rabbitmq: { condition: service_healthy } }
     env_file:
       - .env
     environment:
-      - STRATEGY=average_local_q3
+      - STRATEGY=sum_q3
       - REPLICA_ID=2
       - N_REPLICAS=3
       - INPUT=queue:q3_p1_usd
       - OUTPUTS_MATCH_COUNT=0
       - OUTPUT_0=direct_exchange:q3_avg_global_input
       - LOG_LEVEL=info
-      - RING_QUEUE_IN=ring_average_local_q3_2
-      - RING_QUEUE_OUT=ring_average_local_q3_0
+      - RING_QUEUE_IN=ring_sum_q3_2
+      - RING_QUEUE_OUT=ring_sum_q3_0
       - K_AGGREGATORS_Q3=1
-  average_global_q3:
+  aggregator_q3:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
     depends_on: { rabbitmq: { condition: service_healthy } }
     env_file:
       - .env
     environment:
-      - STRATEGY=average_global_q3
+      - STRATEGY=aggregator_q3
       - REPLICA_ID=0
       - N_REPLICAS=1
       - INPUT=direct_exchange:q3_avg_global_input:0

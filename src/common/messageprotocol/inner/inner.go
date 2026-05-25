@@ -64,11 +64,11 @@ const (
 	// exchange `results` para consumo del final_joiner.
 	Q2ResultItem
 	// Q3PartialAvgItem transporta un parcial (PaymentFormat, Sum, Count) de los
-	// montos USD de Period 1 emitido por una réplica de average_local_q3 al
-	// cierre del ring hacia average_global_q3.
+	// montos USD de Period 1 emitido por una réplica de sum_q3 al
+	// cierre del ring hacia aggregator_q3.
 	Q3PartialAvgItem
 	// Q3AverageItem transporta el promedio global (PaymentFormat, Average) de
-	// Period 1 USD emitido por average_global_q3 (broadcast) hacia las réplicas
+	// Period 1 USD emitido por aggregator_q3 (broadcast) hacia las réplicas
 	// de filter_q3.
 	Q3AverageItem
 	// Query3RowItem transporta una fila final de Q3 (SourceBank, SourceAccount,

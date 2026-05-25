@@ -23,8 +23,8 @@ services:
       max_q2: { condition: service_started }
       bank_aggregator: { condition: service_started }
       aggregator_q2: { condition: service_started }
-      average_local_q3: { condition: service_started }
-      average_global_q3: { condition: service_started }
+      sum_q3: { condition: service_started }
+      aggregator_q3: { condition: service_started }
       filter_q3: { condition: service_started }
       final_joiner: { condition: service_started }
     env_file:
@@ -99,7 +99,7 @@ services:
       - OUTPUTS_MATCH_COUNT=3
       - OUTPUT_0=queue:period1_usd_for_drain
       - OUTPUT_1=sharded_queues:joiner_usd_input:1
-      - OUTPUT_2=queue:q3_p1_usd                              # NEW: P1 USD para average_local_q3
+      - OUTPUT_2=queue:q3_p1_usd                              # NEW: P1 USD para sum_q3
       - LOG_LEVEL=info
   filter_period2:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
@@ -334,13 +334,13 @@ services:
       - LOG_LEVEL=info
       - EXPECTED_PARTIAL_EOFS=2
       - N_FINAL_JOINERS=1
-  average_local_q3:
+  sum_q3:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
     depends_on: { rabbitmq: { condition: service_healthy } }
     env_file:
       - .env
     environment:
-      - STRATEGY=average_local_q3
+      - STRATEGY=sum_q3
       - REPLICA_ID=0
       - N_REPLICAS=1
       - INPUT=queue:q3_p1_usd
@@ -348,13 +348,13 @@ services:
       - OUTPUT_0=direct_exchange:q3_avg_global_input
       - LOG_LEVEL=info
       - K_AGGREGATORS_Q3=1
-  average_global_q3:
+  aggregator_q3:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
     depends_on: { rabbitmq: { condition: service_healthy } }
     env_file:
       - .env
     environment:
-      - STRATEGY=average_global_q3
+      - STRATEGY=aggregator_q3
       - REPLICA_ID=0
       - N_REPLICAS=1
       - INPUT=direct_exchange:q3_avg_global_input:0

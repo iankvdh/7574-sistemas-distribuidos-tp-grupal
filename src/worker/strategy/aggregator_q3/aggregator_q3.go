@@ -1,4 +1,4 @@
-package average_global_q3
+package aggregator_q3
 
 import (
 	"fmt"
@@ -17,7 +17,7 @@ type clientState struct {
 	counts map[string]uint64
 }
 
-type AverageGlobalQ3 struct {
+type AggregatorQ3 struct {
 	cfg         strategy.StrategyConfig
 	nFilterQ3   int
 	coordinator *eof.JoinerAccumulateCoordinator
@@ -25,15 +25,15 @@ type AverageGlobalQ3 struct {
 	rkCache     []string
 }
 
-func New() *AverageGlobalQ3 {
-	return &AverageGlobalQ3{state: map[inner.ClientID]*clientState{}}
+func New() *AggregatorQ3 {
+	return &AggregatorQ3{state: map[inner.ClientID]*clientState{}}
 }
 
-func (a *AverageGlobalQ3) Name() string { return "average_global_q3" }
+func (a *AggregatorQ3) Name() string { return "aggregator_q3" }
 
-func (a *AverageGlobalQ3) Init(cfg strategy.StrategyConfig) error {
+func (a *AggregatorQ3) Init(cfg strategy.StrategyConfig) error {
 	if cfg.OutputCount != 1 {
-		return fmt.Errorf("average_global_q3 expects exactly 1 output, got %d", cfg.OutputCount)
+		return fmt.Errorf("aggregator_q3 expects exactly 1 output, got %d", cfg.OutputCount)
 	}
 	expectedEOFs, err := env.RequiredInt("EXPECTED_PARTIAL_EOFS", true)
 	if err != nil {
@@ -53,9 +53,9 @@ func (a *AverageGlobalQ3) Init(cfg strategy.StrategyConfig) error {
 	return nil
 }
 
-func (a *AverageGlobalQ3) ProcessMessage(envelope *inner.Envelope) ([]strategy.OutputMessage, strategy.LocalCounts, error) {
+func (a *AggregatorQ3) ProcessMessage(envelope *inner.Envelope) ([]strategy.OutputMessage, strategy.LocalCounts, error) {
 	if envelope.Kind != inner.Q3PartialAvgItem {
-		return nil, strategy.LocalCounts{}, fmt.Errorf("average_global_q3 expects Q3PartialAvgItem, got kind=%d", envelope.Kind)
+		return nil, strategy.LocalCounts{}, fmt.Errorf("aggregator_q3 expects Q3PartialAvgItem, got kind=%d", envelope.Kind)
 	}
 	pa, err := inner.DeserializeQ3PartialAvg(envelope.Payload)
 	if err != nil {
@@ -67,7 +67,7 @@ func (a *AverageGlobalQ3) ProcessMessage(envelope *inner.Envelope) ([]strategy.O
 	return nil, strategy.LocalCounts{Processed: 1, Matched: 1}, nil
 }
 
-func (a *AverageGlobalQ3) OnUpstreamEOF(envelope *inner.Envelope) (strategy.EOFOutcome, error) {
+func (a *AggregatorQ3) OnUpstreamEOF(envelope *inner.Envelope) (strategy.EOFOutcome, error) {
 	action := a.coordinator.OnUpstreamEOF(envelope.ClientID, envelope.Total)
 	if action.Kind != eof.ActionEmitEOFs {
 		return strategy.EOFOutcome{Action: action}, nil
@@ -116,11 +116,11 @@ func (a *AverageGlobalQ3) OnUpstreamEOF(envelope *inner.Envelope) (strategy.EOFO
 	}, nil
 }
 
-func (a *AverageGlobalQ3) OnRingToken(_ *eof.Token) (strategy.EOFOutcome, error) {
+func (a *AggregatorQ3) OnRingToken(_ *eof.Token) (strategy.EOFOutcome, error) {
 	return strategy.EOFOutcome{Action: eof.Action{Kind: eof.ActionNone}}, nil
 }
 
-func (a *AverageGlobalQ3) stateFor(clientID inner.ClientID) *clientState {
+func (a *AggregatorQ3) stateFor(clientID inner.ClientID) *clientState {
 	st, ok := a.state[clientID]
 	if !ok {
 		st = &clientState{
