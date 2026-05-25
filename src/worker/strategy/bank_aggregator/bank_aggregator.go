@@ -1,9 +1,3 @@
-// Package bank_aggregator extrae el catálogo (BankID → BankName) de la queue
-// `all_accounts` para alimentar a aggregator_q2 en el join final de Query 2.
-// Cada réplica acumula su mapa local por cliente y, al cierre del ring
-// broadcast, flushea sus entradas al exchange `q2_agg_input` shardeado por
-// cliente. Los duplicados entre réplicas son inocuos: el aggregator
-// sobrescribe BankName por BankID.
 package bank_aggregator
 
 import (
@@ -29,7 +23,6 @@ type BankAggregator struct {
 	cfg             strategy.StrategyConfig
 	kAggregators    int
 	ringCoordinator *eof.RingCoordinator
-	accumulator     *eof.JoinerAccumulateCoordinator
 	state           map[inner.ClientID]*clientState
 	rkCache         []string
 }
@@ -54,14 +47,10 @@ func (b *BankAggregator) Init(cfg strategy.StrategyConfig) error {
 	b.cfg = cfg
 	b.kAggregators = k
 	b.rkCache = make([]string, k)
-	for i := 0; i < k; i++ {
+	for i := range k {
 		b.rkCache[i] = strconv.Itoa(i)
 	}
-	if cfg.NReplicas > 1 {
-		b.ringCoordinator = eof.NewBroadcastRingCoordinator(cfg.ReplicaID, cfg.NReplicas)
-	} else {
-		b.accumulator = eof.NewJoinerAccumulateCoordinator(1, 1)
-	}
+	b.ringCoordinator = eof.NewRingCoordinator(cfg.ReplicaID, cfg.NReplicas)
 	return nil
 }
 
@@ -81,12 +70,8 @@ func (b *BankAggregator) ProcessMessage(envelope *inner.Envelope) ([]strategy.Ou
 }
 
 func (b *BankAggregator) OnUpstreamEOF(envelope *inner.Envelope) (strategy.EOFOutcome, error) {
-	if b.ringCoordinator != nil {
-		st := b.stateFor(envelope.ClientID)
-		action, _ := b.ringCoordinator.OnUpstreamEOF(envelope.ClientID, envelope.Total, st.processed, 0)
-		return b.outcomeFor(envelope.ClientID, action), nil
-	}
-	action := b.accumulator.OnUpstreamEOF(envelope.ClientID, envelope.Total)
+	st := b.stateFor(envelope.ClientID)
+	action, _ := b.ringCoordinator.OnUpstreamEOF(envelope.ClientID, envelope.Total, st.processed, 0)
 	return b.outcomeFor(envelope.ClientID, action), nil
 }
 
