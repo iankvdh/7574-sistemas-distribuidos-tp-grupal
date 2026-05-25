@@ -401,11 +401,6 @@ func (w *Worker) forwardToken(env *inner.Envelope, token *eof.Token) error {
 	return w.ringOut.Send(*msg)
 }
 
-// emitOutcomeOutputs procesa los OutputMessages del outcome favoreciendo la
-// secuencia lazy (OutputsIterator) cuando está presente. Cuando una strategy puede
-// generar cientos de miles de mensajes al cierre del cliente (p.ej. filter_q3
-// drenando su archivo de spill), OutputsIterator evita acumular un slice gigante en
-// memoria: cada item se batchea y se vuelve garbage al instante.
 func (w *Worker) emitOutcomeOutputs(gatewayID inner.GatewayID, outcome strategy.EOFOutcome) error {
 	if outcome.OutputsIterator != nil {
 		for om := range outcome.OutputsIterator {

@@ -29,10 +29,7 @@ type StrategyConfig struct {
 	StrategyName string
 	// MatchCount splits outputs into match [0, MatchCount) and no-match
 	// [MatchCount, OutputCount). Filters use it; other strategies ignore it.
-	MatchCount int
-	// NumInputs is the number of INPUT queues/exchanges the worker is consuming
-	// from. Strategies that bind multiple streams (e.g. filter_q3) use it to
-	// validate their wiring; single-input strategies can ignore it.
+	MatchCount   int
 	NumInputs    int
 	RingQueueIn  string
 	RingQueueOut string
