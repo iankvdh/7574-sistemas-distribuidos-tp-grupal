@@ -1,6 +1,8 @@
 package strategy
 
 import (
+	"iter"
+
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/eof"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/messageprotocol/inner"
 )
@@ -33,9 +35,10 @@ type StrategyConfig struct {
 }
 
 type EOFOutcome struct {
-	Action  eof.Action
-	EOFs    []eof.EOFEmit
-	Outputs []OutputMessage // data messages to emit before downstream EOFs
+	Action     eof.Action
+	EOFs       []eof.EOFEmit
+	Outputs    []OutputMessage // data messages to emit before downstream EOFs
+	OutputsSeq iter.Seq[OutputMessage]
 }
 
 type Strategy interface {

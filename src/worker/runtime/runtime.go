@@ -320,13 +320,13 @@ func (w *Worker) applyEOFOutcome(env *inner.Envelope, outcome strategy.EOFOutcom
 		}
 		return w.forwardToken(env, outcome.Action.Token)
 	case eof.ActionEmitEOFs:
-		if err := w.appendOutputMessages(env.GatewayID, outcome.Outputs); err != nil {
+		if err := w.emitOutcomeOutputs(env.GatewayID, outcome); err != nil {
 			return err
 		}
 		w.clearUpstreamEOF(env.ClientID)
 		return w.publishEOFs(env, outcome.EOFs)
 	case eof.ActionEmitEOFsAndForwardToken:
-		if err := w.appendOutputMessages(env.GatewayID, outcome.Outputs); err != nil {
+		if err := w.emitOutcomeOutputs(env.GatewayID, outcome); err != nil {
 			return err
 		}
 		if err := w.flushClient(env.ClientID); err != nil {
@@ -360,6 +360,35 @@ func (w *Worker) forwardToken(env *inner.Envelope, token *eof.Token) error {
 		return err
 	}
 	return w.ringOut.Send(*msg)
+}
+
+// emitOutcomeOutputs procesa los OutputMessages del outcome favoreciendo la
+// secuencia lazy (OutputsSeq) cuando está presente. Cuando una strategy puede
+// generar cientos de miles de mensajes al cierre del cliente (p.ej. filter_q3
+// drenando su archivo de spill), OutputsSeq evita acumular un slice gigante en
+// memoria: cada item se batchea y se vuelve garbage al instante.
+func (w *Worker) emitOutcomeOutputs(gatewayID inner.GatewayID, outcome strategy.EOFOutcome) error {
+	if outcome.OutputsSeq != nil {
+		for om := range outcome.OutputsSeq {
+			if err := w.appendSingleOutputMessage(gatewayID, om); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	return w.appendOutputMessages(gatewayID, outcome.Outputs)
+}
+
+func (w *Worker) appendSingleOutputMessage(gatewayID inner.GatewayID, om strategy.OutputMessage) error {
+	for _, idx := range om.OutputIndices {
+		if idx < 0 || idx >= len(w.outputTargetBuffers) {
+			return errors.New("strategy returned invalid output index")
+		}
+		if err := w.appendToShard(idx, gatewayID, om); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (w *Worker) appendOutputMessages(gatewayID inner.GatewayID, outputMessages []strategy.OutputMessage) error {
