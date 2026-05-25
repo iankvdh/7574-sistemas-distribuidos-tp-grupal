@@ -4,12 +4,15 @@ import (
 	"fmt"
 
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy"
+	aggregator_q2 "github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/aggregator_q2"
+	bank_aggregator "github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/bank_aggregator"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/counter"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/drain"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/filter"
-	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/joiner"
-	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/noop"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/finaljoiner"
+	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/joiner"
+	max_q2 "github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/max_q2"
+	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/noop"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/pathfinder"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/scatteragg"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/sharder"
@@ -69,6 +72,12 @@ func Build(name string) (strategy.Strategy, error) {
 		return counter.New(), nil
 	case "drain_q4":
 		return drain.NewQ4(), nil
+	case "max_q2":
+		return max_q2.New(), nil
+	case "bank_aggregator":
+		return bank_aggregator.New(), nil
+	case "aggregator_q2":
+		return aggregator_q2.New(), nil
 	default:
 		return nil, fmt.Errorf("unknown STRATEGY: %s", name)
 	}
