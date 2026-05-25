@@ -1021,7 +1021,7 @@ services:
       - OUTPUT_1=final_queue:final_2
       - LOG_LEVEL=info
       - EXPECTED_EOFS_Q1=1
-      - EXPECTED_EOFS_Q2=1
+      - EXPECTED_EOFS_Q2=2
       - EXPECTED_EOFS_Q3=1
       - EXPECTED_EOFS_Q4=3
   final_joiner_1:
@@ -1039,7 +1039,7 @@ services:
       - OUTPUT_1=final_queue:final_2
       - LOG_LEVEL=info
       - EXPECTED_EOFS_Q1=1
-      - EXPECTED_EOFS_Q2=1
+      - EXPECTED_EOFS_Q2=2
       - EXPECTED_EOFS_Q3=1
       - EXPECTED_EOFS_Q4=3
   rabbitmq:

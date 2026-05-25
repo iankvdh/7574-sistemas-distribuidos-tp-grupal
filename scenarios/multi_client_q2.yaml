@@ -550,7 +550,7 @@ services:
       - OUTPUT_0=final_queue:final_1
       - OUTPUT_1=final_queue:final_2
       - LOG_LEVEL=info
-      - EXPECTED_EOFS_Q2=1
+      - EXPECTED_EOFS_Q2=2
   final_joiner_1:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
     depends_on: { rabbitmq: { condition: service_healthy } }
@@ -565,7 +565,7 @@ services:
       - OUTPUT_0=final_queue:final_1
       - OUTPUT_1=final_queue:final_2
       - LOG_LEVEL=info
-      - EXPECTED_EOFS_Q2=1
+      - EXPECTED_EOFS_Q2=2
   rabbitmq:
     build: { context: ./src/rabbitmq, dockerfile: Dockerfile }
     volumes:
