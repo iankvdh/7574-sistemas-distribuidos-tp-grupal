@@ -20,8 +20,11 @@ services:
       sum_q3_0: { condition: service_started }
       sum_q3_1: { condition: service_started }
       sum_q3_2: { condition: service_started }
-      aggregator_q3: { condition: service_started }
-      filter_q3: { condition: service_started }
+      aggregator_q3_0: { condition: service_started }
+      aggregator_q3_1: { condition: service_started }
+      filter_q3_0: { condition: service_started }
+      filter_q3_1: { condition: service_started }
+      filter_q3_2: { condition: service_started }
       final_joiner_0: { condition: service_started }
       final_joiner_1: { condition: service_started }
     env_file:
@@ -63,8 +66,11 @@ services:
       sum_q3_0: { condition: service_started }
       sum_q3_1: { condition: service_started }
       sum_q3_2: { condition: service_started }
-      aggregator_q3: { condition: service_started }
-      filter_q3: { condition: service_started }
+      aggregator_q3_0: { condition: service_started }
+      aggregator_q3_1: { condition: service_started }
+      filter_q3_0: { condition: service_started }
+      filter_q3_1: { condition: service_started }
+      filter_q3_2: { condition: service_started }
       final_joiner_0: { condition: service_started }
       final_joiner_1: { condition: service_started }
     env_file:
@@ -265,7 +271,7 @@ services:
       - N_REPLICAS=3
       - INPUT=queue:period2_transactions
       - OUTPUTS_MATCH_COUNT=1
-      - OUTPUT_0=queue:q3_filter_input
+      - OUTPUT_0=queue:q3_p2_for_filter
       - LOG_LEVEL=info
       - RING_QUEUE_IN=ring_filter_currency_usd_p2_0
       - RING_QUEUE_OUT=ring_filter_currency_usd_p2_1
@@ -280,7 +286,7 @@ services:
       - N_REPLICAS=3
       - INPUT=queue:period2_transactions
       - OUTPUTS_MATCH_COUNT=1
-      - OUTPUT_0=queue:q3_filter_input
+      - OUTPUT_0=queue:q3_p2_for_filter
       - LOG_LEVEL=info
       - RING_QUEUE_IN=ring_filter_currency_usd_p2_1
       - RING_QUEUE_OUT=ring_filter_currency_usd_p2_2
@@ -295,7 +301,7 @@ services:
       - N_REPLICAS=3
       - INPUT=queue:period2_transactions
       - OUTPUTS_MATCH_COUNT=1
-      - OUTPUT_0=queue:q3_filter_input
+      - OUTPUT_0=queue:q3_p2_for_filter
       - LOG_LEVEL=info
       - RING_QUEUE_IN=ring_filter_currency_usd_p2_2
       - RING_QUEUE_OUT=ring_filter_currency_usd_p2_0
@@ -314,7 +320,7 @@ services:
       - LOG_LEVEL=info
       - RING_QUEUE_IN=ring_sum_q3_0
       - RING_QUEUE_OUT=ring_sum_q3_1
-      - K_AGGREGATORS_Q3=1
+      - K_AGGREGATORS_Q3=2
   sum_q3_1:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
     depends_on: { rabbitmq: { condition: service_healthy } }
@@ -330,7 +336,7 @@ services:
       - LOG_LEVEL=info
       - RING_QUEUE_IN=ring_sum_q3_1
       - RING_QUEUE_OUT=ring_sum_q3_2
-      - K_AGGREGATORS_Q3=1
+      - K_AGGREGATORS_Q3=2
   sum_q3_2:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
     depends_on: { rabbitmq: { condition: service_healthy } }
@@ -346,8 +352,8 @@ services:
       - LOG_LEVEL=info
       - RING_QUEUE_IN=ring_sum_q3_2
       - RING_QUEUE_OUT=ring_sum_q3_0
-      - K_AGGREGATORS_Q3=1
-  aggregator_q3:
+      - K_AGGREGATORS_Q3=2
+  aggregator_q3_0:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
     depends_on: { rabbitmq: { condition: service_healthy } }
     env_file:
@@ -355,14 +361,29 @@ services:
     environment:
       - STRATEGY=aggregator_q3
       - REPLICA_ID=0
-      - N_REPLICAS=1
+      - N_REPLICAS=2
       - INPUT=direct_exchange:q3_avg_global_input:0
       - OUTPUTS_MATCH_COUNT=0
-      - OUTPUT_0=queue:q3_filter_input
+      - OUTPUT_0=direct_exchange:q3_averages
       - LOG_LEVEL=info
       - EXPECTED_PARTIAL_EOFS=3
-      - N_FILTER_Q3=1
-  filter_q3:
+      - N_FILTER_Q3=3
+  aggregator_q3_1:
+    build: { context: ./src/, dockerfile: worker/Dockerfile }
+    depends_on: { rabbitmq: { condition: service_healthy } }
+    env_file:
+      - .env
+    environment:
+      - STRATEGY=aggregator_q3
+      - REPLICA_ID=1
+      - N_REPLICAS=2
+      - INPUT=direct_exchange:q3_avg_global_input:1
+      - OUTPUTS_MATCH_COUNT=0
+      - OUTPUT_0=direct_exchange:q3_averages
+      - LOG_LEVEL=info
+      - EXPECTED_PARTIAL_EOFS=3
+      - N_FILTER_Q3=3
+  filter_q3_0:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
     depends_on: { rabbitmq: { condition: service_healthy } }
     env_file:
@@ -370,13 +391,51 @@ services:
     environment:
       - STRATEGY=filter_q3
       - REPLICA_ID=0
-      - N_REPLICAS=1
-      - INPUT=queue:q3_filter_input
+      - N_REPLICAS=3
+      - INPUT_0=queue:q3_p2_for_filter
+      - INPUT_1=direct_exchange:q3_averages:0
       - OUTPUTS_MATCH_COUNT=0
       - OUTPUT_0=direct_exchange:results
       - LOG_LEVEL=info
+      - RING_QUEUE_IN=ring_filter_q3_0
+      - RING_QUEUE_OUT=ring_filter_q3_1
       - BUFFER_DIR=/tmp
-      - EXPECTED_PARTIAL_EOFS=2
+      - N_FINAL_JOINERS=2
+  filter_q3_1:
+    build: { context: ./src/, dockerfile: worker/Dockerfile }
+    depends_on: { rabbitmq: { condition: service_healthy } }
+    env_file:
+      - .env
+    environment:
+      - STRATEGY=filter_q3
+      - REPLICA_ID=1
+      - N_REPLICAS=3
+      - INPUT_0=queue:q3_p2_for_filter
+      - INPUT_1=direct_exchange:q3_averages:1
+      - OUTPUTS_MATCH_COUNT=0
+      - OUTPUT_0=direct_exchange:results
+      - LOG_LEVEL=info
+      - RING_QUEUE_IN=ring_filter_q3_1
+      - RING_QUEUE_OUT=ring_filter_q3_2
+      - BUFFER_DIR=/tmp
+      - N_FINAL_JOINERS=2
+  filter_q3_2:
+    build: { context: ./src/, dockerfile: worker/Dockerfile }
+    depends_on: { rabbitmq: { condition: service_healthy } }
+    env_file:
+      - .env
+    environment:
+      - STRATEGY=filter_q3
+      - REPLICA_ID=2
+      - N_REPLICAS=3
+      - INPUT_0=queue:q3_p2_for_filter
+      - INPUT_1=direct_exchange:q3_averages:2
+      - OUTPUTS_MATCH_COUNT=0
+      - OUTPUT_0=direct_exchange:results
+      - LOG_LEVEL=info
+      - RING_QUEUE_IN=ring_filter_q3_2
+      - RING_QUEUE_OUT=ring_filter_q3_0
+      - BUFFER_DIR=/tmp
       - N_FINAL_JOINERS=2
   final_joiner_0:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
@@ -392,7 +451,7 @@ services:
       - OUTPUT_0=final_queue:final_1
       - OUTPUT_1=final_queue:final_2
       - LOG_LEVEL=info
-      - EXPECTED_EOFS_Q3=1
+      - EXPECTED_EOFS_Q3=3
   final_joiner_1:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
     depends_on: { rabbitmq: { condition: service_healthy } }
@@ -407,7 +466,7 @@ services:
       - OUTPUT_0=final_queue:final_1
       - OUTPUT_1=final_queue:final_2
       - LOG_LEVEL=info
-      - EXPECTED_EOFS_Q3=1
+      - EXPECTED_EOFS_Q3=3
   rabbitmq:
     build: { context: ./src/rabbitmq, dockerfile: Dockerfile }
     volumes:

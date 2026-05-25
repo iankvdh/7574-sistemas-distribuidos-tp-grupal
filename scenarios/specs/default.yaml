@@ -54,7 +54,7 @@ workers:
     outputs:
       - direct_exchange:period2_usd_direct_exchange
       - sharded_queues:joiner_usd_input:1
-      - queue:q3_filter_input                        # NEW: P2 USD para filter_q3
+      - queue:q3_p2_for_filter                       # NEW: P2 USD para filter_q3 (competing consumers)
 
   - name: filter_currency_usd_other_periods
     strategy: filter_currency_usd_other_periods
@@ -199,9 +199,9 @@ workers:
   - name: aggregator_q3
     strategy: aggregator_q3
     replicas: 1
-    input: direct_exchange:q3_avg_global_input:0
+    input: direct_exchange:q3_avg_global_input:{REPLICA_ID}
     outputs:
-      - queue:q3_filter_input
+      - direct_exchange:q3_averages
     env:
       EXPECTED_PARTIAL_EOFS: "1"   # = N_REPLICAS de sum_q3
       N_FILTER_Q3: "1"             # = N_REPLICAS de filter_q3
@@ -209,11 +209,13 @@ workers:
   - name: filter_q3
     strategy: filter_q3
     replicas: 1
-    input: queue:q3_filter_input
+    # INPUT_0: P2 USD (competing consumers); INPUT_1: averages broadcast (1 binding per replica)
+    inputs:
+      - queue:q3_p2_for_filter
+      - direct_exchange:q3_averages:{REPLICA_ID}
     outputs:
       - direct_exchange:results
     env:
-      EXPECTED_PARTIAL_EOFS: "2"   # 1 de aggregator_q3 + 1 de filter_currency_usd_p2
       N_FINAL_JOINERS: "1"
       BUFFER_DIR: "/tmp"
 

@@ -1,13 +1,25 @@
 // Package filter_q3 implementa la última etapa de Q3: recibe el promedio
-// global por payment_format (de aggregator_q3) y el stream de
-// transacciones Period 2 USD (de filter_currency_usd_p2). Emite las
-// transacciones cuyo monto es estrictamente menor a 1/100 del promedio de
-// Period 1 USD para el mismo payment_format.
+// global por payment_format (de aggregator_q3) y el stream de transacciones
+// Period 2 USD (de filter_currency_usd_p2). Emite las transacciones cuyo
+// monto es estrictamente menor a 1/100 del promedio de Period 1 USD para el
+// mismo payment_format.
 //
-// Para soportar millones de transacciones por cliente sin saturar memoria, las
-// txs P2 que llegan antes de que los promedios estén listos se persisten en un
-// archivo de spill por cliente (en BUFFER_DIR). Cuando llegan los promedios,
-// el archivo se drena secuencialmente, se aplica el filtro, y se borra.
+// Para soportar N réplicas, cada filter_q3 consume dos INPUTs separados:
+//   - INPUT_0: queue compartida (competing consumers) con las txs P2 USD.
+//   - INPUT_1: direct exchange con los averages, bindeado por replica_id —
+//     aggregator_q3 broadcastea una copia de los averages a cada réplica.
+//
+// El cierre del stream P2 se coordina con un ring (BroadcastRingCoordinator).
+// El cierre del stream de averages es por contador simple: cada cliente
+// queda sticky a un único aggregator_q3 (sum_q3 hashea por clientID antes
+// de emitir partials), por lo que sólo se espera 1 EOF de averages por
+// cliente, sin importar K_AGGREGATORS_Q3.
+//
+// El drenaje del archivo de spill y la emisión del EOF a final_joiner sólo
+// ocurren cuando ambos cierres se cumplieron: si el ring entra en
+// PhaseClosing antes de que averages cierre, la réplica forwardea el token
+// (preservando la fase) pero NO emite ni drena; cuando llegue el EOF de
+// averages drena su spill y emite el EOF downstream.
 package filter_q3
 
 import (
@@ -32,20 +44,39 @@ import (
 
 const queryID uint8 = 3
 
+const (
+	inputIndexP2       = 0
+	inputIndexAverages = 1
+)
+
 type clientState struct {
-	averages      map[string]float64
+	averages map[string]float64
+	// averagesReady se setea con el primer EOF de averages: a partir de ese
+	// momento las tx P2 que llegan se intentan filtrar inline (si la map ya
+	// tiene el payment_format) en vez de spillarse.
 	averagesReady bool
-	bufferPath    string
-	bufferFile    *os.File
-	bufferWriter  *bufio.Writer
-	bufferCount   uint64
+	// averagesEOFDone se setea cuando avgCoord acumuló los K EOFs esperados:
+	// la map de averages está completa y se puede drenar el spill final.
+	averagesEOFDone bool
+	// p2Closed se setea cuando el ring de P2 cerró localmente para este cliente
+	// (token Closing visto o N=1).
+	p2Closed bool
+	// p2Seen cuenta las txs P2 procesadas localmente (para el chequeo de
+	// coherencia que hace el RingCoordinator entre el total upstream y la suma
+	// agregada por el anillo).
+	p2Seen       uint64
+	bufferPath   string
+	bufferFile   *os.File
+	bufferWriter *bufio.Writer
+	bufferCount  uint64
 }
 
 type FilterQ3 struct {
 	cfg           strategy.StrategyConfig
 	nFinalJoiners int
 	bufferDir     string
-	coordinator   *eof.JoinerAccumulateCoordinator
+	avgCoord      *eof.JoinerAccumulateCoordinator
+	p2Ring        *eof.RingCoordinator
 	state         map[inner.ClientID]*clientState
 }
 
@@ -59,9 +90,11 @@ func (f *FilterQ3) Init(cfg strategy.StrategyConfig) error {
 	if cfg.OutputCount != 1 {
 		return fmt.Errorf("filter_q3 expects exactly 1 output, got %d", cfg.OutputCount)
 	}
-	expectedEOFs, err := env.RequiredInt("EXPECTED_PARTIAL_EOFS", true)
-	if err != nil {
-		return err
+	if cfg.NumInputs != 2 {
+		return fmt.Errorf("filter_q3 expects exactly 2 inputs (P2 queue + averages exchange), got %d", cfg.NumInputs)
+	}
+	if cfg.NReplicas > 1 && (cfg.RingQueueIn == "" || cfg.RingQueueOut == "") {
+		return fmt.Errorf("filter_q3 requires RING_QUEUE_IN/RING_QUEUE_OUT when N_REPLICAS>1")
 	}
 	nFinal, err := env.RequiredInt("N_FINAL_JOINERS", true)
 	if err != nil {
@@ -74,13 +107,19 @@ func (f *FilterQ3) Init(cfg strategy.StrategyConfig) error {
 	f.cfg = cfg
 	f.nFinalJoiners = nFinal
 	f.bufferDir = dir
-	f.coordinator = eof.NewJoinerAccumulateCoordinator(expectedEOFs, 1)
+	// Cada cliente queda sticky a un único aggregator_q3 (hashing por clientID
+	// hecho upstream en sum_q3), así que sólo se espera 1 EOF de averages.
+	f.avgCoord = eof.NewJoinerAccumulateCoordinator(1, 1)
+	f.p2Ring = eof.NewBroadcastRingCoordinator(cfg.ReplicaID, cfg.NReplicas)
 	return nil
 }
 
 func (f *FilterQ3) ProcessMessage(envelope *inner.Envelope) ([]strategy.OutputMessage, strategy.LocalCounts, error) {
-	switch envelope.Kind {
-	case inner.Q3AverageItem:
+	switch envelope.InputIndex {
+	case inputIndexAverages:
+		if envelope.Kind != inner.Q3AverageItem {
+			return nil, strategy.LocalCounts{}, fmt.Errorf("filter_q3 averages input: unexpected kind=%d", envelope.Kind)
+		}
 		avg, err := inner.DeserializeQ3Average(envelope.Payload)
 		if err != nil {
 			return nil, strategy.LocalCounts{}, fmt.Errorf("deserialize Q3Average: %w", err)
@@ -89,15 +128,28 @@ func (f *FilterQ3) ProcessMessage(envelope *inner.Envelope) ([]strategy.OutputMe
 		st.averages[avg.PaymentFormat] = avg.Average
 		return nil, strategy.LocalCounts{Processed: 1, Matched: 1}, nil
 
-	case inner.TransactionMessage:
+	case inputIndexP2:
+		if envelope.Kind != inner.TransactionMessage {
+			return nil, strategy.LocalCounts{}, fmt.Errorf("filter_q3 P2 input: unexpected kind=%d", envelope.Kind)
+		}
 		tx, err := external.DeserializeTransaction(envelope.Payload)
 		if err != nil {
 			return nil, strategy.LocalCounts{}, fmt.Errorf("deserialize transaction: %w", err)
 		}
 		st := f.stateFor(envelope.ClientID)
+		st.p2Seen++
 		if st.averagesReady {
 			if msg, emitted := f.inlineFilter(envelope.ClientID, st, tx); emitted {
 				return []strategy.OutputMessage{msg}, strategy.LocalCounts{Processed: 1, Matched: 1}, nil
+			}
+			// El average para este payment_format puede no estar todavía (otro
+			// aggregator de Q3 lo manda y aún no llegó). Spillar para reintentar
+			// en el drain final.
+			if _, ok := st.averages[tx.PaymentFormat]; !ok {
+				if err := f.appendToBuffer(st, envelope.Payload); err != nil {
+					return nil, strategy.LocalCounts{}, fmt.Errorf("buffer P2 tx: %w", err)
+				}
+				return nil, strategy.LocalCounts{Processed: 1, Matched: 1}, nil
 			}
 			return nil, strategy.LocalCounts{Processed: 1, NotMatched: 1}, nil
 		}
@@ -107,57 +159,121 @@ func (f *FilterQ3) ProcessMessage(envelope *inner.Envelope) ([]strategy.OutputMe
 		return nil, strategy.LocalCounts{Processed: 1, Matched: 1}, nil
 
 	default:
-		return nil, strategy.LocalCounts{}, fmt.Errorf("filter_q3 unexpected kind=%d", envelope.Kind)
+		return nil, strategy.LocalCounts{}, fmt.Errorf("filter_q3 unexpected InputIndex=%d", envelope.InputIndex)
 	}
 }
 
 func (f *FilterQ3) OnUpstreamEOF(envelope *inner.Envelope) (strategy.EOFOutcome, error) {
 	st := f.stateFor(envelope.ClientID)
-	isAveragesEOF := envelope.QueryID == queryID
 
-	// Marca averages como listos en cuanto llega su EOF: las tx P2 que arriben
-	// entre este EOF y el EOF de P2 se filtran inline en ProcessMessage.
-	if isAveragesEOF {
+	if envelope.InputIndex == inputIndexAverages {
+		// El primer EOF habilita filtrado inline para tx futuras (la map puede
+		// estar parcial si K>1; las txs cuyo formato no está aún se spillan).
 		st.averagesReady = true
+		action := f.avgCoord.OnUpstreamEOF(envelope.ClientID, envelope.Total)
+		if action.Kind != eof.ActionEmitEOFs {
+			return strategy.EOFOutcome{Action: eof.Action{Kind: eof.ActionNone}}, nil
+		}
+		st.averagesEOFDone = true
+		if st.p2Closed {
+			return f.finalizeAndEmit(envelope.ClientID, st, false, nil)
+		}
+		return strategy.EOFOutcome{Action: eof.Action{Kind: eof.ActionNone}}, nil
 	}
 
-	action := f.coordinator.OnUpstreamEOF(envelope.ClientID, envelope.Total)
-	if action.Kind != eof.ActionEmitEOFs {
-		// Solo un EOF recibido; todavía no podemos drenar (el runtime descarta
-		// outputs cuando Action != ActionEmitEOFs). Esperamos al segundo EOF.
+	// EOF del stream P2 (InputIndex == 0)
+	action, _ := f.p2Ring.OnUpstreamEOF(envelope.ClientID, envelope.Total, st.p2Seen, 0)
+	return f.handleRingAction(envelope.ClientID, st, action)
+}
+
+func (f *FilterQ3) OnRingToken(token *eof.Token) (strategy.EOFOutcome, error) {
+	st := f.stateFor(token.ClientID)
+	action, _ := f.p2Ring.OnRingToken(token, st.p2Seen, 0)
+	return f.handleRingAction(token.ClientID, st, action)
+}
+
+// handleRingAction adapta lo que devuelve el RingCoordinator al estado actual
+// de la composición de coordinators. Si el ring quiere cerrar pero todavía no
+// llegaron todos los EOFs de averages, se degrada el cierre a sólo forwardear
+// el token: el drain + emit downstream queda para cuando avgCoord cierre.
+func (f *FilterQ3) handleRingAction(clientID inner.ClientID, st *clientState, action eof.Action) (strategy.EOFOutcome, error) {
+	switch action.Kind {
+	case eof.ActionNone, eof.ActionReenqueueUpstreamEOF:
 		return strategy.EOFOutcome{Action: action}, nil
-	}
 
+	case eof.ActionForwardToken:
+		// PhaseCollecting o phase Closing degradada por otra réplica: el runtime
+		// sólo forwardea el token; no emitimos ni drenamos.
+		return strategy.EOFOutcome{Action: action}, nil
+
+	case eof.ActionEmitEOFs:
+		// Ring n=1 finalizó o la réplica initiator recibió de vuelta el token
+		// Closing. El stream de P2 cerró para este cliente acá.
+		st.p2Closed = true
+		if st.averagesEOFDone {
+			return f.finalizeAndEmit(clientID, st, false, nil)
+		}
+		// Esperamos al EOF de averages: el drain + EOF downstream se dispara
+		// desde OnUpstreamEOF cuando avgCoord termine.
+		return strategy.EOFOutcome{Action: eof.Action{Kind: eof.ActionNone}}, nil
+
+	case eof.ActionEmitEOFsAndForwardToken:
+		// Réplica intermedia viendo el token Closing.
+		st.p2Closed = true
+		if st.averagesEOFDone {
+			return f.finalizeAndEmit(clientID, st, true, action.Token)
+		}
+		// Degradamos a sólo forwardear el token: preservamos PhaseClosing para
+		// que las otras réplicas también marquen p2Closed. NO emitimos EOFs ni
+		// drenamos. Cuando llegue el EOF de averages drenamos localmente.
+		return strategy.EOFOutcome{
+			Action: eof.Action{Kind: eof.ActionForwardToken, Token: action.Token},
+		}, nil
+
+	default:
+		return strategy.EOFOutcome{}, fmt.Errorf("filter_q3: unexpected ring action kind=%d", action.Kind)
+	}
+}
+
+// finalizeAndEmit cierra el buffer en disco, arma el OutputsSeq lazy para
+// drenarlo y devuelve el EOFOutcome con el EOF que va a final_joiner.
+func (f *FilterQ3) finalizeAndEmit(clientID inner.ClientID, st *clientState, forwardToken bool, token *eof.Token) (strategy.EOFOutcome, error) {
 	if err := f.closeBufferForRead(st); err != nil {
 		return strategy.EOFOutcome{}, err
 	}
-	seq, err := f.drainSeq(envelope.ClientID, st)
+	seq, err := f.drainSeq(clientID, st)
 	if err != nil {
 		return strategy.EOFOutcome{}, err
 	}
 
-	rk := f.routingKeyFor(envelope.ClientID)
-	delete(f.state, envelope.ClientID)
+	rk := f.routingKeyFor(clientID)
+	delete(f.state, clientID)
 
-	return strategy.EOFOutcome{
-		Action:     eof.Action{Kind: eof.ActionEmitEOFs},
+	outcome := strategy.EOFOutcome{
 		OutputsSeq: seq,
 		EOFs: []eof.EOFEmit{{
 			OutputIndex: 0,
 			RoutingKey:  rk,
 			QueryID:     queryID,
 		}},
-	}, nil
+	}
+	if forwardToken {
+		outcome.Action = eof.Action{Kind: eof.ActionEmitEOFsAndForwardToken, Token: token}
+	} else {
+		outcome.Action = eof.Action{Kind: eof.ActionEmitEOFs}
+	}
+	return outcome, nil
 }
 
-func (f *FilterQ3) OnRingToken(_ *eof.Token) (strategy.EOFOutcome, error) {
-	return strategy.EOFOutcome{Action: eof.Action{Kind: eof.ActionNone}}, nil
-}
-
-// inlineFilter aplica el filtro a una tx P2 ya con averages disponibles.
+// inlineFilter aplica el filtro a una tx P2 ya con averages disponibles para
+// su payment_format. Si el formato no está en la map devuelve (zero, false)
+// y el caller cae al spill.
 func (f *FilterQ3) inlineFilter(clientID inner.ClientID, st *clientState, tx *transaction.Transaction) (strategy.OutputMessage, bool) {
 	avg, ok := st.averages[tx.PaymentFormat]
-	if !ok || tx.AmountPaid >= avg/100.0 {
+	if !ok {
+		return strategy.OutputMessage{}, false
+	}
+	if tx.AmountPaid >= avg/100.0 {
 		return strategy.OutputMessage{}, false
 	}
 	body, err := inner.SerializeQuery3Row(&inner.Query3Row{

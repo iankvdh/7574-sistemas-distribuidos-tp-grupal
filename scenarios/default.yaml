@@ -128,7 +128,7 @@ services:
       - OUTPUTS_MATCH_COUNT=3
       - OUTPUT_0=direct_exchange:period2_usd_direct_exchange
       - OUTPUT_1=sharded_queues:joiner_usd_input:1
-      - OUTPUT_2=queue:q3_filter_input                        # NEW: P2 USD para filter_q3
+      - OUTPUT_2=queue:q3_p2_for_filter                       # NEW: P2 USD para filter_q3 (competing consumers)
       - LOG_LEVEL=info
   filter_currency_usd_other_periods:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
@@ -359,7 +359,7 @@ services:
       - N_REPLICAS=1
       - INPUT=direct_exchange:q3_avg_global_input:0
       - OUTPUTS_MATCH_COUNT=0
-      - OUTPUT_0=queue:q3_filter_input
+      - OUTPUT_0=direct_exchange:q3_averages
       - LOG_LEVEL=info
       - EXPECTED_PARTIAL_EOFS=1
       - N_FILTER_Q3=1
@@ -372,12 +372,12 @@ services:
       - STRATEGY=filter_q3
       - REPLICA_ID=0
       - N_REPLICAS=1
-      - INPUT=queue:q3_filter_input
+      - INPUT_0=queue:q3_p2_for_filter
+      - INPUT_1=direct_exchange:q3_averages:0
       - OUTPUTS_MATCH_COUNT=0
       - OUTPUT_0=direct_exchange:results
       - LOG_LEVEL=info
       - BUFFER_DIR=/tmp
-      - EXPECTED_PARTIAL_EOFS=2
       - N_FINAL_JOINERS=1
   final_joiner:
     build: { context: ./src/, dockerfile: worker/Dockerfile }

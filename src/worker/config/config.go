@@ -16,8 +16,7 @@ type WorkerConfig struct {
 	StrategyName string
 	ReplicaID    int
 	NReplicas    int
-	Input        string // raw INPUT env var
-	InputConfig  InputConfig
+	InputConfigs []InputConfig
 	Outputs      []OutputConfig
 
 	// number of outputs that should receive matching transactions; the rest receive non-matching ones
@@ -48,12 +47,7 @@ func Load() (WorkerConfig, error) {
 		return WorkerConfig{}, fmt.Errorf("REPLICA_ID=%d out of range for N_REPLICAS=%d", replicaID, nReplicas)
 	}
 
-	input, err := env.RequiredString("INPUT")
-	if err != nil {
-		return WorkerConfig{}, err
-	}
-
-	inputConfig, err := ParseInput(input)
+	inputConfigs, err := ParseInputs()
 	if err != nil {
 		return WorkerConfig{}, err
 	}
@@ -100,8 +94,7 @@ func Load() (WorkerConfig, error) {
 		StrategyName:          strategyName,
 		ReplicaID:             replicaID,
 		NReplicas:             nReplicas,
-		Input:                 input,
-		InputConfig:           inputConfig,
+		InputConfigs:          inputConfigs,
 		Outputs:               outputs,
 		OutputsMatchCount:     outputsMatchCount,
 		RingQueueIn:           ringQueueIn,
