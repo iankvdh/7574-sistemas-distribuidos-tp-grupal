@@ -1,10 +1,3 @@
-// Package aggregator_q2 implementa la segunda etapa de Query 2. Recibe del
-// exchange `q2_agg_input` (shardeado por cliente) dos clases de ítems:
-// Q2PartialMaxItem emitidos por max_q2 y Q2BankNameItem emitidos por
-// bank_aggregator. Mantiene por cliente el máximo global por banco y el
-// catálogo BankID→BankName. Cuando llegan EXPECTED_PARTIAL_EOFS upstream EOFs
-// (N_MAX_Q2 + N_BANK_AGGREGATORS) hace el join y publica Q2ResultItem al
-// exchange `results` con sharding por cliente para el final_joiner.
 package aggregator_q2
 
 import (
