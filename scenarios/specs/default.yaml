@@ -97,25 +97,35 @@ workers:
     volumes:
       - ./results:/results
 
-  - name: scatter_agg_q4
-    strategy: scatter_agg_q4
+  - name: sharder_q4
+    strategy: sharder_q4
     replicas: 1
     input: queue:period1_usd_for_drain
     outputs:
       - direct_exchange:q4_account_shards
     env:
+      K_SUSPICIOUS_FILTERS: "1"
+
+  - name: suspicious_account_filter
+    strategy: suspicious_account_filter
+    replicas: 1
+    input: direct_exchange:q4_account_shards:0
+    outputs:
+      - direct_exchange:q4_suspicious_account_shards
+    env:
+      N_SHARDERS: "1"
       K_PATH_FINDERS: "1"
-      MIN_SCATTER_DESTS: "5"
+      SUSPICIOUS_THRESHOLD: "5"
 
   - name: path_finder_q4
     strategy: path_finder_q4
     replicas: 1
-    input: direct_exchange:q4_account_shards:0
+    input: direct_exchange:q4_suspicious_account_shards:0
     outputs:
       - direct_exchange:q4_pair_shards
     env:
       K_COUNTERS: "1"
-      N_SHARDERS: "1"
+      N_SUSPICIOUS_FILTERS: "1"
 
   - name: counter_q4
     strategy: counter_q4

@@ -76,8 +76,7 @@ func TestQuery4Rows(t *testing.T) {
 
 	got := Query4Rows(txs)
 	want := []string{
-		"1,SRC",
-		"9,DST",
+		"1,SRC,9,DST",
 	}
 
 	if !reflect.DeepEqual(got, want) {

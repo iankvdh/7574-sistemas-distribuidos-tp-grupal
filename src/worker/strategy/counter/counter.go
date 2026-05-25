@@ -100,30 +100,29 @@ func (c *Counter) ProcessMessage(envelope *inner.Envelope) ([]strategy.OutputMes
 	ps.emitted = true
 	ps.intermediaries = nil
 
+	pair := &inner.Query4Pair{
+		SourceBank:    source.Bank,
+		SourceAccount: source.Account,
+		DestBank:      dest.Bank,
+		DestAccount:   dest.Account,
+	}
+	body, err := inner.SerializeQuery4Pair(pair)
+	if err != nil {
+		return nil, strategy.LocalCounts{}, fmt.Errorf("serialize query4 pair: %w", err)
+	}
+
 	qid := envelope.QueryID
 	if qid == 0 {
 		qid = 4
 	}
-	rk := c.routingKeyFor(envelope.ClientID)
-	outputs := make([]strategy.OutputMessage, 0, 2)
-	for _, acc := range []inner.Query4Account{
-		{Bank: source.Bank, Account: source.Account},
-		{Bank: dest.Bank, Account: dest.Account},
-	} {
-		body, err := inner.SerializeQuery4Account(&acc)
-		if err != nil {
-			return nil, strategy.LocalCounts{}, fmt.Errorf("serialize query4 account: %w", err)
-		}
-		outputs = append(outputs, strategy.OutputMessage{
-			OutputIndices: []int{0},
-			Body:          body,
-			ClientID:      envelope.ClientID,
-			RoutingKey:    rk,
-			BatchItemKind: inner.Query4AccountItem,
-			BatchQueryID:  qid,
-		})
-	}
-	return outputs, strategy.LocalCounts{Processed: 1, Matched: 1}, nil
+	return []strategy.OutputMessage{{
+		OutputIndices: []int{0},
+		Body:          body,
+		ClientID:      envelope.ClientID,
+		RoutingKey:    c.routingKeyFor(envelope.ClientID),
+		BatchItemKind: inner.Query4PairItem,
+		BatchQueryID:  qid,
+	}}, strategy.LocalCounts{Processed: 1, Matched: 1}, nil
 }
 
 func (c *Counter) OnUpstreamEOF(envelope *inner.Envelope) (strategy.EOFOutcome, error) {

@@ -18,7 +18,7 @@ var queryHeaders = map[uint8]string{
 	1: "From Bank,Account,To Bank,Account.1,Amount Paid",
 	2: "From Bank,Account,Bank Name,Amount Paid",
 	3: "From Bank,Account,Payment Format,Amount Paid",
-	4: "Bank,Account",
+	4: "From Bank,Account,To Bank,Account.1",
 	5: "count",
 }
 
