@@ -797,7 +797,6 @@ services:
       - OUTPUTS_MATCH_COUNT=0
       - OUTPUT_0=direct_exchange:q4_suspicious_account_shards
       - LOG_LEVEL=info
-      - GODEBUG=madvdontneed=1
       - K_PATH_FINDERS=4
       - N_SHARDERS=4
       - SUSPICIOUS_THRESHOLD=5
@@ -814,7 +813,6 @@ services:
       - OUTPUTS_MATCH_COUNT=0
       - OUTPUT_0=direct_exchange:q4_suspicious_account_shards
       - LOG_LEVEL=info
-      - GODEBUG=madvdontneed=1
       - K_PATH_FINDERS=4
       - N_SHARDERS=4
       - SUSPICIOUS_THRESHOLD=5
@@ -831,7 +829,6 @@ services:
       - OUTPUTS_MATCH_COUNT=0
       - OUTPUT_0=direct_exchange:q4_suspicious_account_shards
       - LOG_LEVEL=info
-      - GODEBUG=madvdontneed=1
       - K_PATH_FINDERS=4
       - N_SHARDERS=4
       - SUSPICIOUS_THRESHOLD=5
@@ -848,7 +845,6 @@ services:
       - OUTPUTS_MATCH_COUNT=0
       - OUTPUT_0=direct_exchange:q4_suspicious_account_shards
       - LOG_LEVEL=info
-      - GODEBUG=madvdontneed=1
       - K_PATH_FINDERS=4
       - N_SHARDERS=4
       - SUSPICIOUS_THRESHOLD=5

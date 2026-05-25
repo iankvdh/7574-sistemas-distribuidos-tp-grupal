@@ -1,20 +1,8 @@
-// Package suspicious_filter implementa la etapa intermedia entre sharder_q4 y
-// path_finder_q4. Recibe ShardedTx (mismo formato que emite el Sharder) y
-// mantiene, por cliente y por cuenta X, dos conjuntos: outAccounts (cuentas a
-// las que X envió) e inAccounts (cuentas de las que X recibió). Cuando uno de
-// los conjuntos llega a SUSPICIOUS_THRESHOLD elementos, X se marca como
-// "suspicious" en esa dirección y todas las ShardedTx involucradas se
-// reenvían al path_finder con el flag ShardedBySource invertido — para que el
-// path_finder responsable de la cuenta peer las consuma. Las ShardedTx que no
-// disparan el umbral se descartan.
-//
-// EOFs: cada réplica espera N_SHARDERS EOFs upstream (vía
-// JoinerAccumulateCoordinator) y emite un EOF a cada una de las
-// K_PATH_FINDERS réplicas downstream.
 package suspicious_filter
 
 import (
 	"fmt"
+	"runtime"
 	"strconv"
 
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/env"
@@ -26,7 +14,7 @@ import (
 
 const (
 	queryID                    uint8 = 4
-	defaultSuspiciousThreshold       = 5
+	defaultSuspiciousThreshold int   = 5
 )
 
 type accountKey struct {
@@ -211,6 +199,7 @@ func (s *SuspiciousFilter) OnUpstreamEOF(envelope *inner.Envelope) (strategy.EOF
 		return strategy.EOFOutcome{Action: action}, nil
 	}
 	delete(s.state, envelope.ClientID)
+	runtime.GC()
 	return strategy.EOFOutcome{
 		Action: eof.Action{Kind: eof.ActionEmitEOFs},
 		EOFs:   s.buildEOFEmits(),

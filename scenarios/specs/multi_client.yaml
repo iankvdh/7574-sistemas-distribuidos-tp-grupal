@@ -122,7 +122,6 @@ workers:
       N_SHARDERS: "3"
       K_PATH_FINDERS: "3"
       SUSPICIOUS_THRESHOLD: "5"
-      GODEBUG: madvdontneed=1
 
   - name: path_finder_q4
     strategy: path_finder_q4
