@@ -20,6 +20,9 @@ services:
       counter_q4: { condition: service_started }
       drain_period2_usd: { condition: service_started }
       drain_usd_joined: { condition: service_started }
+      max_q2: { condition: service_started }
+      bank_aggregator: { condition: service_started }
+      aggregator_q2: { condition: service_started }
       final_joiner: { condition: service_started }
     env_file:
       - .env
@@ -34,7 +37,7 @@ services:
       - BACKOFF_BASE_MS=200
       - BACKOFF_MAX_MS=3000
       - RESULTS_DIR=/results
-      - EXPECTED_QUERY_EOFS=2
+      - EXPECTED_QUERY_EOFS=3
       - LOG_LEVEL=info
     volumes:
       - ./datasets:/datasets
@@ -51,7 +54,7 @@ services:
       - GATEWAY_ID=1
       - SERVER_HOST=0.0.0.0
       - SERVER_PORT=5678
-      - EXPECTED_QUERY_EOFS=2
+      - EXPECTED_QUERY_EOFS=3
       - LOG_LEVEL=info
   filter_period1:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
@@ -147,6 +150,7 @@ services:
       - INPUT=queue:joiner_usd_input_0
       - OUTPUTS_MATCH_COUNT=0
       - OUTPUT_0=direct_exchange:usd
+      - OUTPUT_1=queue:q2_input
       - LOG_LEVEL=info
       - EXPECTED_EOFS=3
   filter_amount_lt_50:
@@ -282,6 +286,49 @@ services:
       - DRAIN_OUTPUT_FILE=/results/drain_usd_joined.csv
     volumes:
       - ./results:/results
+  max_q2:
+    build: { context: ./src/, dockerfile: worker/Dockerfile }
+    depends_on: { rabbitmq: { condition: service_healthy } }
+    env_file:
+      - .env
+    environment:
+      - STRATEGY=max_q2
+      - REPLICA_ID=0
+      - N_REPLICAS=1
+      - INPUT=queue:q2_input
+      - OUTPUTS_MATCH_COUNT=0
+      - OUTPUT_0=direct_exchange:q2_agg_input
+      - LOG_LEVEL=info
+      - K_AGGREGATORS_Q2=1
+  bank_aggregator:
+    build: { context: ./src/, dockerfile: worker/Dockerfile }
+    depends_on: { rabbitmq: { condition: service_healthy } }
+    env_file:
+      - .env
+    environment:
+      - STRATEGY=bank_aggregator
+      - REPLICA_ID=0
+      - N_REPLICAS=1
+      - INPUT=queue:all_accounts
+      - OUTPUTS_MATCH_COUNT=0
+      - OUTPUT_0=direct_exchange:q2_agg_input
+      - LOG_LEVEL=info
+      - K_AGGREGATORS_Q2=1
+  aggregator_q2:
+    build: { context: ./src/, dockerfile: worker/Dockerfile }
+    depends_on: { rabbitmq: { condition: service_healthy } }
+    env_file:
+      - .env
+    environment:
+      - STRATEGY=aggregator_q2
+      - REPLICA_ID=0
+      - N_REPLICAS=1
+      - INPUT=direct_exchange:q2_agg_input:0
+      - OUTPUTS_MATCH_COUNT=0
+      - OUTPUT_0=direct_exchange:results
+      - LOG_LEVEL=info
+      - EXPECTED_PARTIAL_EOFS=2
+      - N_FINAL_JOINERS=1
   final_joiner:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
     depends_on: { rabbitmq: { condition: service_healthy } }
@@ -296,6 +343,7 @@ services:
       - OUTPUT_0=final_queue:final_1
       - LOG_LEVEL=info
       - EXPECTED_EOFS_Q1=1
+      - EXPECTED_EOFS_Q2=1
       - EXPECTED_EOFS_Q4=1
   rabbitmq:
     build: { context: ./src/rabbitmq, dockerfile: Dockerfile }

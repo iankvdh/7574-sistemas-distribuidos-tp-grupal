@@ -13,10 +13,20 @@ import (
 // for queries you want disabled in the test.
 func newInited(t *testing.T, expectedQ1, expectedQ4, outputCount int) *FinalJoiner {
 	t.Helper()
+	return newInitedWithQ2(t, expectedQ1, 0, expectedQ4, outputCount)
+}
+
+func newInitedWithQ2(t *testing.T, expectedQ1, expectedQ2, expectedQ4, outputCount int) *FinalJoiner {
+	t.Helper()
 	if expectedQ1 > 0 {
 		t.Setenv("EXPECTED_EOFS_Q1", itoa(expectedQ1))
 	} else {
 		os.Unsetenv("EXPECTED_EOFS_Q1")
+	}
+	if expectedQ2 > 0 {
+		t.Setenv("EXPECTED_EOFS_Q2", itoa(expectedQ2))
+	} else {
+		os.Unsetenv("EXPECTED_EOFS_Q2")
 	}
 	if expectedQ4 > 0 {
 		t.Setenv("EXPECTED_EOFS_Q4", itoa(expectedQ4))
@@ -89,6 +99,36 @@ func TestFinalJoinerProcessQ1FormatsRow(t *testing.T) {
 		t.Fatalf("OutputIndices: %v want [0]", o.OutputIndices)
 	}
 	if string(o.Body) != "11,ACC-A,12,ACC-B,42.50" {
+		t.Fatalf("unexpected row: %q", string(o.Body))
+	}
+}
+
+func TestFinalJoinerProcessQ2FormatsRow(t *testing.T) {
+	j := newInitedWithQ2(t, 0, 1, 0, 1)
+
+	res := &inner.Q2Result{BankID: 11, BankName: "Banco Galicia", FromAccount: "ACC-7", MaxAmount: 1234.5}
+	payload, _ := inner.SerializeQ2Result(res)
+	out, counts, err := j.ProcessMessage(&inner.Envelope{
+		Kind:      inner.Q2ResultItem,
+		ClientID:  "c-1",
+		GatewayID: 1,
+		QueryID:   2,
+		Payload:   payload,
+	})
+	if err != nil {
+		t.Fatalf("ProcessMessage: %v", err)
+	}
+	if counts.Processed != 1 || counts.Matched != 1 {
+		t.Fatalf("counts mismatch: %+v", counts)
+	}
+	if len(out) != 1 {
+		t.Fatalf("expected 1 OutputMessage, got %d", len(out))
+	}
+	o := out[0]
+	if o.BatchQueryID != 2 {
+		t.Fatalf("BatchQueryID: got %d want 2", o.BatchQueryID)
+	}
+	if string(o.Body) != "11,ACC-7,Banco Galicia,1234.50" {
 		t.Fatalf("unexpected row: %q", string(o.Body))
 	}
 }
