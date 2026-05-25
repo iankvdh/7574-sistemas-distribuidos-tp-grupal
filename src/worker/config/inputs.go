@@ -14,9 +14,6 @@ type InputConfig struct {
 	RoutingKey string
 }
 
-// ParseInput parses the legacy single-input form (env var "INPUT"). Kept as a
-// helper so callers that only ever consume one input (tests, single-input
-// strategies) can continue to ignore the slice-based API.
 func ParseInput(raw string) (InputConfig, error) {
 	if raw == "" {
 		return InputConfig{}, fmt.Errorf("INPUT environment variable is required")
@@ -35,9 +32,6 @@ func ParseInput(raw string) (InputConfig, error) {
 	}, nil
 }
 
-// ParseInputs reads INPUT_<i> env vars (sorted by index) and falls back to the
-// legacy single-input INPUT when no indexed inputs are defined. Mixing both
-// forms is an error.
 func ParseInputs() ([]InputConfig, error) {
 	indices := collectInputIndices()
 	legacy := os.Getenv("INPUT")

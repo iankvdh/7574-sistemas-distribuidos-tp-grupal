@@ -83,18 +83,13 @@ var (
 )
 
 type Envelope struct {
-	GatewayID GatewayID `json:"g,omitempty"`
-	ClientID  ClientID  `json:"c"`
-	Kind      MsgKind   `json:"k"`
-	Total     uint32    `json:"t,omitempty"`
-	QueryID   uint8     `json:"q,omitempty"`
-	Payload   []byte    `json:"p,omitempty"`
-
-	// InputIndex is set by the worker runtime to the index of the input the
-	// envelope was consumed from (0 when there is a single input). It is not
-	// serialized on the wire; strategies can read it to distinguish streams
-	// when the worker has multiple INPUTs.
-	InputIndex int `json:"-"`
+	GatewayID  GatewayID `json:"g,omitempty"`
+	ClientID   ClientID  `json:"c"`
+	Kind       MsgKind   `json:"k"`
+	Total      uint32    `json:"t,omitempty"`
+	QueryID    uint8     `json:"q,omitempty"`
+	Payload    []byte    `json:"p,omitempty"`
+	InputIndex int       `json:"-"`
 }
 
 // QueryResultItem is an item within a FinalQueryResultBatch: a CSV or "EOF" row.

@@ -7,9 +7,6 @@ import (
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/messageprotocol/external/serializer"
 )
 
-// Q3PartialAvg es un parcial emitido por una réplica de sum_q3 al
-// cierre del ring: suma y count de los montos USD de Period 1 observados
-// localmente para un payment_format dado.
 type Q3PartialAvg struct {
 	PaymentFormat string
 	Sum           float64
@@ -49,8 +46,6 @@ func DeserializeQ3PartialAvg(payload []byte) (*Q3PartialAvg, error) {
 	}, nil
 }
 
-// Q3Average es el promedio global por payment_format emitido por
-// aggregator_q3 hacia las réplicas de filter_q3 (broadcast).
 type Q3Average struct {
 	PaymentFormat string
 	Average       float64
@@ -83,9 +78,6 @@ func DeserializeQ3Average(payload []byte) (*Q3Average, error) {
 	}, nil
 }
 
-// Query3Row es la fila final de Q3 emitida por filter_q3 hacia el final_joiner:
-// transacciones de Period 2 USD cuyo monto es < (1/100) del promedio de Period 1
-// USD para el mismo payment_format.
 type Query3Row struct {
 	SourceBank    uint32
 	SourceAccount string
