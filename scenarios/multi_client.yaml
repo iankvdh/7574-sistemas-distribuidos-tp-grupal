@@ -1004,6 +1004,7 @@ services:
       - OUTPUTS_MATCH_COUNT=0
       - OUTPUT_0=direct_exchange:results
       - LOG_LEVEL=info
+      - AMOUNT_THRESHOLD_PCT=0.01
       - BUFFER_DIR=/tmp
       - N_FINAL_JOINERS=2
   final_joiner_0:

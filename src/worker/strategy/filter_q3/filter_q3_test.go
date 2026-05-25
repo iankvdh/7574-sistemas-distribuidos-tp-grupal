@@ -199,7 +199,7 @@ func TestN1_AveragesFirst(t *testing.T) {
 	if len(outcome.EOFs) != 1 || outcome.EOFs[0].QueryID != queryID {
 		t.Fatalf("unexpected EOFs: %+v", outcome.EOFs)
 	}
-	drained := drain(outcome.OutputsSeq)
+	drained := drain(outcome.OutputsIterator)
 	if len(drained) != 0 {
 		t.Fatalf("expected empty drain (no spill), got %d", len(drained))
 	}
@@ -211,9 +211,9 @@ func TestN1_P2First(t *testing.T) {
 	f := newFilter(t, 0, 1)
 
 	// 3 txs sin averages: van al spill.
-	feedTx(t, f, makeTx("WIRE", 5.0))   // pasa (< 1000/100 = 10)
-	feedTx(t, f, makeTx("WIRE", 50.0))  // no pasa (>= 10)
-	feedTx(t, f, makeTx("CHECK", 3.0))  // pasa (< 800/100 = 8)
+	feedTx(t, f, makeTx("WIRE", 5.0))  // pasa (< 1000/100 = 10)
+	feedTx(t, f, makeTx("WIRE", 50.0)) // no pasa (>= 10)
+	feedTx(t, f, makeTx("CHECK", 3.0)) // pasa (< 800/100 = 8)
 
 	// EOF P2 sin averages: ring n=1 → ActionEmitEOFs en el coordinator,
 	// pero como avgEOFDone=false, handleRingAction degrada a ActionNone.
@@ -230,7 +230,7 @@ func TestN1_P2First(t *testing.T) {
 		t.Fatalf("avg EOF after P2: want ActionEmitEOFs, got %v", outcome.Action.Kind)
 	}
 
-	drained := drain(outcome.OutputsSeq)
+	drained := drain(outcome.OutputsIterator)
 	if len(drained) != 2 {
 		t.Fatalf("expected 2 drained matches, got %d", len(drained))
 	}
@@ -394,7 +394,7 @@ func TestN3_RingClosesBeforeAverages(t *testing.T) {
 		if out.Action.Kind != eof.ActionEmitEOFs {
 			t.Fatalf("avg EOF after ring close: want ActionEmitEOFs, got %v", out.Action.Kind)
 		}
-		drained := drain(out.OutputsSeq)
+		drained := drain(out.OutputsIterator)
 		// f2 tiene 50.0 que no pasa el filtro; los demás emiten 1 match c/u.
 		_ = drained
 	}
@@ -404,11 +404,11 @@ func TestN3_RingClosesBeforeAverages(t *testing.T) {
 // drenar; sólo se emiten las que pasan.
 func TestSpillDrainFilters(t *testing.T) {
 	f := newFilter(t, 0, 1)
-	feedTx(t, f, makeTx("WIRE", 5.0))   // match (< 10)
-	feedTx(t, f, makeTx("WIRE", 12.0))  // no match (>= 10)
-	feedTx(t, f, makeTx("CHECK", 7.0))  // match (< 800/100 = 8)
-	feedTx(t, f, makeTx("CHECK", 9.0))  // no match
-	feedTx(t, f, makeTx("CARD", 1.0))   // sin avg → no match
+	feedTx(t, f, makeTx("WIRE", 5.0))  // match (< 10)
+	feedTx(t, f, makeTx("WIRE", 12.0)) // no match (>= 10)
+	feedTx(t, f, makeTx("CHECK", 7.0)) // match (< 800/100 = 8)
+	feedTx(t, f, makeTx("CHECK", 9.0)) // no match
+	feedTx(t, f, makeTx("CARD", 1.0))  // sin avg → no match
 
 	feedAvg(t, f, "WIRE", 1000.0)
 	feedAvg(t, f, "CHECK", 800.0)
@@ -421,7 +421,7 @@ func TestSpillDrainFilters(t *testing.T) {
 		t.Fatalf("P2 EOF: want ActionEmitEOFs, got %v", outcome.Action.Kind)
 	}
 
-	drained := drain(outcome.OutputsSeq)
+	drained := drain(outcome.OutputsIterator)
 	if len(drained) != 2 {
 		t.Fatalf("expected 2 matches from drain, got %d", len(drained))
 	}
