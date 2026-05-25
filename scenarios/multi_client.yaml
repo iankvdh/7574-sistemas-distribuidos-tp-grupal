@@ -954,7 +954,7 @@ services:
       - OUTPUTS_MATCH_COUNT=0
       - OUTPUT_0=direct_exchange:results
       - LOG_LEVEL=info
-      - EXPECTED_PARTIAL_EOFS=6
+      - EXPECTED_PARTIAL_EOFS=4
       - N_FINAL_JOINERS=2
   aggregator_q2_1:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
@@ -969,7 +969,7 @@ services:
       - OUTPUTS_MATCH_COUNT=0
       - OUTPUT_0=direct_exchange:results
       - LOG_LEVEL=info
-      - EXPECTED_PARTIAL_EOFS=6
+      - EXPECTED_PARTIAL_EOFS=4
       - N_FINAL_JOINERS=2
   final_joiner_0:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
@@ -985,7 +985,7 @@ services:
       - OUTPUT_0=final_queue:final_1
       - OUTPUT_1=final_queue:final_2
       - LOG_LEVEL=info
-      - EXPECTED_EOFS_Q1=3
+      - EXPECTED_EOFS_Q1=1
       - EXPECTED_EOFS_Q2=1
       - EXPECTED_EOFS_Q4=3
   final_joiner_1:
@@ -1002,7 +1002,7 @@ services:
       - OUTPUT_0=final_queue:final_1
       - OUTPUT_1=final_queue:final_2
       - LOG_LEVEL=info
-      - EXPECTED_EOFS_Q1=3
+      - EXPECTED_EOFS_Q1=1
       - EXPECTED_EOFS_Q2=1
       - EXPECTED_EOFS_Q4=3
   rabbitmq:
