@@ -1,12 +1,3 @@
-// Package max_q2 implementa la primera etapa de Query 2 (Máximos por Entidad
-// Bancaria). Cada réplica mantiene, por (clientID, FromBank), el monto máximo
-// observado y la cuenta emisora asociada mientras consume transacciones USD.
-// Al recibir el EOF upstream se coordina vía ring broadcast con las demás
-// réplicas para validar que la suma de procesados coincide con el total
-// upstream; en el cierre del ring, cada réplica flushea su tabla parcial al
-// exchange `q2_agg_input` shardeado por cliente, junto con un EOF al mismo
-// shard. El aggregator_q2 espera N_MAX_Q2 + N_BANK_AGGREGATORS EOFs por
-// cliente para cerrar.
 package max_q2
 
 import (
@@ -37,7 +28,6 @@ type MaxQ2 struct {
 	cfg             strategy.StrategyConfig
 	kAggregators    int
 	ringCoordinator *eof.RingCoordinator
-	accumulator     *eof.JoinerAccumulateCoordinator
 	state           map[inner.ClientID]*clientState
 	rkCache         []string
 }
@@ -62,14 +52,10 @@ func (m *MaxQ2) Init(cfg strategy.StrategyConfig) error {
 	m.cfg = cfg
 	m.kAggregators = k
 	m.rkCache = make([]string, k)
-	for i := 0; i < k; i++ {
+	for i := range k {
 		m.rkCache[i] = strconv.Itoa(i)
 	}
-	if cfg.NReplicas > 1 {
-		m.ringCoordinator = eof.NewBroadcastRingCoordinator(cfg.ReplicaID, cfg.NReplicas)
-	} else {
-		m.accumulator = eof.NewJoinerAccumulateCoordinator(1, 1)
-	}
+	m.ringCoordinator = eof.NewBroadcastRingCoordinator(cfg.ReplicaID, cfg.NReplicas)
 	return nil
 }
 
@@ -93,19 +79,12 @@ func (m *MaxQ2) ProcessMessage(envelope *inner.Envelope) ([]strategy.OutputMessa
 }
 
 func (m *MaxQ2) OnUpstreamEOF(envelope *inner.Envelope) (strategy.EOFOutcome, error) {
-	if m.ringCoordinator != nil {
-		st := m.stateFor(envelope.ClientID)
-		action, _ := m.ringCoordinator.OnUpstreamEOF(envelope.ClientID, envelope.Total, st.processed, 0)
-		return m.outcomeFor(envelope.ClientID, action), nil
-	}
-	action := m.accumulator.OnUpstreamEOF(envelope.ClientID, envelope.Total)
+	st := m.stateFor(envelope.ClientID)
+	action, _ := m.ringCoordinator.OnUpstreamEOF(envelope.ClientID, envelope.Total, st.processed, 0)
 	return m.outcomeFor(envelope.ClientID, action), nil
 }
 
 func (m *MaxQ2) OnRingToken(token *eof.Token) (strategy.EOFOutcome, error) {
-	if m.ringCoordinator == nil {
-		return strategy.EOFOutcome{Action: eof.Action{Kind: eof.ActionNone}}, nil
-	}
 	st := m.stateFor(token.ClientID)
 	action, _ := m.ringCoordinator.OnRingToken(token, st.processed, 0)
 	return m.outcomeFor(token.ClientID, action), nil
