@@ -65,18 +65,24 @@ func TestCounterEmitsAtThreshold(t *testing.T) {
 	if out := feedPath(t, c, 1, "A", 9, "M2", 2, "B"); len(out) != 0 {
 		t.Fatalf("2nd interm: expected 0 outputs, got %d", len(out))
 	}
-	// 3rd intermediary → emit A and B
+	// 3rd intermediary → emit the (A,B) pair
 	out := feedPath(t, c, 1, "A", 9, "M3", 2, "B")
-	if len(out) != 2 {
-		t.Fatalf("3rd interm: expected 2 outputs (A and B), got %d", len(out))
+	if len(out) != 1 {
+		t.Fatalf("3rd interm: expected 1 output (pair A→B), got %d", len(out))
 	}
-	for _, o := range out {
-		if o.BatchItemKind != inner.Query4AccountItem {
-			t.Fatalf("expected Query4AccountItem, got %d", o.BatchItemKind)
-		}
-		if o.BatchQueryID != 4 {
-			t.Fatalf("expected BatchQueryID=4, got %d", o.BatchQueryID)
-		}
+	o := out[0]
+	if o.BatchItemKind != inner.Query4PairItem {
+		t.Fatalf("expected Query4PairItem, got %d", o.BatchItemKind)
+	}
+	if o.BatchQueryID != 4 {
+		t.Fatalf("expected BatchQueryID=4, got %d", o.BatchQueryID)
+	}
+	pair, err := inner.DeserializeQuery4Pair(o.Body)
+	if err != nil {
+		t.Fatalf("deserialize pair: %v", err)
+	}
+	if pair.SourceBank != 1 || pair.SourceAccount != "A" || pair.DestBank != 2 || pair.DestAccount != "B" {
+		t.Fatalf("unexpected pair payload: %+v", pair)
 	}
 }
 
@@ -86,8 +92,8 @@ func TestCounterDoesNotReemitAfterThreshold(t *testing.T) {
 
 	feedPath(t, c, 1, "A", 9, "M1", 2, "B")
 	feedPath(t, c, 1, "A", 9, "M2", 2, "B")
-	if out := feedPath(t, c, 1, "A", 9, "M3", 2, "B"); len(out) != 2 {
-		t.Fatalf("threshold: expected 2 outputs, got %d", len(out))
+	if out := feedPath(t, c, 1, "A", 9, "M3", 2, "B"); len(out) != 1 {
+		t.Fatalf("threshold: expected 1 output, got %d", len(out))
 	}
 	// extra paths for the same pair must not re-emit
 	if out := feedPath(t, c, 1, "A", 9, "M4", 2, "B"); len(out) != 0 {
@@ -108,8 +114,8 @@ func TestCounterDuplicateIntermediaryNotCounted(t *testing.T) {
 		t.Fatalf("duplicate M: should not emit yet, got %d", len(out))
 	}
 	// 3rd distinct M → emit
-	if out := feedPath(t, c, 1, "A", 9, "M3", 2, "B"); len(out) != 2 {
-		t.Fatalf("3rd distinct M: expected 2 outputs, got %d", len(out))
+	if out := feedPath(t, c, 1, "A", 9, "M3", 2, "B"); len(out) != 1 {
+		t.Fatalf("3rd distinct M: expected 1 output, got %d", len(out))
 	}
 }
 
