@@ -5,8 +5,8 @@
 clients: 2
 gateways: 2
 log_level: info
-# Q1, Q2 y Q4 implementadas en la pipeline distribuida.
-expected_query_eofs: 3
+# Q1, Q2, Q3 y Q4 implementadas en la pipeline distribuida.
+expected_query_eofs: 4
 transactions: /datasets/LI-Small_Trans.csv
 accounts: /datasets/LI-Small_accounts.csv
 
@@ -33,10 +33,11 @@ workers:
     strategy: filter_currency_usd_p1
     replicas: 4
     input: queue:period1_for_currency_usd_p1
-    match_count: 2
+    match_count: 3
     outputs:
       - queue:period1_usd_for_drain
       - sharded_queues:joiner_usd_input:4
+      - queue:q3_p1_usd                              # NEW: P1 USD para average_local_q3
 
   - name: filter_period2
     strategy: filter_period2
@@ -51,10 +52,11 @@ workers:
     strategy: filter_currency_usd_p2
     replicas: 4
     input: queue:period2_transactions
-    match_count: 2
+    match_count: 3
     outputs:
       - queue:period2_usd_for_drain
       - sharded_queues:joiner_usd_input:4
+      - queue:q3_filter_input                        # NEW: P2 USD para filter_q3
 
   - name: filter_currency_usd_other_periods
     strategy: filter_currency_usd_other_periods
@@ -188,6 +190,36 @@ workers:
       EXPECTED_PARTIAL_EOFS: "8" # = N_REPLICAS de max_q2 + N_REPLICAS de bank_aggregator
       N_FINAL_JOINERS: "2"
 
+  - name: average_local_q3
+    strategy: average_local_q3
+    replicas: 4
+    input: queue:q3_p1_usd
+    outputs:
+      - direct_exchange:q3_avg_global_input
+    env:
+      K_AGGREGATORS_Q3: "1"
+
+  - name: average_global_q3
+    strategy: average_global_q3
+    replicas: 1
+    input: direct_exchange:q3_avg_global_input:0
+    outputs:
+      - queue:q3_filter_input
+    env:
+      EXPECTED_PARTIAL_EOFS: "4"   # = N_REPLICAS de average_local_q3
+      N_FILTER_Q3: "1"             # = N_REPLICAS de filter_q3
+
+  - name: filter_q3
+    strategy: filter_q3
+    replicas: 1
+    input: queue:q3_filter_input
+    outputs:
+      - direct_exchange:results
+    env:
+      EXPECTED_PARTIAL_EOFS: "2"   # 1 de average_global_q3 + 1 de filter_currency_usd_p2 (ring initiator)
+      N_FINAL_JOINERS: "2"
+      BUFFER_DIR: "/tmp"
+
   - name: final_joiner
     strategy: final_joiner
     replicas: 2
@@ -198,4 +230,5 @@ workers:
     env:
       EXPECTED_EOFS_Q1: "1"      # solo el initiator del ring de sharder_q1 emite EOF
       EXPECTED_EOFS_Q2: "1"      # aggregator_q2 está shardeado por cliente; sólo 1 emite por cliente
+      EXPECTED_EOFS_Q3: "1"      # = N_REPLICAS de filter_q3
       EXPECTED_EOFS_Q4: "4"      # = K_COUNTERS (replicas de counter_q4)
