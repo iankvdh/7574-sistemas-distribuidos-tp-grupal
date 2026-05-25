@@ -5,8 +5,8 @@
 clients: 2
 gateways: 2
 log_level: info
-# Q1 y Q4 únicas implementadas en la pipeline distribuida.
-expected_query_eofs: 2
+# Q1, Q2 y Q4 implementadas en la pipeline distribuida.
+expected_query_eofs: 3
 transactions: /datasets/LI-Small_Trans.csv
 accounts: /datasets/LI-Small_accounts.csv
 
@@ -71,6 +71,7 @@ workers:
     outputs:
       - queue:usd_for_amount_lt_50
       - queue:usd_for_drain
+      - queue:q2_input
     env:
       EXPECTED_EOFS: "3"
 
@@ -149,6 +150,34 @@ workers:
     volumes:
       - ./results:/results
 
+  - name: max_q2
+    strategy: max_q2
+    replicas: 4
+    input: queue:q2_input
+    outputs:
+      - direct_exchange:q2_agg_input
+    env:
+      K_AGGREGATORS_Q2: "2"
+
+  - name: bank_aggregator
+    strategy: bank_aggregator
+    replicas: 4
+    input: queue:all_accounts
+    outputs:
+      - direct_exchange:q2_agg_input
+    env:
+      K_AGGREGATORS_Q2: "2"
+
+  - name: aggregator_q2
+    strategy: aggregator_q2
+    replicas: 2
+    input: direct_exchange:q2_agg_input:{REPLICA_ID}
+    outputs:
+      - direct_exchange:results
+    env:
+      EXPECTED_PARTIAL_EOFS: "8" # = N_REPLICAS de max_q2 + N_REPLICAS de bank_aggregator
+      N_FINAL_JOINERS: "2"
+
   - name: final_joiner
     strategy: final_joiner
     replicas: 2
@@ -158,4 +187,5 @@ workers:
       - final_queue:final_2
     env:
       EXPECTED_EOFS_Q1: "4"      # = N_REPLICAS de sharder_q1
+      EXPECTED_EOFS_Q2: "1"      # aggregator_q2 está shardeado por cliente; sólo 1 emite por cliente
       EXPECTED_EOFS_Q4: "4"      # = K_COUNTERS (replicas de counter_q4)

@@ -8,9 +8,6 @@ services:
       filter_period1_0: { condition: service_started }
       filter_period1_1: { condition: service_started }
       filter_period1_2: { condition: service_started }
-      filter_wire_ach_0: { condition: service_started }
-      filter_wire_ach_1: { condition: service_started }
-      filter_wire_ach_2: { condition: service_started }
       filter_currency_usd_p1_0: { condition: service_started }
       filter_currency_usd_p1_1: { condition: service_started }
       filter_currency_usd_p1_2: { condition: service_started }
@@ -26,22 +23,6 @@ services:
       joiner_usd_0: { condition: service_started }
       joiner_usd_1: { condition: service_started }
       joiner_usd_2: { condition: service_started }
-      filter_amount_lt_50_0: { condition: service_started }
-      filter_amount_lt_50_1: { condition: service_started }
-      filter_amount_lt_50_2: { condition: service_started }
-      sharder_q1_0: { condition: service_started }
-      sharder_q1_1: { condition: service_started }
-      sharder_q1_2: { condition: service_started }
-      drain_period1_wire_ach: { condition: service_started }
-      scatter_agg_q4: { condition: service_started }
-      path_finder_q4_0: { condition: service_started }
-      path_finder_q4_1: { condition: service_started }
-      path_finder_q4_2: { condition: service_started }
-      counter_q4_0: { condition: service_started }
-      counter_q4_1: { condition: service_started }
-      counter_q4_2: { condition: service_started }
-      drain_period2_usd: { condition: service_started }
-      drain_usd_joined: { condition: service_started }
       max_q2_0: { condition: service_started }
       max_q2_1: { condition: service_started }
       max_q2_2: { condition: service_started }
@@ -65,7 +46,7 @@ services:
       - BACKOFF_BASE_MS=200
       - BACKOFF_MAX_MS=3000
       - RESULTS_DIR=/results
-      - EXPECTED_QUERY_EOFS=3
+      - EXPECTED_QUERY_EOFS=1
       - LOG_LEVEL=info
     volumes:
       - ./datasets:/datasets
@@ -79,9 +60,6 @@ services:
       filter_period1_0: { condition: service_started }
       filter_period1_1: { condition: service_started }
       filter_period1_2: { condition: service_started }
-      filter_wire_ach_0: { condition: service_started }
-      filter_wire_ach_1: { condition: service_started }
-      filter_wire_ach_2: { condition: service_started }
       filter_currency_usd_p1_0: { condition: service_started }
       filter_currency_usd_p1_1: { condition: service_started }
       filter_currency_usd_p1_2: { condition: service_started }
@@ -97,22 +75,6 @@ services:
       joiner_usd_0: { condition: service_started }
       joiner_usd_1: { condition: service_started }
       joiner_usd_2: { condition: service_started }
-      filter_amount_lt_50_0: { condition: service_started }
-      filter_amount_lt_50_1: { condition: service_started }
-      filter_amount_lt_50_2: { condition: service_started }
-      sharder_q1_0: { condition: service_started }
-      sharder_q1_1: { condition: service_started }
-      sharder_q1_2: { condition: service_started }
-      drain_period1_wire_ach: { condition: service_started }
-      scatter_agg_q4: { condition: service_started }
-      path_finder_q4_0: { condition: service_started }
-      path_finder_q4_1: { condition: service_started }
-      path_finder_q4_2: { condition: service_started }
-      counter_q4_0: { condition: service_started }
-      counter_q4_1: { condition: service_started }
-      counter_q4_2: { condition: service_started }
-      drain_period2_usd: { condition: service_started }
-      drain_usd_joined: { condition: service_started }
       max_q2_0: { condition: service_started }
       max_q2_1: { condition: service_started }
       max_q2_2: { condition: service_started }
@@ -136,7 +98,7 @@ services:
       - BACKOFF_BASE_MS=200
       - BACKOFF_MAX_MS=3000
       - RESULTS_DIR=/results
-      - EXPECTED_QUERY_EOFS=3
+      - EXPECTED_QUERY_EOFS=1
       - LOG_LEVEL=info
     volumes:
       - ./datasets:/datasets
@@ -153,7 +115,7 @@ services:
       - GATEWAY_ID=1
       - SERVER_HOST=0.0.0.0
       - SERVER_PORT=5678
-      - EXPECTED_QUERY_EOFS=3
+      - EXPECTED_QUERY_EOFS=1
       - LOG_LEVEL=info
   gateway_2:
     build: { context: ./src/, dockerfile: gateway/Dockerfile }
@@ -167,7 +129,7 @@ services:
       - GATEWAY_ID=2
       - SERVER_HOST=0.0.0.0
       - SERVER_PORT=5678
-      - EXPECTED_QUERY_EOFS=3
+      - EXPECTED_QUERY_EOFS=1
       - LOG_LEVEL=info
   filter_period1_0:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
@@ -179,10 +141,9 @@ services:
       - REPLICA_ID=0
       - N_REPLICAS=3
       - INPUT=queue:all_transactions
-      - OUTPUTS_MATCH_COUNT=2
-      - OUTPUT_0=queue:period1_for_wire_ach
-      - OUTPUT_1=queue:period1_for_currency_usd_p1
-      - OUTPUT_2=queue:non_period1_transactions
+      - OUTPUTS_MATCH_COUNT=1
+      - OUTPUT_0=queue:period1_for_currency_usd_p1
+      - OUTPUT_1=queue:non_period1_transactions
       - LOG_LEVEL=info
       - RING_QUEUE_IN=ring_filter_period1_0
       - RING_QUEUE_OUT=ring_filter_period1_1
@@ -196,10 +157,9 @@ services:
       - REPLICA_ID=1
       - N_REPLICAS=3
       - INPUT=queue:all_transactions
-      - OUTPUTS_MATCH_COUNT=2
-      - OUTPUT_0=queue:period1_for_wire_ach
-      - OUTPUT_1=queue:period1_for_currency_usd_p1
-      - OUTPUT_2=queue:non_period1_transactions
+      - OUTPUTS_MATCH_COUNT=1
+      - OUTPUT_0=queue:period1_for_currency_usd_p1
+      - OUTPUT_1=queue:non_period1_transactions
       - LOG_LEVEL=info
       - RING_QUEUE_IN=ring_filter_period1_1
       - RING_QUEUE_OUT=ring_filter_period1_2
@@ -213,58 +173,12 @@ services:
       - REPLICA_ID=2
       - N_REPLICAS=3
       - INPUT=queue:all_transactions
-      - OUTPUTS_MATCH_COUNT=2
-      - OUTPUT_0=queue:period1_for_wire_ach
-      - OUTPUT_1=queue:period1_for_currency_usd_p1
-      - OUTPUT_2=queue:non_period1_transactions
+      - OUTPUTS_MATCH_COUNT=1
+      - OUTPUT_0=queue:period1_for_currency_usd_p1
+      - OUTPUT_1=queue:non_period1_transactions
       - LOG_LEVEL=info
       - RING_QUEUE_IN=ring_filter_period1_2
       - RING_QUEUE_OUT=ring_filter_period1_0
-  filter_wire_ach_0:
-    build: { context: ./src/, dockerfile: worker/Dockerfile }
-    depends_on: { rabbitmq: { condition: service_healthy } }
-    env_file:
-      - .env
-    environment:
-      - STRATEGY=filter_wire_ach
-      - REPLICA_ID=0
-      - N_REPLICAS=3
-      - INPUT=queue:period1_for_wire_ach
-      - OUTPUTS_MATCH_COUNT=1
-      - OUTPUT_0=queue:period1_wire_ach
-      - LOG_LEVEL=info
-      - RING_QUEUE_IN=ring_filter_wire_ach_0
-      - RING_QUEUE_OUT=ring_filter_wire_ach_1
-  filter_wire_ach_1:
-    build: { context: ./src/, dockerfile: worker/Dockerfile }
-    depends_on: { rabbitmq: { condition: service_healthy } }
-    env_file:
-      - .env
-    environment:
-      - STRATEGY=filter_wire_ach
-      - REPLICA_ID=1
-      - N_REPLICAS=3
-      - INPUT=queue:period1_for_wire_ach
-      - OUTPUTS_MATCH_COUNT=1
-      - OUTPUT_0=queue:period1_wire_ach
-      - LOG_LEVEL=info
-      - RING_QUEUE_IN=ring_filter_wire_ach_1
-      - RING_QUEUE_OUT=ring_filter_wire_ach_2
-  filter_wire_ach_2:
-    build: { context: ./src/, dockerfile: worker/Dockerfile }
-    depends_on: { rabbitmq: { condition: service_healthy } }
-    env_file:
-      - .env
-    environment:
-      - STRATEGY=filter_wire_ach
-      - REPLICA_ID=2
-      - N_REPLICAS=3
-      - INPUT=queue:period1_for_wire_ach
-      - OUTPUTS_MATCH_COUNT=1
-      - OUTPUT_0=queue:period1_wire_ach
-      - LOG_LEVEL=info
-      - RING_QUEUE_IN=ring_filter_wire_ach_2
-      - RING_QUEUE_OUT=ring_filter_wire_ach_0
   filter_currency_usd_p1_0:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
     depends_on: { rabbitmq: { condition: service_healthy } }
@@ -275,9 +189,8 @@ services:
       - REPLICA_ID=0
       - N_REPLICAS=3
       - INPUT=queue:period1_for_currency_usd_p1
-      - OUTPUTS_MATCH_COUNT=2
-      - OUTPUT_0=queue:period1_usd_for_drain
-      - OUTPUT_1=sharded_queues:joiner_usd_input:3
+      - OUTPUTS_MATCH_COUNT=1
+      - OUTPUT_0=sharded_queues:joiner_usd_input:3
       - LOG_LEVEL=info
       - RING_QUEUE_IN=ring_filter_currency_usd_p1_0
       - RING_QUEUE_OUT=ring_filter_currency_usd_p1_1
@@ -291,9 +204,8 @@ services:
       - REPLICA_ID=1
       - N_REPLICAS=3
       - INPUT=queue:period1_for_currency_usd_p1
-      - OUTPUTS_MATCH_COUNT=2
-      - OUTPUT_0=queue:period1_usd_for_drain
-      - OUTPUT_1=sharded_queues:joiner_usd_input:3
+      - OUTPUTS_MATCH_COUNT=1
+      - OUTPUT_0=sharded_queues:joiner_usd_input:3
       - LOG_LEVEL=info
       - RING_QUEUE_IN=ring_filter_currency_usd_p1_1
       - RING_QUEUE_OUT=ring_filter_currency_usd_p1_2
@@ -307,9 +219,8 @@ services:
       - REPLICA_ID=2
       - N_REPLICAS=3
       - INPUT=queue:period1_for_currency_usd_p1
-      - OUTPUTS_MATCH_COUNT=2
-      - OUTPUT_0=queue:period1_usd_for_drain
-      - OUTPUT_1=sharded_queues:joiner_usd_input:3
+      - OUTPUTS_MATCH_COUNT=1
+      - OUTPUT_0=sharded_queues:joiner_usd_input:3
       - LOG_LEVEL=info
       - RING_QUEUE_IN=ring_filter_currency_usd_p1_2
       - RING_QUEUE_OUT=ring_filter_currency_usd_p1_0
@@ -371,9 +282,8 @@ services:
       - REPLICA_ID=0
       - N_REPLICAS=3
       - INPUT=queue:period2_transactions
-      - OUTPUTS_MATCH_COUNT=2
-      - OUTPUT_0=queue:period2_usd_for_drain
-      - OUTPUT_1=sharded_queues:joiner_usd_input:3
+      - OUTPUTS_MATCH_COUNT=1
+      - OUTPUT_0=sharded_queues:joiner_usd_input:3
       - LOG_LEVEL=info
       - RING_QUEUE_IN=ring_filter_currency_usd_p2_0
       - RING_QUEUE_OUT=ring_filter_currency_usd_p2_1
@@ -387,9 +297,8 @@ services:
       - REPLICA_ID=1
       - N_REPLICAS=3
       - INPUT=queue:period2_transactions
-      - OUTPUTS_MATCH_COUNT=2
-      - OUTPUT_0=queue:period2_usd_for_drain
-      - OUTPUT_1=sharded_queues:joiner_usd_input:3
+      - OUTPUTS_MATCH_COUNT=1
+      - OUTPUT_0=sharded_queues:joiner_usd_input:3
       - LOG_LEVEL=info
       - RING_QUEUE_IN=ring_filter_currency_usd_p2_1
       - RING_QUEUE_OUT=ring_filter_currency_usd_p2_2
@@ -403,9 +312,8 @@ services:
       - REPLICA_ID=2
       - N_REPLICAS=3
       - INPUT=queue:period2_transactions
-      - OUTPUTS_MATCH_COUNT=2
-      - OUTPUT_0=queue:period2_usd_for_drain
-      - OUTPUT_1=sharded_queues:joiner_usd_input:3
+      - OUTPUTS_MATCH_COUNT=1
+      - OUTPUT_0=sharded_queues:joiner_usd_input:3
       - LOG_LEVEL=info
       - RING_QUEUE_IN=ring_filter_currency_usd_p2_2
       - RING_QUEUE_OUT=ring_filter_currency_usd_p2_0
@@ -465,9 +373,7 @@ services:
       - N_REPLICAS=3
       - INPUT=queue:joiner_usd_input_0
       - OUTPUTS_MATCH_COUNT=0
-      - OUTPUT_0=queue:usd_for_amount_lt_50
-      - OUTPUT_1=queue:usd_for_drain
-      - OUTPUT_2=queue:q2_input
+      - OUTPUT_0=queue:q2_input
       - LOG_LEVEL=info
       - RING_QUEUE_IN=ring_joiner_usd_0
       - RING_QUEUE_OUT=ring_joiner_usd_1
@@ -483,9 +389,7 @@ services:
       - N_REPLICAS=3
       - INPUT=queue:joiner_usd_input_1
       - OUTPUTS_MATCH_COUNT=0
-      - OUTPUT_0=queue:usd_for_amount_lt_50
-      - OUTPUT_1=queue:usd_for_drain
-      - OUTPUT_2=queue:q2_input
+      - OUTPUT_0=queue:q2_input
       - LOG_LEVEL=info
       - RING_QUEUE_IN=ring_joiner_usd_1
       - RING_QUEUE_OUT=ring_joiner_usd_2
@@ -501,259 +405,11 @@ services:
       - N_REPLICAS=3
       - INPUT=queue:joiner_usd_input_2
       - OUTPUTS_MATCH_COUNT=0
-      - OUTPUT_0=queue:usd_for_amount_lt_50
-      - OUTPUT_1=queue:usd_for_drain
-      - OUTPUT_2=queue:q2_input
+      - OUTPUT_0=queue:q2_input
       - LOG_LEVEL=info
       - RING_QUEUE_IN=ring_joiner_usd_2
       - RING_QUEUE_OUT=ring_joiner_usd_0
       - EXPECTED_EOFS=3
-  filter_amount_lt_50_0:
-    build: { context: ./src/, dockerfile: worker/Dockerfile }
-    depends_on: { rabbitmq: { condition: service_healthy } }
-    env_file:
-      - .env
-    environment:
-      - STRATEGY=filter_amount_lt_50
-      - REPLICA_ID=0
-      - N_REPLICAS=3
-      - INPUT=queue:usd_for_amount_lt_50
-      - OUTPUTS_MATCH_COUNT=1
-      - OUTPUT_0=queue:q1_input
-      - LOG_LEVEL=info
-      - RING_QUEUE_IN=ring_filter_amount_lt_50_0
-      - RING_QUEUE_OUT=ring_filter_amount_lt_50_1
-  filter_amount_lt_50_1:
-    build: { context: ./src/, dockerfile: worker/Dockerfile }
-    depends_on: { rabbitmq: { condition: service_healthy } }
-    env_file:
-      - .env
-    environment:
-      - STRATEGY=filter_amount_lt_50
-      - REPLICA_ID=1
-      - N_REPLICAS=3
-      - INPUT=queue:usd_for_amount_lt_50
-      - OUTPUTS_MATCH_COUNT=1
-      - OUTPUT_0=queue:q1_input
-      - LOG_LEVEL=info
-      - RING_QUEUE_IN=ring_filter_amount_lt_50_1
-      - RING_QUEUE_OUT=ring_filter_amount_lt_50_2
-  filter_amount_lt_50_2:
-    build: { context: ./src/, dockerfile: worker/Dockerfile }
-    depends_on: { rabbitmq: { condition: service_healthy } }
-    env_file:
-      - .env
-    environment:
-      - STRATEGY=filter_amount_lt_50
-      - REPLICA_ID=2
-      - N_REPLICAS=3
-      - INPUT=queue:usd_for_amount_lt_50
-      - OUTPUTS_MATCH_COUNT=1
-      - OUTPUT_0=queue:q1_input
-      - LOG_LEVEL=info
-      - RING_QUEUE_IN=ring_filter_amount_lt_50_2
-      - RING_QUEUE_OUT=ring_filter_amount_lt_50_0
-  sharder_q1_0:
-    build: { context: ./src/, dockerfile: worker/Dockerfile }
-    depends_on: { rabbitmq: { condition: service_healthy } }
-    env_file:
-      - .env
-    environment:
-      - STRATEGY=sharder_q1
-      - REPLICA_ID=0
-      - N_REPLICAS=3
-      - INPUT=queue:q1_input
-      - OUTPUTS_MATCH_COUNT=0
-      - OUTPUT_0=direct_exchange:results
-      - LOG_LEVEL=info
-      - RING_QUEUE_IN=ring_sharder_q1_0
-      - RING_QUEUE_OUT=ring_sharder_q1_1
-      - N_FINAL_JOINERS=2
-  sharder_q1_1:
-    build: { context: ./src/, dockerfile: worker/Dockerfile }
-    depends_on: { rabbitmq: { condition: service_healthy } }
-    env_file:
-      - .env
-    environment:
-      - STRATEGY=sharder_q1
-      - REPLICA_ID=1
-      - N_REPLICAS=3
-      - INPUT=queue:q1_input
-      - OUTPUTS_MATCH_COUNT=0
-      - OUTPUT_0=direct_exchange:results
-      - LOG_LEVEL=info
-      - RING_QUEUE_IN=ring_sharder_q1_1
-      - RING_QUEUE_OUT=ring_sharder_q1_2
-      - N_FINAL_JOINERS=2
-  sharder_q1_2:
-    build: { context: ./src/, dockerfile: worker/Dockerfile }
-    depends_on: { rabbitmq: { condition: service_healthy } }
-    env_file:
-      - .env
-    environment:
-      - STRATEGY=sharder_q1
-      - REPLICA_ID=2
-      - N_REPLICAS=3
-      - INPUT=queue:q1_input
-      - OUTPUTS_MATCH_COUNT=0
-      - OUTPUT_0=direct_exchange:results
-      - LOG_LEVEL=info
-      - RING_QUEUE_IN=ring_sharder_q1_2
-      - RING_QUEUE_OUT=ring_sharder_q1_0
-      - N_FINAL_JOINERS=2
-  drain_period1_wire_ach:
-    build: { context: ./src/, dockerfile: worker/Dockerfile }
-    depends_on: { rabbitmq: { condition: service_healthy } }
-    env_file:
-      - .env
-    environment:
-      - STRATEGY=drain
-      - REPLICA_ID=0
-      - N_REPLICAS=1
-      - INPUT=queue:period1_wire_ach
-      - OUTPUTS_MATCH_COUNT=0
-      - LOG_LEVEL=info
-      - DRAIN_OUTPUT_FILE=/results/drain_period1_wire_ach.csv
-    volumes:
-      - ./results:/results
-  scatter_agg_q4:
-    build: { context: ./src/, dockerfile: worker/Dockerfile }
-    depends_on: { rabbitmq: { condition: service_healthy } }
-    env_file:
-      - .env
-    environment:
-      - STRATEGY=scatter_agg_q4
-      - REPLICA_ID=0
-      - N_REPLICAS=1
-      - INPUT=queue:period1_usd_for_drain
-      - OUTPUTS_MATCH_COUNT=0
-      - OUTPUT_0=direct_exchange:q4_account_shards
-      - LOG_LEVEL=info
-      - K_PATH_FINDERS=3
-      - MIN_SCATTER_DESTS=5
-  path_finder_q4_0:
-    build: { context: ./src/, dockerfile: worker/Dockerfile }
-    depends_on: { rabbitmq: { condition: service_healthy } }
-    env_file:
-      - .env
-    environment:
-      - STRATEGY=path_finder_q4
-      - REPLICA_ID=0
-      - N_REPLICAS=3
-      - INPUT=direct_exchange:q4_account_shards:0
-      - OUTPUTS_MATCH_COUNT=0
-      - OUTPUT_0=direct_exchange:q4_pair_shards
-      - LOG_LEVEL=info
-      - K_COUNTERS=3
-      - N_SHARDERS=1
-  path_finder_q4_1:
-    build: { context: ./src/, dockerfile: worker/Dockerfile }
-    depends_on: { rabbitmq: { condition: service_healthy } }
-    env_file:
-      - .env
-    environment:
-      - STRATEGY=path_finder_q4
-      - REPLICA_ID=1
-      - N_REPLICAS=3
-      - INPUT=direct_exchange:q4_account_shards:1
-      - OUTPUTS_MATCH_COUNT=0
-      - OUTPUT_0=direct_exchange:q4_pair_shards
-      - LOG_LEVEL=info
-      - K_COUNTERS=3
-      - N_SHARDERS=1
-  path_finder_q4_2:
-    build: { context: ./src/, dockerfile: worker/Dockerfile }
-    depends_on: { rabbitmq: { condition: service_healthy } }
-    env_file:
-      - .env
-    environment:
-      - STRATEGY=path_finder_q4
-      - REPLICA_ID=2
-      - N_REPLICAS=3
-      - INPUT=direct_exchange:q4_account_shards:2
-      - OUTPUTS_MATCH_COUNT=0
-      - OUTPUT_0=direct_exchange:q4_pair_shards
-      - LOG_LEVEL=info
-      - K_COUNTERS=3
-      - N_SHARDERS=1
-  counter_q4_0:
-    build: { context: ./src/, dockerfile: worker/Dockerfile }
-    depends_on: { rabbitmq: { condition: service_healthy } }
-    env_file:
-      - .env
-    environment:
-      - STRATEGY=counter_q4
-      - REPLICA_ID=0
-      - N_REPLICAS=3
-      - INPUT=direct_exchange:q4_pair_shards:0
-      - OUTPUTS_MATCH_COUNT=0
-      - OUTPUT_0=direct_exchange:results
-      - LOG_LEVEL=info
-      - MIN_INTERMEDIATES=5
-      - N_FINAL_JOINERS=2
-      - N_PATH_FINDERS=3
-  counter_q4_1:
-    build: { context: ./src/, dockerfile: worker/Dockerfile }
-    depends_on: { rabbitmq: { condition: service_healthy } }
-    env_file:
-      - .env
-    environment:
-      - STRATEGY=counter_q4
-      - REPLICA_ID=1
-      - N_REPLICAS=3
-      - INPUT=direct_exchange:q4_pair_shards:1
-      - OUTPUTS_MATCH_COUNT=0
-      - OUTPUT_0=direct_exchange:results
-      - LOG_LEVEL=info
-      - MIN_INTERMEDIATES=5
-      - N_FINAL_JOINERS=2
-      - N_PATH_FINDERS=3
-  counter_q4_2:
-    build: { context: ./src/, dockerfile: worker/Dockerfile }
-    depends_on: { rabbitmq: { condition: service_healthy } }
-    env_file:
-      - .env
-    environment:
-      - STRATEGY=counter_q4
-      - REPLICA_ID=2
-      - N_REPLICAS=3
-      - INPUT=direct_exchange:q4_pair_shards:2
-      - OUTPUTS_MATCH_COUNT=0
-      - OUTPUT_0=direct_exchange:results
-      - LOG_LEVEL=info
-      - MIN_INTERMEDIATES=5
-      - N_FINAL_JOINERS=2
-      - N_PATH_FINDERS=3
-  drain_period2_usd:
-    build: { context: ./src/, dockerfile: worker/Dockerfile }
-    depends_on: { rabbitmq: { condition: service_healthy } }
-    env_file:
-      - .env
-    environment:
-      - STRATEGY=drain
-      - REPLICA_ID=0
-      - N_REPLICAS=1
-      - INPUT=queue:period2_usd_for_drain
-      - OUTPUTS_MATCH_COUNT=0
-      - LOG_LEVEL=info
-      - DRAIN_OUTPUT_FILE=/results/drain_period2_usd.csv
-    volumes:
-      - ./results:/results
-  drain_usd_joined:
-    build: { context: ./src/, dockerfile: worker/Dockerfile }
-    depends_on: { rabbitmq: { condition: service_healthy } }
-    env_file:
-      - .env
-    environment:
-      - STRATEGY=drain
-      - REPLICA_ID=0
-      - N_REPLICAS=1
-      - INPUT=queue:usd_for_drain
-      - OUTPUTS_MATCH_COUNT=0
-      - LOG_LEVEL=info
-      - DRAIN_OUTPUT_FILE=/results/drain_usd_joined.csv
-    volumes:
-      - ./results:/results
   max_q2_0:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
     depends_on: { rabbitmq: { condition: service_healthy } }
@@ -894,9 +550,7 @@ services:
       - OUTPUT_0=final_queue:final_1
       - OUTPUT_1=final_queue:final_2
       - LOG_LEVEL=info
-      - EXPECTED_EOFS_Q1=3
       - EXPECTED_EOFS_Q2=1
-      - EXPECTED_EOFS_Q4=3
   final_joiner_1:
     build: { context: ./src/, dockerfile: worker/Dockerfile }
     depends_on: { rabbitmq: { condition: service_healthy } }
@@ -911,9 +565,7 @@ services:
       - OUTPUT_0=final_queue:final_1
       - OUTPUT_1=final_queue:final_2
       - LOG_LEVEL=info
-      - EXPECTED_EOFS_Q1=3
       - EXPECTED_EOFS_Q2=1
-      - EXPECTED_EOFS_Q4=3
   rabbitmq:
     build: { context: ./src/rabbitmq, dockerfile: Dockerfile }
     volumes:
