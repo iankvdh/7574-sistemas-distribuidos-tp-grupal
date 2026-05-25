@@ -220,6 +220,7 @@ workers:
       - direct_exchange:results
     env:
       N_FINAL_JOINERS: "2"
+      AMOUNT_THRESHOLD_PCT: "0.01"
       BUFFER_DIR: "/tmp"
 
   - name: final_joiner

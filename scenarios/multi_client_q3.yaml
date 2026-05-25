@@ -399,6 +399,7 @@ services:
       - LOG_LEVEL=info
       - RING_QUEUE_IN=ring_filter_q3_0
       - RING_QUEUE_OUT=ring_filter_q3_1
+      - AMOUNT_THRESHOLD_PCT=0.01
       - BUFFER_DIR=/tmp
       - N_FINAL_JOINERS=2
   filter_q3_1:
@@ -417,6 +418,7 @@ services:
       - LOG_LEVEL=info
       - RING_QUEUE_IN=ring_filter_q3_1
       - RING_QUEUE_OUT=ring_filter_q3_2
+      - AMOUNT_THRESHOLD_PCT=0.01
       - BUFFER_DIR=/tmp
       - N_FINAL_JOINERS=2
   filter_q3_2:
@@ -435,6 +437,7 @@ services:
       - LOG_LEVEL=info
       - RING_QUEUE_IN=ring_filter_q3_2
       - RING_QUEUE_OUT=ring_filter_q3_0
+      - AMOUNT_THRESHOLD_PCT=0.01
       - BUFFER_DIR=/tmp
       - N_FINAL_JOINERS=2
   final_joiner_0:
