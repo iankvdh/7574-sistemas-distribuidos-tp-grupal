@@ -12,7 +12,7 @@ import (
 
 func newWithK(t *testing.T, k int) *Sharder {
 	t.Helper()
-	t.Setenv("K_PATH_FINDERS", itoa(k))
+	t.Setenv("K_SUSPICIOUS_FILTERS", itoa(k))
 	s := New()
 	if err := s.Init(strategy.StrategyConfig{
 		OutputCount:  1,
@@ -97,10 +97,10 @@ func TestSharderRejectsNonTransactionEnvelope(t *testing.T) {
 	}
 }
 
-func TestSharderRequiresKPathFinders(t *testing.T) {
-	os.Unsetenv("K_PATH_FINDERS")
+func TestSharderRequiresKSuspiciousFilters(t *testing.T) {
+	os.Unsetenv("K_SUSPICIOUS_FILTERS")
 	s := New()
 	if err := s.Init(strategy.StrategyConfig{OutputCount: 1, NReplicas: 1}); err == nil {
-		t.Fatalf("expected error when K_PATH_FINDERS missing")
+		t.Fatalf("expected error when K_SUSPICIOUS_FILTERS missing")
 	}
 }

@@ -10,7 +10,7 @@ import (
 func newWithKN(t *testing.T, k, n int) *PathFinder {
 	t.Helper()
 	t.Setenv("K_COUNTERS", itoa(k))
-	t.Setenv("N_SHARDERS", itoa(n))
+	t.Setenv("N_SUSPICIOUS_FILTERS", itoa(n))
 	pf := New()
 	if err := pf.Init(strategy.StrategyConfig{OutputCount: 1, NReplicas: 1}); err != nil {
 		t.Fatalf("Init failed: %v", err)
@@ -51,10 +51,10 @@ func feed(t *testing.T, pf *PathFinder, bySource bool, fromBank uint32, fromAcc 
 	return out
 }
 
-func triggerEOF(t *testing.T, pf *PathFinder, nSharders int) strategy.EOFOutcome {
+func triggerEOF(t *testing.T, pf *PathFinder, nSuspiciousFilters int) strategy.EOFOutcome {
 	t.Helper()
 	var outcome strategy.EOFOutcome
-	for i := 0; i < nSharders; i++ {
+	for i := 0; i < nSuspiciousFilters; i++ {
 		var err error
 		outcome, err = pf.OnUpstreamEOF(&inner.Envelope{ClientID: "client-x", Total: 0})
 		if err != nil {
@@ -182,7 +182,7 @@ func TestPathFinderDuplicateEdgesIgnored(t *testing.T) {
 }
 
 // TestPathFinderEmitsEOFsAcrossAllCounters verifies that K_COUNTERS EOFs are
-// emitted after N_SHARDERS upstream EOFs have been received.
+// emitted after N_SUSPICIOUS_FILTERS upstream EOFs have been received.
 func TestPathFinderEmitsEOFsAcrossAllCounters(t *testing.T) {
 	pf := newWithKN(t, 3, 2)
 
