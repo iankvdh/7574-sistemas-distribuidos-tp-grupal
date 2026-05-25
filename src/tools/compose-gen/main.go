@@ -75,6 +75,8 @@ var strategiesWithRing = map[string]struct{}{
 	"joiner_usd":                        {},
 	"sharder_q4":                        {},
 	"sharder_q1":                        {},
+	"max_q2":                            {},
+	"bank_aggregator":                   {},
 }
 
 func strategyUsesRing(strategy string) bool {
