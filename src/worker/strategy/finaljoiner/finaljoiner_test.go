@@ -196,7 +196,7 @@ func TestFinalJoinerHandlesQ1AndQ4InSameInstance(t *testing.T) {
 		t.Fatalf("Q1 should not emit deferred Outputs, got %d", len(outcome.Outputs))
 	}
 
-	// Second EOF for Q4 → fires WITH deferred outputs (the buffered account).
+	// Second EOF for Q4 → fires WITH deferred outputs (the buffered pair).
 	outcome, err = j.OnUpstreamEOF(&inner.Envelope{
 		Kind: inner.InternalEOF, ClientID: "c", GatewayID: 1, QueryID: 4, Total: 0,
 	})
