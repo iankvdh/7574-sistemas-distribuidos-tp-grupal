@@ -50,7 +50,7 @@ func (b *BankAggregator) Init(cfg strategy.StrategyConfig) error {
 	for i := range k {
 		b.rkCache[i] = strconv.Itoa(i)
 	}
-	b.ringCoordinator = eof.NewRingCoordinator(cfg.ReplicaID, cfg.NReplicas)
+	b.ringCoordinator = eof.NewBroadcastRingCoordinator(cfg.ReplicaID, cfg.NReplicas)
 	return nil
 }
 
