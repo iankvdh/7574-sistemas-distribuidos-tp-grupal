@@ -199,8 +199,6 @@ func (w *Worker) Run() error {
 		go w.consumeRing()
 	}
 
-	// One goroutine per input. We block here until all inputs return (either
-	// the broker dropped them or the worker is shutting down).
 	var inputWG sync.WaitGroup
 	for i := range w.inputs {
 		inputWG.Add(1)
