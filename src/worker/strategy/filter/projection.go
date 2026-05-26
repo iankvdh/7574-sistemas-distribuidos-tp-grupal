@@ -20,9 +20,9 @@ const (
 )
 
 var (
-	WithoutDate            = AllFields &^ FieldDate
-	WithoutPaymentFormat   = AllFields &^ FieldPaymentFormat
-	WithoutPaymentCurrency = AllFields &^ FieldPaymentCurrency
+	WithoutDate                   = AllFields &^ FieldDate
+	WithoutPaymentFormat          = AllFields &^ FieldPaymentFormat
+	WithoutPaymentCurrencyAndDate = AllFields &^ FieldPaymentCurrency &^ FieldDate
 )
 
 // Apply zeroes out the fields that are not set in the projection mask.

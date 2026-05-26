@@ -18,8 +18,8 @@ import (
 	micro_transaction_counter "github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/micro_transaction_counter"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/noop"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/pathfinder"
-	sharder "github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/sharder_q4"
 	sharder_q1 "github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/sharder_q1"
+	sharder "github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/sharder_q4"
 	sum_q3 "github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/sum_q3"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/suspicious_filter"
 )
@@ -46,8 +46,7 @@ func Build(name string) (strategy.Strategy, error) {
 		if err != nil {
 			return nil, err
 		}
-		return filter.New("filter_period1", filter.InDateRange(start, end)).
-			WithMatchProjection(filter.WithoutDate), nil
+		return filter.New("filter_period1", filter.InDateRange(start, end)), nil
 	case "filter_period2":
 		defStart, defEnd := filter.Period2Defaults()
 		start, end, err := filter.ParsePeriodRange("PERIOD2_START", "PERIOD2_END", defStart, defEnd)
@@ -59,7 +58,7 @@ func Build(name string) (strategy.Strategy, error) {
 			WithNoMatchProjection(filter.WithoutDate), nil
 	case "filter_currency_usd_p1", "filter_currency_usd_p2", "filter_currency_usd_other_periods":
 		return filter.New(name, filter.IsUSDPredicate()).
-			WithMatchProjection(filter.WithoutPaymentCurrency), nil
+			WithMatchProjection(filter.WithoutPaymentCurrencyAndDate), nil
 	case "sharder_q4":
 		return sharder.New(), nil
 	case "sharder_q1":
