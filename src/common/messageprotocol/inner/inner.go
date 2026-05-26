@@ -75,6 +75,17 @@ const (
 	// Amount) emitida por filter_q3 al exchange `results` para consumo del
 	// final_joiner.
 	Query3RowItem
+	// Q5ConversionsItem transporta el mapa de cotizaciones (date → currency → rate)
+	// emitido una sola vez por el fetcher al inicio del sistema hacia cada réplica
+	// de micro_transaction_counter. Las cotizaciones tienen como base USD.
+	Q5ConversionsItem
+	// Q5PartialCountItem transporta el conteo parcial de transacciones por debajo
+	// del umbral USD emitido por una réplica de micro_transaction_counter al cierre
+	// del ring hacia aggregator_q5.
+	Q5PartialCountItem
+	// Query5RowItem transporta el conteo total final por cliente emitido por
+	// aggregator_q5 al exchange `results` para consumo del final_joiner.
+	Query5RowItem
 )
 
 var (
@@ -179,7 +190,7 @@ func SerializeRingToken(gatewayID GatewayID, clientID ClientID, tokenJSON []byte
 
 func validInnerBatchItemKind(kind MsgKind) bool {
 	switch kind {
-	case TransactionMessage, AccountMessage, ShardedTxMessage, SuspiciousPathMessage, Query4PairItem, Query1RowItem, Q2PartialMaxItem, Q2BankNameItem, Q2ResultItem, Q3PartialAvgItem, Q3AverageItem, Query3RowItem:
+	case TransactionMessage, AccountMessage, ShardedTxMessage, SuspiciousPathMessage, Query4PairItem, Query1RowItem, Q2PartialMaxItem, Q2BankNameItem, Q2ResultItem, Q3PartialAvgItem, Q3AverageItem, Query3RowItem, Q5ConversionsItem, Q5PartialCountItem, Query5RowItem:
 		return true
 	default:
 		return false

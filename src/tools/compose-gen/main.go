@@ -1,7 +1,8 @@
 // compose-gen renders a docker-compose.yaml from a tiny declarative spec.
 //
 // Usage:
-//   compose-gen <spec.yaml>          → writes the compose to stdout
+//
+//	compose-gen <spec.yaml>          → writes the compose to stdout
 //
 // Spec format (whitespace-significant, YAML-subset; no external deps):
 //
@@ -47,6 +48,11 @@ type workerSpec struct {
 	Volumes    []string // optional, mounted on every replica of the worker
 }
 
+type fetcherSpec struct {
+	Name string
+	Env  map[string]string
+}
+
 type spec struct {
 	Clients           int
 	Gateways          int
@@ -55,6 +61,7 @@ type spec struct {
 	LogLevel          string
 	ExpectedQueryEOFs int // 0 means "leave gateway/client defaults" (= 5)
 	Workers           []workerSpec
+	Fetchers          []fetcherSpec
 }
 
 const defaultLogLevel = "info"
@@ -79,6 +86,7 @@ var strategiesWithRing = map[string]struct{}{
 	"bank_aggregator":                   {},
 	"sum_q3":                            {},
 	"filter_q3":                         {},
+	"micro_transaction_counter":         {},
 }
 
 func strategyUsesRing(strategy string) bool {
@@ -120,7 +128,20 @@ func main() {
 func parseSpec(src string) (*spec, error) {
 	s := &spec{Clients: 1, Gateways: 1}
 	var cur *workerSpec
+	var curFetcher *fetcherSpec
 	var section, currentList string
+	flushWorker := func() {
+		if cur != nil {
+			s.Workers = append(s.Workers, *cur)
+			cur = nil
+		}
+	}
+	flushFetcher := func() {
+		if curFetcher != nil {
+			s.Fetchers = append(s.Fetchers, *curFetcher)
+			curFetcher = nil
+		}
+	}
 	for _, raw := range strings.Split(src, "\n") {
 		line := strings.TrimRight(raw, " \r")
 		if strings.TrimSpace(line) == "" || strings.HasPrefix(strings.TrimSpace(line), "#") {
@@ -131,6 +152,8 @@ func parseSpec(src string) (*spec, error) {
 
 		switch {
 		case indent == 0:
+			flushWorker()
+			flushFetcher()
 			key, value := splitKV(trimmed)
 			switch key {
 			case "clients":
@@ -149,9 +172,7 @@ func parseSpec(src string) (*spec, error) {
 			section = key
 			currentList = ""
 		case section == "workers" && indent == 2 && strings.HasPrefix(trimmed, "- "):
-			if cur != nil {
-				s.Workers = append(s.Workers, *cur)
-			}
+			flushWorker()
 			cur = &workerSpec{Replicas: 1, Env: map[string]string{}}
 			currentList = ""
 			rest := strings.TrimPrefix(trimmed, "- ")
@@ -188,11 +209,38 @@ func parseSpec(src string) (*spec, error) {
 					cur.Env[key] = value
 				}
 			}
+		case section == "fetchers" && indent == 2 && strings.HasPrefix(trimmed, "- "):
+			flushFetcher()
+			curFetcher = &fetcherSpec{Env: map[string]string{}}
+			currentList = ""
+			rest := strings.TrimPrefix(trimmed, "- ")
+			if k, v := splitKV(rest); k != "" && k == "name" {
+				curFetcher.Name = v
+			}
+		case section == "fetchers" && indent == 4:
+			currentList = ""
+			key, value := splitKV(trimmed)
+			if value == "" && key == "env" {
+				currentList = key
+				continue
+			}
+			if key == "name" {
+				curFetcher.Name = value
+			}
+		case section == "fetchers" && indent >= 6:
+			if curFetcher == nil {
+				continue
+			}
+			if currentList == "env" {
+				key, value := splitKV(trimmed)
+				if key != "" {
+					curFetcher.Env[key] = value
+				}
+			}
 		}
 	}
-	if cur != nil {
-		s.Workers = append(s.Workers, *cur)
-	}
+	flushWorker()
+	flushFetcher()
 	return s, nil
 }
 
@@ -236,7 +284,9 @@ func splitKV(line string) (string, string) {
 // stripInlineComment drops YAML-style trailing comments (" # ..." or "\t# ...")
 // while leaving '#' characters that are part of quoted values or that aren't
 // preceded by whitespace untouched. Without this, a line like
-//   EXPECTED_EOFS: "3"   # = N_REPLICAS de sharder_q1
+//
+//	EXPECTED_EOFS: "3"   # = N_REPLICAS de sharder_q1
+//
 // would yield value = `"3"   # = N_REPLICAS de sharder_q1` and the worker
 // would later fail to parse it as an integer.
 func stripInlineComment(s string) string {
@@ -295,6 +345,9 @@ func (s *spec) render(w io.Writer) error {
 		for r := 0; r < ws.Replicas; r++ {
 			writeWorker(w, ws, r, logLevel)
 		}
+	}
+	for _, fs := range s.Fetchers {
+		writeFetcher(w, fs, logLevel)
 	}
 	writeRabbit(w)
 	return nil
@@ -405,6 +458,26 @@ func writeWorker(w io.Writer, ws workerSpec, replica int, logLevel string) {
 		fmt.Fprintln(w, "    volumes:")
 		for _, v := range ws.Volumes {
 			fmt.Fprintf(w, "      - %s\n", v)
+		}
+	}
+}
+
+func writeFetcher(w io.Writer, fs fetcherSpec, logLevel string) {
+	fmt.Fprintf(w, "  %s:\n", fs.Name)
+	fmt.Fprintln(w, "    build: { context: ./src/, dockerfile: fetcher/Dockerfile }")
+	fmt.Fprintln(w, "    depends_on: { rabbitmq: { condition: service_healthy } }")
+	fmt.Fprintln(w, "    env_file:")
+	fmt.Fprintln(w, "      - .env")
+	fmt.Fprintln(w, "    environment:")
+	fmt.Fprintf(w, "      - LOG_LEVEL=%s\n", logLevel)
+	if len(fs.Env) > 0 {
+		keys := make([]string, 0, len(fs.Env))
+		for k := range fs.Env {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			fmt.Fprintf(w, "      - %s=%s\n", k, fs.Env[k])
 		}
 	}
 }
