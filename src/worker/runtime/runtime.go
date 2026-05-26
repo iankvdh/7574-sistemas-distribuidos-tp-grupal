@@ -36,7 +36,11 @@ type Worker struct {
 	// Stores last upstream EOF message for each client (and the input it came
 	// from), to allow re-enqueuing to the right input if the strategy requests
 	// it. Cleared on successful publish of EOFs.
-	upstreamEOFs map[inner.ClientID]cachedEOF
+	upstreamEOFs   map[inner.ClientID]cachedEOF
+	inputWG        sync.WaitGroup
+	inputStartMu   sync.Mutex
+	startedInputs  []bool
+	deferredInputs map[int]bool
 }
 
 type cachedEOF struct {
@@ -118,6 +122,13 @@ func New(cfg config.WorkerConfig) (*Worker, error) {
 		return nil, err
 	}
 
+	deferred := map[int]bool{}
+	if def_input_provider, ok := strat.(strategy.DeferredInputProvider); ok {
+		for _, idx := range def_input_provider.DeferredInputs() {
+			deferred[idx] = true
+		}
+	}
+
 	runCtx, cancel := context.WithCancel(context.Background())
 	buffers := initOutputTargetBuffers(outputTargets)
 	w := &Worker{
@@ -131,6 +142,8 @@ func New(cfg config.WorkerConfig) (*Worker, error) {
 		ctx:                 runCtx,
 		cancel:              cancel,
 		upstreamEOFs:        map[inner.ClientID]cachedEOF{},
+		startedInputs:       make([]bool, len(inputs)),
+		deferredInputs:      deferred,
 	}
 	return w, nil
 }
@@ -199,22 +212,34 @@ func (w *Worker) Run() error {
 		go w.consumeRing()
 	}
 
-	var inputWG sync.WaitGroup
 	for i := range w.inputs {
-		inputWG.Add(1)
-		idx := i
-		go func() {
-			defer inputWG.Done()
-			err := w.inputs[idx].StartConsuming(func(msg middleware.Message, ack func(), nack func()) {
-				w.handleInputMessage(idx, msg, ack, nack)
-			})
-			if err != nil && w.ctx.Err() == nil {
-				slog.Error("Input consumer stopped unexpectedly", "input_index", idx, "err", err)
-			}
-		}()
+		if w.deferredInputs[i] {
+			continue
+		}
+		w.startInput(i)
 	}
-	inputWG.Wait()
+	w.inputWG.Wait()
 	return nil
+}
+
+func (w *Worker) startInput(idx int) {
+	w.inputStartMu.Lock()
+	if w.startedInputs[idx] {
+		w.inputStartMu.Unlock()
+		return
+	}
+	w.startedInputs[idx] = true
+	w.inputWG.Add(1)
+	w.inputStartMu.Unlock()
+	go func() {
+		defer w.inputWG.Done()
+		err := w.inputs[idx].StartConsuming(func(msg middleware.Message, ack func(), nack func()) {
+			w.handleInputMessage(idx, msg, ack, nack)
+		})
+		if err != nil && w.ctx.Err() == nil {
+			slog.Error("Input consumer stopped unexpectedly", "input_index", idx, "err", err)
+		}
+	}()
 }
 
 func (w *Worker) consumeRing() {
@@ -348,6 +373,19 @@ func (w *Worker) handleRingMessage(msg middleware.Message, ack func(), nack func
 }
 
 func (w *Worker) applyEOFOutcome(env *inner.Envelope, outcome strategy.EOFOutcome) error {
+	if err := w.applyAction(env, outcome); err != nil {
+		return err
+	}
+	for _, idx := range outcome.StartDeferredInputs {
+		if idx < 0 || idx >= len(w.inputs) {
+			return fmt.Errorf("strategy asked to start deferred input %d, out of range", idx)
+		}
+		w.startInput(idx)
+	}
+	return nil
+}
+
+func (w *Worker) applyAction(env *inner.Envelope, outcome strategy.EOFOutcome) error {
 	switch outcome.Action.Kind {
 	case eof.ActionNone:
 		return nil

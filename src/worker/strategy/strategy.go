@@ -36,10 +36,11 @@ type StrategyConfig struct {
 }
 
 type EOFOutcome struct {
-	Action          eof.Action
-	EOFs            []eof.EOFEmit
-	Outputs         []OutputMessage // data messages to emit before downstream EOFs
-	OutputsIterator iter.Seq[OutputMessage]
+	Action              eof.Action
+	EOFs                []eof.EOFEmit
+	Outputs             []OutputMessage // data messages to emit before downstream EOFs
+	OutputsIterator     iter.Seq[OutputMessage]
+	StartDeferredInputs []int
 }
 
 type Strategy interface {
@@ -48,4 +49,8 @@ type Strategy interface {
 	OnUpstreamEOF(env *inner.Envelope) (EOFOutcome, error)
 	OnRingToken(token *eof.Token) (EOFOutcome, error)
 	Name() string
+}
+
+type DeferredInputProvider interface {
+	DeferredInputs() []int
 }

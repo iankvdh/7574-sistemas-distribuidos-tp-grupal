@@ -1,0 +1,297 @@
+services:
+  client_0:
+    build: { context: ./src/, dockerfile: client/Dockerfile }
+    depends_on:
+      rabbitmq: { condition: service_healthy }
+      gateway_1: { condition: service_started }
+      gateway_2: { condition: service_started }
+      filter_period1_0: { condition: service_started }
+      filter_period1_1: { condition: service_started }
+      filter_period1_2: { condition: service_started }
+      filter_wire_ach: { condition: service_started }
+      micro_transaction_counter_0: { condition: service_started }
+      micro_transaction_counter_1: { condition: service_started }
+      micro_transaction_counter_2: { condition: service_started }
+      aggregator_q5_0: { condition: service_started }
+      aggregator_q5_1: { condition: service_started }
+      final_joiner_0: { condition: service_started }
+      final_joiner_1: { condition: service_started }
+    env_file:
+      - .env
+    environment:
+      - INPUT_TRANSACTIONS=/datasets/LI-Small_Trans.csv
+      - INPUT_ACCOUNTS=/datasets/LI-Small_accounts.csv
+      - GATEWAY_PREFIX=gateway_
+      - GATEWAY_AMOUNT=2
+      - GATEWAY_PORT=5678
+      - CONNECT_MAX_ATTEMPTS=6
+      - CONNECT_TIMEOUT_MS=800
+      - BACKOFF_BASE_MS=200
+      - BACKOFF_MAX_MS=3000
+      - RESULTS_DIR=/results
+      - EXPECTED_QUERY_EOFS=1
+      - LOG_LEVEL=info
+    volumes:
+      - ./datasets:/datasets
+      - ./results/client_0:/results
+  client_1:
+    build: { context: ./src/, dockerfile: client/Dockerfile }
+    depends_on:
+      rabbitmq: { condition: service_healthy }
+      gateway_1: { condition: service_started }
+      gateway_2: { condition: service_started }
+      filter_period1_0: { condition: service_started }
+      filter_period1_1: { condition: service_started }
+      filter_period1_2: { condition: service_started }
+      filter_wire_ach: { condition: service_started }
+      micro_transaction_counter_0: { condition: service_started }
+      micro_transaction_counter_1: { condition: service_started }
+      micro_transaction_counter_2: { condition: service_started }
+      aggregator_q5_0: { condition: service_started }
+      aggregator_q5_1: { condition: service_started }
+      final_joiner_0: { condition: service_started }
+      final_joiner_1: { condition: service_started }
+    env_file:
+      - .env
+    environment:
+      - INPUT_TRANSACTIONS=/datasets/LI-Small_Trans.csv
+      - INPUT_ACCOUNTS=/datasets/LI-Small_accounts.csv
+      - GATEWAY_PREFIX=gateway_
+      - GATEWAY_AMOUNT=2
+      - GATEWAY_PORT=5678
+      - CONNECT_MAX_ATTEMPTS=6
+      - CONNECT_TIMEOUT_MS=800
+      - BACKOFF_BASE_MS=200
+      - BACKOFF_MAX_MS=3000
+      - RESULTS_DIR=/results
+      - EXPECTED_QUERY_EOFS=1
+      - LOG_LEVEL=info
+    volumes:
+      - ./datasets:/datasets
+      - ./results/client_1:/results
+  gateway_1:
+    build: { context: ./src/, dockerfile: gateway/Dockerfile }
+    depends_on: { rabbitmq: { condition: service_healthy } }
+    env_file:
+      - .env
+    environment:
+      - ALL_TRANSACTIONS_QUEUE=all_transactions
+      - ALL_ACCOUNTS_QUEUE=all_accounts
+      - FINAL_QUEUE=final
+      - GATEWAY_ID=1
+      - SERVER_HOST=0.0.0.0
+      - SERVER_PORT=5678
+      - EXPECTED_QUERY_EOFS=1
+      - LOG_LEVEL=info
+  gateway_2:
+    build: { context: ./src/, dockerfile: gateway/Dockerfile }
+    depends_on: { rabbitmq: { condition: service_healthy } }
+    env_file:
+      - .env
+    environment:
+      - ALL_TRANSACTIONS_QUEUE=all_transactions
+      - ALL_ACCOUNTS_QUEUE=all_accounts
+      - FINAL_QUEUE=final
+      - GATEWAY_ID=2
+      - SERVER_HOST=0.0.0.0
+      - SERVER_PORT=5678
+      - EXPECTED_QUERY_EOFS=1
+      - LOG_LEVEL=info
+  filter_period1_0:
+    build: { context: ./src/, dockerfile: worker/Dockerfile }
+    depends_on: { rabbitmq: { condition: service_healthy } }
+    env_file:
+      - .env
+    environment:
+      - STRATEGY=filter_period1
+      - REPLICA_ID=0
+      - N_REPLICAS=3
+      - INPUT=queue:all_transactions
+      - OUTPUTS_MATCH_COUNT=1
+      - OUTPUT_0=direct_exchange:period1_transactions
+      - OUTPUT_1=queue:non_period1_transactions_drain
+      - LOG_LEVEL=info
+      - RING_QUEUE_IN=ring_filter_period1_0
+      - RING_QUEUE_OUT=ring_filter_period1_1
+  filter_period1_1:
+    build: { context: ./src/, dockerfile: worker/Dockerfile }
+    depends_on: { rabbitmq: { condition: service_healthy } }
+    env_file:
+      - .env
+    environment:
+      - STRATEGY=filter_period1
+      - REPLICA_ID=1
+      - N_REPLICAS=3
+      - INPUT=queue:all_transactions
+      - OUTPUTS_MATCH_COUNT=1
+      - OUTPUT_0=direct_exchange:period1_transactions
+      - OUTPUT_1=queue:non_period1_transactions_drain
+      - LOG_LEVEL=info
+      - RING_QUEUE_IN=ring_filter_period1_1
+      - RING_QUEUE_OUT=ring_filter_period1_2
+  filter_period1_2:
+    build: { context: ./src/, dockerfile: worker/Dockerfile }
+    depends_on: { rabbitmq: { condition: service_healthy } }
+    env_file:
+      - .env
+    environment:
+      - STRATEGY=filter_period1
+      - REPLICA_ID=2
+      - N_REPLICAS=3
+      - INPUT=queue:all_transactions
+      - OUTPUTS_MATCH_COUNT=1
+      - OUTPUT_0=direct_exchange:period1_transactions
+      - OUTPUT_1=queue:non_period1_transactions_drain
+      - LOG_LEVEL=info
+      - RING_QUEUE_IN=ring_filter_period1_2
+      - RING_QUEUE_OUT=ring_filter_period1_0
+  filter_wire_ach:
+    build: { context: ./src/, dockerfile: worker/Dockerfile }
+    depends_on: { rabbitmq: { condition: service_healthy } }
+    env_file:
+      - .env
+    environment:
+      - STRATEGY=filter_wire_ach
+      - REPLICA_ID=0
+      - N_REPLICAS=1
+      - INPUT=direct_exchange:period1_transactions
+      - OUTPUTS_MATCH_COUNT=1
+      - OUTPUT_0=queue:period1_wire_ach
+      - LOG_LEVEL=info
+  micro_transaction_counter_0:
+    build: { context: ./src/, dockerfile: worker/Dockerfile }
+    depends_on: { rabbitmq: { condition: service_healthy } }
+    env_file:
+      - .env
+    environment:
+      - STRATEGY=micro_transaction_counter
+      - REPLICA_ID=0
+      - N_REPLICAS=3
+      - INPUT_0=queue:conversions_0
+      - INPUT_1=queue:period1_wire_ach
+      - OUTPUTS_MATCH_COUNT=0
+      - OUTPUT_0=direct_exchange:partial_counts_q5
+      - LOG_LEVEL=info
+      - RING_QUEUE_IN=ring_micro_transaction_counter_0
+      - RING_QUEUE_OUT=ring_micro_transaction_counter_1
+      - MAX_CONVERTED_AMOUNT_USD=1
+      - N_AGGREGATOR_Q5=2
+  micro_transaction_counter_1:
+    build: { context: ./src/, dockerfile: worker/Dockerfile }
+    depends_on: { rabbitmq: { condition: service_healthy } }
+    env_file:
+      - .env
+    environment:
+      - STRATEGY=micro_transaction_counter
+      - REPLICA_ID=1
+      - N_REPLICAS=3
+      - INPUT_0=queue:conversions_1
+      - INPUT_1=queue:period1_wire_ach
+      - OUTPUTS_MATCH_COUNT=0
+      - OUTPUT_0=direct_exchange:partial_counts_q5
+      - LOG_LEVEL=info
+      - RING_QUEUE_IN=ring_micro_transaction_counter_1
+      - RING_QUEUE_OUT=ring_micro_transaction_counter_2
+      - MAX_CONVERTED_AMOUNT_USD=1
+      - N_AGGREGATOR_Q5=2
+  micro_transaction_counter_2:
+    build: { context: ./src/, dockerfile: worker/Dockerfile }
+    depends_on: { rabbitmq: { condition: service_healthy } }
+    env_file:
+      - .env
+    environment:
+      - STRATEGY=micro_transaction_counter
+      - REPLICA_ID=2
+      - N_REPLICAS=3
+      - INPUT_0=queue:conversions_2
+      - INPUT_1=queue:period1_wire_ach
+      - OUTPUTS_MATCH_COUNT=0
+      - OUTPUT_0=direct_exchange:partial_counts_q5
+      - LOG_LEVEL=info
+      - RING_QUEUE_IN=ring_micro_transaction_counter_2
+      - RING_QUEUE_OUT=ring_micro_transaction_counter_0
+      - MAX_CONVERTED_AMOUNT_USD=1
+      - N_AGGREGATOR_Q5=2
+  aggregator_q5_0:
+    build: { context: ./src/, dockerfile: worker/Dockerfile }
+    depends_on: { rabbitmq: { condition: service_healthy } }
+    env_file:
+      - .env
+    environment:
+      - STRATEGY=aggregator_q5
+      - REPLICA_ID=0
+      - N_REPLICAS=2
+      - INPUT=direct_exchange:partial_counts_q5:0
+      - OUTPUTS_MATCH_COUNT=0
+      - OUTPUT_0=direct_exchange:results
+      - LOG_LEVEL=info
+      - N_FINAL_JOINERS=2
+      - N_MICRO_TX_COUNTER=3
+  aggregator_q5_1:
+    build: { context: ./src/, dockerfile: worker/Dockerfile }
+    depends_on: { rabbitmq: { condition: service_healthy } }
+    env_file:
+      - .env
+    environment:
+      - STRATEGY=aggregator_q5
+      - REPLICA_ID=1
+      - N_REPLICAS=2
+      - INPUT=direct_exchange:partial_counts_q5:1
+      - OUTPUTS_MATCH_COUNT=0
+      - OUTPUT_0=direct_exchange:results
+      - LOG_LEVEL=info
+      - N_FINAL_JOINERS=2
+      - N_MICRO_TX_COUNTER=3
+  final_joiner_0:
+    build: { context: ./src/, dockerfile: worker/Dockerfile }
+    depends_on: { rabbitmq: { condition: service_healthy } }
+    env_file:
+      - .env
+    environment:
+      - STRATEGY=final_joiner
+      - REPLICA_ID=0
+      - N_REPLICAS=2
+      - INPUT=direct_exchange:results:0
+      - OUTPUTS_MATCH_COUNT=0
+      - OUTPUT_0=final_queue:final_1
+      - OUTPUT_1=final_queue:final_2
+      - LOG_LEVEL=info
+      - EXPECTED_EOFS_Q5=1
+  final_joiner_1:
+    build: { context: ./src/, dockerfile: worker/Dockerfile }
+    depends_on: { rabbitmq: { condition: service_healthy } }
+    env_file:
+      - .env
+    environment:
+      - STRATEGY=final_joiner
+      - REPLICA_ID=1
+      - N_REPLICAS=2
+      - INPUT=direct_exchange:results:1
+      - OUTPUTS_MATCH_COUNT=0
+      - OUTPUT_0=final_queue:final_1
+      - OUTPUT_1=final_queue:final_2
+      - LOG_LEVEL=info
+      - EXPECTED_EOFS_Q5=1
+  fetcher_q5:
+    build: { context: ./src/, dockerfile: fetcher/Dockerfile }
+    depends_on: { rabbitmq: { condition: service_healthy } }
+    env_file:
+      - .env
+    environment:
+      - LOG_LEVEL=info
+      - CONVERSIONS_BASE_CURRENCY=USD
+      - CONVERSIONS_QUEUE_PREFIX=conversions
+      - N_MICRO_TX_COUNTER=3
+  rabbitmq:
+    build: { context: ./src/rabbitmq, dockerfile: Dockerfile }
+    volumes:
+      - ./src/rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
+    healthcheck:
+      interval: 5s
+      retries: 10
+      start_period: 50s
+      test: rabbitmq-diagnostics check_port_connectivity
+      timeout: 3s
+    ports:
+      - 5672:5672
+      - 15672:15672
