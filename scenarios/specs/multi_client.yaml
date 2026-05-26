@@ -6,11 +6,18 @@
 clients: 2
 gateways: 2
 log_level: info
-# Q1, Q2, Q3 y Q4 implementadas en la pipeline distribuida; el cliente
-# y el gateway cierran sesión con esos cuatro EOFs.
-expected_query_eofs: 4
+# Q1, Q2, Q3, Q4 y Q5 implementadas en la pipeline distribuida; el cliente
+# y el gateway cierran sesión con esos cinco EOFs.
+expected_query_eofs: 5
 transactions: /datasets/LI-Small_Trans.csv
 accounts: /datasets/LI-Small_accounts.csv
+
+fetchers:
+  - name: fetcher_q5
+    env:
+      N_MICRO_TX_COUNTER: "3"
+      CONVERSIONS_QUEUE_PREFIX: conversions
+      CONVERSIONS_BASE_CURRENCY: USD
 
 workers:
   - name: filter_period1
@@ -27,6 +34,9 @@ workers:
     strategy: filter_wire_ach
     replicas: 3
     input: queue:period1_for_wire_ach
+    match_count: 1
+    outputs:
+      - queue:period1_wire_ach
 
   - name: filter_currency_usd_p1
     strategy: filter_currency_usd_p1
@@ -193,6 +203,28 @@ workers:
       AMOUNT_THRESHOLD_PCT: "0.01"
       BUFFER_DIR: "/tmp"
 
+  - name: micro_transaction_counter
+    strategy: micro_transaction_counter
+    replicas: 3
+    inputs:
+      - queue:conversions_{REPLICA_ID}
+      - queue:period1_wire_ach
+    outputs:
+      - direct_exchange:partial_counts_q5
+    env:
+      MAX_CONVERTED_AMOUNT_USD: "1"
+      N_AGGREGATOR_Q5: "2"
+
+  - name: aggregator_q5
+    strategy: aggregator_q5
+    replicas: 2
+    input: direct_exchange:partial_counts_q5:{REPLICA_ID}
+    outputs:
+      - direct_exchange:results
+    env:
+      N_MICRO_TX_COUNTER: "3"     # = N_REPLICAS de micro_transaction_counter
+      N_FINAL_JOINERS: "2"        # = N_REPLICAS de final_joiner
+
   - name: final_joiner
     strategy: final_joiner
     replicas: 2
@@ -205,3 +237,4 @@ workers:
       EXPECTED_EOFS_Q2: "2"      # = K_AGGREGATORS_Q2: todos los shards emiten EOF por cliente
       EXPECTED_EOFS_Q3: "1"      # = N_REPLICAS de filter_q3
       EXPECTED_EOFS_Q4: "3"      # = K_COUNTERS (replicas de counter_q4)
+      EXPECTED_EOFS_Q5: "1"      # = N_REPLICAS de aggregator_q5 shardeado (1 por shard)

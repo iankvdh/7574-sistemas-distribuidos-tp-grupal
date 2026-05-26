@@ -18,7 +18,7 @@ import (
 	micro_transaction_counter "github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/micro_transaction_counter"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/noop"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/pathfinder"
-	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/sharder"
+	sharder "github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/sharder_q4"
 	sharder_q1 "github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/sharder_q1"
 	sum_q3 "github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/sum_q3"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/suspicious_filter"
