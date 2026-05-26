@@ -38,8 +38,6 @@ func New() *FinalJoiner {
 	}
 }
 
-func (j *FinalJoiner) Name() string { return "final_joiner" }
-
 func (j *FinalJoiner) Init(cfg strategy.StrategyConfig) error {
 	if cfg.OutputCount < 1 {
 		return fmt.Errorf("final_joiner requires at least 1 output, got %d", cfg.OutputCount)

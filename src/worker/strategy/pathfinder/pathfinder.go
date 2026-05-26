@@ -40,8 +40,6 @@ func New() *PathFinder {
 	return &PathFinder{state: map[inner.ClientID]*clientState{}}
 }
 
-func (p *PathFinder) Name() string { return "path_finder_q4" }
-
 func (p *PathFinder) Init(cfg strategy.StrategyConfig) error {
 	if cfg.OutputCount != 1 {
 		return fmt.Errorf("path_finder_q4 expects exactly 1 output, got %d", cfg.OutputCount)

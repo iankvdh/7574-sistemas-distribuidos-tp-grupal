@@ -47,8 +47,6 @@ func New() *SuspiciousFilter {
 	return &SuspiciousFilter{state: map[inner.ClientID]*clientState{}}
 }
 
-func (s *SuspiciousFilter) Name() string { return "suspicious_account_filter" }
-
 func (s *SuspiciousFilter) Init(cfg strategy.StrategyConfig) error {
 	if cfg.OutputCount != 1 {
 		return fmt.Errorf("suspicious_account_filter expects exactly 1 output, got %d", cfg.OutputCount)

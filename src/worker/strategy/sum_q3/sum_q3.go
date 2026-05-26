@@ -36,8 +36,6 @@ func New() *SumQ3 {
 	return &SumQ3{state: map[inner.ClientID]*clientState{}}
 }
 
-func (a *SumQ3) Name() string { return "sum_q3" }
-
 func (a *SumQ3) Init(cfg strategy.StrategyConfig) error {
 	if cfg.OutputCount != 1 {
 		return fmt.Errorf("sum_q3 expects exactly 1 output, got %d", cfg.OutputCount)

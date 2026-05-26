@@ -41,8 +41,6 @@ func New(name string, predicate Predicate) *Filter {
 	}
 }
 
-func (f *Filter) Name() string { return f.name }
-
 func (f *Filter) WithMatchProjection(p Projection) *Filter {
 	f.matchProjection = &p
 	return f

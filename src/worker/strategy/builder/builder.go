@@ -31,7 +31,7 @@ func Build(name string) (strategy.Strategy, error) {
 	case "noop":
 		return noop.New(), nil
 	case "joiner_usd":
-		return joiner.NewEOFJoiner("joiner_usd"), nil
+		return joiner.NewEOFJoiner(), nil
 	case "filter_wire_ach":
 		return filter.New("filter_wire_ach", filter.IsWireOrACH), nil
 	case "filter_amount_lt_50":

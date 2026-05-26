@@ -30,8 +30,6 @@ func New() *Sharder {
 	return &Sharder{state: map[inner.ClientID]*clientState{}}
 }
 
-func (s *Sharder) Name() string { return "sharder_q4" }
-
 func (s *Sharder) Init(cfg strategy.StrategyConfig) error {
 	if cfg.NReplicas > 1 && (cfg.RingQueueIn == "" || cfg.RingQueueOut == "") {
 		return fmt.Errorf("sharder_q4 requires RING_QUEUE_IN/RING_QUEUE_OUT when N_REPLICAS>1")

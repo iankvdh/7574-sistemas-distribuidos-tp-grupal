@@ -6,8 +6,6 @@ import (
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy"
 )
 
-const name = "noop"
-
 // Strategy forwards every message to all configured outputs unchanged.
 type Strategy struct {
 	cfg    strategy.StrategyConfig
@@ -22,8 +20,6 @@ func (s *Strategy) Init(cfg strategy.StrategyConfig) error {
 	s.cfg = cfg
 	return nil
 }
-
-func (s *Strategy) Name() string { return name }
 
 func (s *Strategy) ProcessMessage(env *inner.Envelope) ([]strategy.OutputMessage, strategy.LocalCounts, error) {
 	indices := make([]int, 0, s.cfg.OutputCount)

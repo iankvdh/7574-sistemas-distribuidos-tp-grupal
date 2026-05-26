@@ -29,8 +29,6 @@ func New() *AggregatorQ3 {
 	return &AggregatorQ3{state: map[inner.ClientID]*clientState{}}
 }
 
-func (a *AggregatorQ3) Name() string { return "aggregator_q3" }
-
 func (a *AggregatorQ3) Init(cfg strategy.StrategyConfig) error {
 	if cfg.OutputCount != 1 {
 		return fmt.Errorf("aggregator_q3 expects exactly 1 output, got %d", cfg.OutputCount)

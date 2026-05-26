@@ -30,8 +30,6 @@ func New() *Sharder {
 	return &Sharder{state: map[inner.ClientID]*clientState{}}
 }
 
-func (s *Sharder) Name() string { return "sharder_q1" }
-
 func (s *Sharder) Init(cfg strategy.StrategyConfig) error {
 	if cfg.OutputCount != 1 {
 		return fmt.Errorf("sharder_q1 expects exactly 1 output, got %d", cfg.OutputCount)

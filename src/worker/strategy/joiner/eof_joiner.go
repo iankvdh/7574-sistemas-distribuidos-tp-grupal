@@ -16,17 +16,14 @@ import (
 const defaultExpectedEOFs = 3 // period1, period2, other_periods
 
 type EOFJoiner struct {
-	name         string
 	cfg          strategy.StrategyConfig
 	coordinator  *eof.JoinerAccumulateCoordinator
 	expectedEOFs int
 }
 
-func NewEOFJoiner(name string) *EOFJoiner {
-	return &EOFJoiner{name: name}
+func NewEOFJoiner() *EOFJoiner {
+	return &EOFJoiner{}
 }
-
-func (j *EOFJoiner) Name() string { return j.name }
 
 func (j *EOFJoiner) Init(cfg strategy.StrategyConfig) error {
 	if cfg.OutputCount < 1 {

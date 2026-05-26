@@ -36,8 +36,6 @@ func NewQ4() *Q4Strategy {
 	return &Q4Strategy{pairs: map[inner.ClientID]map[q4Pair]struct{}{}}
 }
 
-func (s *Q4Strategy) Name() string { return "drain_q4" }
-
 func (s *Q4Strategy) Init(cfg strategy.StrategyConfig) error {
 	path := os.Getenv("DRAIN_OUTPUT_FILE")
 	if path == "" {

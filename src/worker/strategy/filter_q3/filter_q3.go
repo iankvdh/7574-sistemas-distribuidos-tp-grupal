@@ -53,8 +53,6 @@ func New() *FilterQ3 {
 	return &FilterQ3{state: map[inner.ClientID]*clientState{}}
 }
 
-func (f *FilterQ3) Name() string { return "filter_q3" }
-
 func (f *FilterQ3) Init(cfg strategy.StrategyConfig) error {
 	if cfg.OutputCount != 1 {
 		return fmt.Errorf("filter_q3 expects exactly 1 output, got %d", cfg.OutputCount)

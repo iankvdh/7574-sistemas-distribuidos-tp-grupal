@@ -48,7 +48,6 @@ type Strategy interface {
 	ProcessMessage(env *inner.Envelope) ([]OutputMessage, LocalCounts, error)
 	OnUpstreamEOF(env *inner.Envelope) (EOFOutcome, error)
 	OnRingToken(token *eof.Token) (EOFOutcome, error)
-	Name() string
 }
 
 type DeferredInputProvider interface {

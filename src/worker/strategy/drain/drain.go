@@ -16,8 +16,6 @@ import (
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy"
 )
 
-const name = "drain"
-
 type Strategy struct {
 	cfg   strategy.StrategyConfig
 	mu    sync.Mutex
@@ -28,8 +26,6 @@ type Strategy struct {
 func New() *Strategy {
 	return &Strategy{count: map[inner.ClientID]uint64{}}
 }
-
-func (s *Strategy) Name() string { return name }
 
 func (s *Strategy) Init(cfg strategy.StrategyConfig) error {
 	path := os.Getenv("DRAIN_OUTPUT_FILE")

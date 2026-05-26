@@ -46,8 +46,6 @@ func New() *Counter {
 	return &Counter{state: map[inner.ClientID]*clientState{}}
 }
 
-func (c *Counter) Name() string { return "counter_q4" }
-
 func (c *Counter) Init(cfg strategy.StrategyConfig) error {
 	if cfg.OutputCount != 1 {
 		return fmt.Errorf("counter_q4 expects exactly 1 output, got %d", cfg.OutputCount)

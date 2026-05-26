@@ -36,8 +36,6 @@ func New() *MaxQ2 {
 	return &MaxQ2{state: map[inner.ClientID]*clientState{}}
 }
 
-func (m *MaxQ2) Name() string { return "max_q2" }
-
 func (m *MaxQ2) Init(cfg strategy.StrategyConfig) error {
 	if cfg.OutputCount != 1 {
 		return fmt.Errorf("max_q2 expects exactly 1 output, got %d", cfg.OutputCount)

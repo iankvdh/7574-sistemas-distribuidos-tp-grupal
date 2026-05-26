@@ -64,8 +64,6 @@ func (m *MicroTransactionCounter) DeferredInputs() []int {
 	return []int{inputIndexTxs}
 }
 
-func (m *MicroTransactionCounter) Name() string { return "micro_transaction_counter" }
-
 func (m *MicroTransactionCounter) Init(cfg strategy.StrategyConfig) error {
 	if cfg.NumInputs != 2 {
 		return fmt.Errorf("micro_transaction_counter expects exactly 2 inputs (conversions + period1_wire_ach), got %d", cfg.NumInputs)
