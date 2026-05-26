@@ -1,0 +1,86 @@
+# Spec de test enfocado SOLO en Q5.
+#
+# Pipeline: las transacciones pasan primero por filter_period1, que deja sólo
+# las del período 1, y luego por filter_wire_ach, que se queda con Wire/ACH y
+# las publica en period1_wire_ach. En paralelo, el fetcher consulta a
+# frankfurter.dev y publica las cotizaciones en conversions_0..N-1 (una cola
+# por réplica de micro_transaction_counter). El micro_transaction_counter
+# (N réplicas, ring broadcast) consume ambas entradas y emite conteos parciales
+# a partial_counts_q5, shardeado por cliente. Esos parciales los recibe
+# aggregator_q5 (K réplicas, joiner accumulate), que los combina y envía los
+# resultados a la cola results, también shardeada por cliente, donde los toma
+# final_joiner.
+#
+# Las queries Q1..Q4 no tienen consumidores en este spec: lo que les llegaría
+# queda en colas previas. El cliente recibirá las filas + EOF de Q5; para
+# finalizar el escenario hay que ejecutar `make down` manualmente luego de
+# inspeccionar `results/client_*/*_q5.csv`.
+
+clients: 2
+gateways: 2
+log_level: info
+# Sólo Q5 está activa: el gateway y el cliente esperan UN único EOF por cliente.
+expected_query_eofs: 1
+transactions: /datasets/LI-Small_Trans.csv
+accounts: /datasets/LI-Small_accounts.csv
+
+fetchers:
+  - name: fetcher_q5
+    env:
+      N_MICRO_TX_COUNTER: "3"
+      CONVERSIONS_QUEUE_PREFIX: conversions
+      CONVERSIONS_BASE_CURRENCY: USD
+
+workers:
+  - name: filter_period1
+    strategy: filter_period1
+    replicas: 3
+    input: queue:all_transactions
+    match_count: 1
+    outputs:
+      - direct_exchange:period1_transactions
+      - queue:non_period1_transactions_drain
+
+  - name: filter_wire_ach
+    strategy: filter_wire_ach
+    replicas: 1
+    input: direct_exchange:period1_transactions
+    match_count: 1
+    outputs:
+      - queue:period1_wire_ach
+
+  - name: micro_transaction_counter
+    strategy: micro_transaction_counter
+    replicas: 3
+    # INPUT_0: cotizaciones publicadas por el fetcher (una cola por réplica).
+    # INPUT_1: transacciones Wire/ACH del período 1 (competing consumers).
+    inputs:
+      - queue:conversions_{REPLICA_ID}
+      - queue:period1_wire_ach
+    outputs:
+      - direct_exchange:partial_counts_q5
+    env:
+      MAX_CONVERTED_AMOUNT_USD: "1"
+      N_AGGREGATOR_Q5: "2"
+
+  - name: aggregator_q5
+    strategy: aggregator_q5
+    replicas: 2
+    input: direct_exchange:partial_counts_q5:{REPLICA_ID}
+    outputs:
+      - direct_exchange:results
+    env:
+      N_MICRO_TX_COUNTER: "3"     # = N_REPLICAS de micro_transaction_counter
+      N_FINAL_JOINERS: "2"        # = N_REPLICAS de final_joiner
+
+  - name: final_joiner
+    strategy: final_joiner
+    replicas: 2
+    input: direct_exchange:results:{REPLICA_ID}
+    outputs:
+      - final_queue:final_1
+      - final_queue:final_2
+    env:
+      # Cada cliente está shardeado a UN único aggregator_q5, que emite
+      # exactamente 1 EOF a results. El final_joiner cuenta por cliente.
+      EXPECTED_EOFS_Q5: "1"

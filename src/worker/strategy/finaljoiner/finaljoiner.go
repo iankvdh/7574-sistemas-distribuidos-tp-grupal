@@ -11,7 +11,7 @@ import (
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy"
 )
 
-var supportedQueries = []uint8{1, 2, 3, 4}
+var supportedQueries = []uint8{1, 2, 3, 4, 5}
 
 type q4Pair struct {
 	SourceBank    uint32
@@ -197,6 +197,15 @@ func (j *FinalJoiner) formatRow(queryID uint8, itemKind inner.MsgKind, payload [
 			row.SourceBank, row.SourceAccount,
 			strconv.FormatFloat(row.Amount, 'f', 2, 64),
 		), nil
+	case 5:
+		if itemKind != inner.Query5RowItem {
+			return "", fmt.Errorf("Q5 expects Query5RowItem, got kind=%d", itemKind)
+		}
+		row, err := inner.DeserializeQuery5Row(payload)
+		if err != nil {
+			return "", err
+		}
+		return strconv.FormatUint(row.Count, 10), nil
 	default:
 		return "", fmt.Errorf("formatter for QUERY_ID=%d not implemented", queryID)
 	}
