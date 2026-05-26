@@ -52,6 +52,22 @@ test:
 	@cd src && go test ./...
 .PHONY: test
 
+# --- Validación de resultados -----------------------------------------------
+# DATASET: dataset de referencia a usar (default: small)
+# CLIENT:  número de cliente a comparar  (default: 0)
+DATASET ?= small
+CLIENT  ?= 0
+
+# Genera los CSVs de referencia a partir del dataset. Correr una vez por dataset.
+generate-ref:
+	@python3 compare_results.py generate --dataset $(DATASET)
+.PHONY: generate-ref
+
+# Compara todos los resultados de results/client_<CLIENT> contra la referencia.
+compare:
+	@python3 compare_results.py compare --dataset $(DATASET) --results-dir results/$(DATASET)/client_$(CLIENT)
+.PHONY: compare
+
 # --- Spec → compose generation --------------------------------------------
 
 gen:

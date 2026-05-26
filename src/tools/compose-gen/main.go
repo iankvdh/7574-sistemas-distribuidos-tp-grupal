@@ -32,6 +32,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -58,10 +59,24 @@ type spec struct {
 	Gateways          int
 	Transactions      string
 	Accounts          string
+	Dataset           string // optional; auto-derived from Transactions if empty
 	LogLevel          string
 	ExpectedQueryEOFs int // 0 means "leave gateway/client defaults" (= 5)
 	Workers           []workerSpec
 	Fetchers          []fetcherSpec
+}
+
+// datasetFromTransactions extracts a lowercase dataset name from a transactions
+// path like "/datasets/LI-Small_Trans.csv" → "small".
+func datasetFromTransactions(transactions string) string {
+	base := filepath.Base(transactions)
+	if idx := strings.Index(base, "LI-"); idx >= 0 {
+		rest := base[idx+3:]
+		if end := strings.IndexByte(rest, '_'); end >= 0 {
+			return strings.ToLower(rest[:end])
+		}
+	}
+	return "default"
 }
 
 const defaultLogLevel = "info"
@@ -164,6 +179,8 @@ func parseSpec(src string) (*spec, error) {
 				s.Transactions = value
 			case "accounts":
 				s.Accounts = value
+			case "dataset":
+				s.Dataset = value
 			case "log_level":
 				s.LogLevel = value
 			case "expected_query_eofs":
@@ -331,12 +348,16 @@ func (s *spec) render(w io.Writer) error {
 	if accounts == "" {
 		accounts = "/datasets/LI-Small_accounts.csv"
 	}
+	dataset := s.Dataset
+	if dataset == "" {
+		dataset = datasetFromTransactions(transactions)
+	}
 	logLevel := s.LogLevel
 	if logLevel == "" {
 		logLevel = defaultLogLevel
 	}
 	for i := 0; i < s.Clients; i++ {
-		writeClient(w, i, s.Gateways, dependencies, transactions, accounts, logLevel, s.ExpectedQueryEOFs)
+		writeClient(w, i, s.Gateways, dependencies, transactions, accounts, dataset, logLevel, s.ExpectedQueryEOFs)
 	}
 	for i := 1; i <= s.Gateways; i++ {
 		writeGateway(w, i, logLevel, s.ExpectedQueryEOFs)
@@ -360,7 +381,7 @@ func serviceName(ws workerSpec, replica int) string {
 	return fmt.Sprintf("%s_%d", ws.Name, replica)
 }
 
-func writeClient(w io.Writer, idx, gateways int, deps []string, transactions, accounts, logLevel string, expectedQueryEOFs int) {
+func writeClient(w io.Writer, idx, gateways int, deps []string, transactions, accounts, dataset, logLevel string, expectedQueryEOFs int) {
 	fmt.Fprintf(w, "  client_%d:\n", idx)
 	fmt.Fprintln(w, "    build: { context: ./src/, dockerfile: client/Dockerfile }")
 	fmt.Fprintln(w, "    depends_on:")
@@ -390,7 +411,7 @@ func writeClient(w io.Writer, idx, gateways int, deps []string, transactions, ac
 	fmt.Fprintf(w, "      - LOG_LEVEL=%s\n", logLevel)
 	fmt.Fprintln(w, "    volumes:")
 	fmt.Fprintln(w, "      - ./datasets:/datasets")
-	fmt.Fprintf(w, "      - ./results/client_%d:/results\n", idx)
+	fmt.Fprintf(w, "      - ./results/%s/client_%d:/results\n", dataset, idx)
 }
 
 func writeGateway(w io.Writer, id int, logLevel string, expectedQueryEOFs int) {
