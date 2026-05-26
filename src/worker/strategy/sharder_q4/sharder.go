@@ -1,11 +1,4 @@
-// Package sharder implements the first stage of the Query 4 pipeline. For
-// each transaction it emits two ShardedTx messages, one shardeada por la
-// cuenta origen y otra por la cuenta destino, hacia el direct exchange que
-// alimenta al Suspicious Account Filter. El sharding se hace con FNV-1a sobre
-// la cadena "bank|account". EOFs entre Sharder y Suspicious Account Filter
-// usan el modo broadcast del RingCoordinator: cada réplica emite un EOF a
-// CADA réplica del Filter cuando se cierra el anillo.
-package sharder
+package sharder_q4
 
 import (
 	"fmt"
