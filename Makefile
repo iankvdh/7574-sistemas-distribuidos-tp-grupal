@@ -29,6 +29,39 @@ define show_exit_codes
 	done && echo "-----------------"
 endef
 
+help:
+	@echo ""
+	@echo "Uso: make <target> [FLAGS]"
+	@echo ""
+	@echo "--- Ciclo principal ---"
+	@echo "  up-pipeline [SPEC=default]      Genera el compose desde specs/<SPEC>.yaml y levanta el sistema (foreground)."
+	@echo "  up          		            Levanta docker-compose.yaml actual (foreground, Ctrl-C hace graceful stop)."
+	@echo "  up-detach                        Igual que up pero en background."
+	@echo "  down                             Para y elimina todos los contenedores."
+	@echo "  logs                             Muestra los logs de todos los contenedores."
+	@echo ""
+	@echo "--- Validación de resultados ---"
+	@echo "  generate-ref [DATASET=small]     Calcula las queries de referencia para el dataset y las guarda"
+	@echo "                                   en notebooks/<DATASET>/reference/. Correr una vez por dataset."
+	@echo "  compare [DATASET=small]          Compara los resultados de results/<DATASET>/client_<CLIENT>/"
+	@echo "          [CLIENT=0]               contra la referencia. Reporta OK/FAIL por query y por UUID."
+	@echo ""
+	@echo "  Ejemplos:"
+	@echo "    make generate-ref DATASET=medium"
+	@echo "    make compare DATASET=small CLIENT=1"
+	@echo ""
+	@echo "--- Generación de compose ---"
+	@echo "  gen [SPEC=default]               Expande scenarios/specs/<SPEC>.yaml → scenarios/<SPEC>.yaml."
+	@echo "  gen-all                          Expande todos los specs de scenarios/specs/."
+	@echo "  switch                           Menú interactivo para seleccionar el scenario activo."
+	@echo ""
+	@echo "--- Tests ---"
+	@echo "  test                             Corre go test ./... en src/."
+	@echo ""
+	@echo "  Specs disponibles: $(SPECS)"
+	@echo ""
+.PHONY: help
+
 up:
 	@trap '$(compose) stop -t 30 && $(show_exit_codes)' INT TERM EXIT; \
 	COMPOSE_HTTP_TIMEOUT=300 COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT_NAME) docker compose -f $(COMPOSE_FILE) up --build --remove-orphans
