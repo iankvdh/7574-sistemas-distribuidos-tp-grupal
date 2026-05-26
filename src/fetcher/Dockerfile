@@ -9,6 +9,7 @@ COPY fetcher ./fetcher
 RUN go mod download
 RUN CGO_ENABLED=0 GOOS=linux go build -o bin/fetcher ./fetcher
 
-FROM busybox:latest
+FROM alpine:3
+RUN apk add --no-cache ca-certificates
 COPY --from=builder /build/bin/fetcher /fetcher
 ENTRYPOINT ["./fetcher"]
