@@ -40,7 +40,7 @@ func (f *Fetcher) Run() error {
 }
 
 func (f *Fetcher) fetchRates() (*inner.Q5Conversions, error) {
-	request_url := fmt.Sprintf("%s/%s..%s?base=%s", f.cfg.APIURL, f.cfg.Period1Start, f.cfg.Period1End, f.cfg.BaseCurrency)
+	request_url := fmt.Sprintf("%s/rates?from=%s&to=%s&base=%s", f.cfg.APIURL, f.cfg.Period1Start, f.cfg.Period1End, f.cfg.BaseCurrency)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(f.cfg.RequestTimeoutSec)*time.Second)
 	defer cancel()

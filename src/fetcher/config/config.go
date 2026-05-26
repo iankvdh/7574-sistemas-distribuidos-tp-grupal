@@ -9,7 +9,7 @@ import (
 
 const (
 	defaultMomPort           = 5672
-	defaultAPIURL            = "https://api.frankfurter.dev/v1"
+	defaultAPIURL            = "https://api.frankfurter.dev/v2"
 	defaultQueuePrefix       = "conversions"
 	defaultBaseCurrency      = "USD"
 	defaultRequestTimeoutSec = 30
