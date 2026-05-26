@@ -58,21 +58,26 @@ func (f *Fetcher) fetchRates() (*inner.Q5Conversions, error) {
 		return nil, fmt.Errorf("GET %s returned %d: %s", request_url, response.StatusCode, string(body))
 	}
 
-	var fetched_rates struct {
-		Rates map[string]map[string]float64 `json:"rates"`
+	var entries []struct {
+		Date  string  `json:"date"`
+		Quote string  `json:"quote"`
+		Rate  float64 `json:"rate"`
 	}
-	if err := json.NewDecoder(response.Body).Decode(&fetched_rates); err != nil {
+	if err := json.NewDecoder(response.Body).Decode(&entries); err != nil {
 		return nil, fmt.Errorf("decode frankfurter response: %w", err)
 	}
 
-	formatted_rates := &inner.Q5Conversions{Rates: make(map[uint32]map[string]float64, len(fetched_rates.Rates))}
-	for isoDate, perCurrency := range fetched_rates.Rates {
-		key, err := fromISODate(isoDate)
+	formatted_rates := &inner.Q5Conversions{Rates: make(map[uint32]map[string]float64)}
+	for _, entry := range entries {
+		key, err := fromISODate(entry.Date)
 		if err != nil {
-			slog.Warn("Skipping unparseable rate date", "date", isoDate, "err", err)
+			slog.Warn("Skipping unparseable rate date", "date", entry.Date, "err", err)
 			continue
 		}
-		formatted_rates.Rates[key] = perCurrency
+		if _, ok := formatted_rates.Rates[key]; !ok {
+			formatted_rates.Rates[key] = make(map[string]float64)
+		}
+		formatted_rates.Rates[key][entry.Quote] = entry.Rate
 	}
 	return formatted_rates, nil
 }
