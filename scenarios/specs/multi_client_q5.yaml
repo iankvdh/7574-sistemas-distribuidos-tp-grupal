@@ -1,20 +1,4 @@
 # Spec de test enfocado SOLO en Q5.
-#
-# Pipeline: las transacciones pasan primero por filter_period1, que deja sólo
-# las del período 1, y luego por filter_wire_ach, que se queda con Wire/ACH y
-# las publica en period1_wire_ach. En paralelo, el fetcher consulta a
-# frankfurter.dev y publica las cotizaciones en conversions_0..N-1 (una cola
-# por réplica de micro_transaction_counter). El micro_transaction_counter
-# (N réplicas, ring broadcast) consume ambas entradas y emite conteos parciales
-# a partial_counts_q5, shardeado por cliente. Esos parciales los recibe
-# aggregator_q5 (K réplicas, joiner accumulate), que los combina y envía los
-# resultados a la cola results, también shardeada por cliente, donde los toma
-# final_joiner.
-#
-# Las queries Q1..Q4 no tienen consumidores en este spec: lo que les llegaría
-# queda en colas previas. El cliente recibirá las filas + EOF de Q5; para
-# finalizar el escenario hay que ejecutar `make down` manualmente luego de
-# inspeccionar `results/client_*/*_q5.csv`.
 
 clients: 2
 gateways: 2

@@ -1,18 +1,4 @@
 # Spec de test enfocado SOLO en Q1.
-#
-# Corre el pipeline completo de filtros (period1, wire_ach, currency_usd_*, period2,
-# joiner_usd, filter_amount_lt_50) y lo conecta al sharder_q1 + final_joiner_q1.
-# El resto de las queries (Q2, Q3, Q4, Q5) NO tiene ningún nodo consumiendo:
-# los datos que les llegarían se acumulan en sus colas previas. El cliente
-# recibirá las filas + EOF de Q1; las otras 4 queries nunca cerrarán EOF, así
-# que el gateway queda esperando para siempre y la sesión TCP del cliente
-# tampoco se cierra. Para finalizar el escenario hay que ejecutar `make down`
-# manualmente luego de inspeccionar `results/client_0/<id>_q1.csv` y
-# `results/client_1/<id>_q1.csv`.
-#
-# Por qué este spec es útil: aísla el camino Q1 (sharder_q1 + N final_joiners)
-# del resto, así un fallo en Q1 no se confunde con un fallo cualquiera de las
-# otras queries. Es el espejo de multi_client.yaml pero recortado a Q1.
 
 clients: 2
 gateways: 2

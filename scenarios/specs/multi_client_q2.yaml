@@ -1,17 +1,4 @@
 # Spec de test enfocado SOLO en Q2.
-#
-# Corre la pipeline mínima necesaria para Q2 — los filtros de USD (period1, period2,
-# other_periods) alimentan al joiner_usd, que reenvía a queue:q2_input. De ahí
-# arrancan max_q2 (anillo) + bank_aggregator (anillo, consume all_accounts) →
-# aggregator_q2 (sharded por cliente) → final_joiner_q2. El resto de las queries
-# (Q1, Q3, Q4, Q5) NO tiene ningún nodo consumiendo: los datos que les llegarían
-# se acumulan en sus colas previas. El cliente recibirá las filas + EOF de Q2 y
-# luego cerrará limpio.
-#
-# Por qué este spec es útil: aísla el camino Q2 (max + bank_aggregator +
-# aggregator + N final_joiners) del resto, así un fallo en Q2 no se confunde con
-# un fallo cualquiera de las otras queries. Es el espejo de multi_client_q1.yaml
-# y multi_client_q4.yaml pero recortado a Q2.
 
 clients: 2
 gateways: 2

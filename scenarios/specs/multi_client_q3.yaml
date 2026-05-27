@@ -1,17 +1,4 @@
 # Spec de test enfocado SOLO en Q3.
-#
-# Corre filter_period1 → filter_currency_usd_p1 (P1 USD) y
-# filter_period2 → filter_currency_usd_p2 (P2 USD) en paralelo. Conecta esos
-# streams a la rama Q3: sum_q3 (parciales por payment_format) →
-# aggregator_q3 (promedio global broadcast) → filter_q3 (compara cada P2
-# USD contra avg/100) → final_joiner.
-#
-# El resto de las queries (Q1, Q2, Q4, Q5) NO tiene nodo consumiendo: los
-# datos que les llegarían se acumulan en sus colas previas. El cliente recibirá
-# las filas + EOF de Q3; las otras 4 queries nunca cerrarán EOF, así que el
-# gateway queda esperando para siempre. Para finalizar el escenario hay que
-# ejecutar `make down` manualmente luego de inspeccionar
-# `results/client_*/*_q3.csv`.
 
 clients: 2
 gateways: 2
