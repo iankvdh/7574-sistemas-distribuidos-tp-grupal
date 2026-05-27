@@ -16,7 +16,6 @@ import (
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/joiner"
 	max_q2 "github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/max_q2"
 	micro_transaction_counter "github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/micro_transaction_counter"
-	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/noop"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/pathfinder"
 	sharder_q1 "github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/sharder_q1"
 	sharder "github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/sharder_q4"
@@ -28,8 +27,6 @@ func Build(name string) (strategy.Strategy, error) {
 	switch name {
 	case "drain":
 		return drain.New(), nil
-	case "noop":
-		return noop.New(), nil
 	case "joiner_usd":
 		return joiner.NewEOFJoiner(), nil
 	case "filter_wire_ach":
