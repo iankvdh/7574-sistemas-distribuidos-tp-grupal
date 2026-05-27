@@ -78,8 +78,6 @@ workers:
     input: queue:joiner_usd_input_{REPLICA_ID}
     outputs:
       - queue:usd_for_amount_lt_50
-    env:
-      EXPECTED_EOFS: "3"
 
   - name: filter_amount_lt_50
     strategy: filter_amount_lt_50
@@ -95,15 +93,10 @@ workers:
     input: queue:q1_input
     outputs:
       - direct_exchange:results
-    env:
-      N_FINAL_JOINERS: "2"
 
   - name: final_joiner
     strategy: final_joiner
     replicas: 2
     input: direct_exchange:results:{REPLICA_ID}
     outputs:
-      - final_queue:final_1
-      - final_queue:final_2
-    env:
-      EXPECTED_EOFS_Q1: "1"      # solo el initiator del ring de sharder_q1 emite EOF
+      - final_queues

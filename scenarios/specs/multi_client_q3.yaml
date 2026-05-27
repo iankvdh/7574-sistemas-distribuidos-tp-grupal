@@ -62,8 +62,6 @@ workers:
     input: queue:q3_p1_usd
     outputs:
       - direct_exchange:q3_avg_global_input
-    env:
-      K_AGGREGATORS_Q3: "2"
 
   - name: aggregator_q3
     strategy: aggregator_q3
@@ -71,21 +69,16 @@ workers:
     input: direct_exchange:q3_avg_global_input:{REPLICA_ID}
     outputs:
       - direct_exchange:q3_averages
-    env:
-      EXPECTED_PARTIAL_EOFS: "3"   # = N_REPLICAS de sum_q3
-      N_FILTER_Q3: "3"             # = N_REPLICAS de filter_q3
 
   - name: filter_q3
     strategy: filter_q3
     replicas: 3
-    # INPUT_0: P2 USD (competing consumers); INPUT_1: averages broadcast
     inputs:
       - queue:q3_p2_for_filter
       - direct_exchange:q3_averages:{REPLICA_ID}
     outputs:
       - direct_exchange:results
     env:
-      N_FINAL_JOINERS: "2"
       AMOUNT_THRESHOLD_PCT: "0.01"
       BUFFER_DIR: "/tmp"
 
@@ -94,7 +87,4 @@ workers:
     replicas: 2
     input: direct_exchange:results:{REPLICA_ID}
     outputs:
-      - final_queue:final_1
-      - final_queue:final_2
-    env:
-      EXPECTED_EOFS_Q3: "3"      # = N_REPLICAS de filter_q3 (broadcast mode)
+      - final_queues

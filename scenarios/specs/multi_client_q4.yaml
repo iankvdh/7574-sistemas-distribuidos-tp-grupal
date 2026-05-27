@@ -46,8 +46,6 @@ workers:
     input: queue:period1_usd_transactions
     outputs:
       - direct_exchange:q4_account_shards
-    env:
-      K_SUSPICIOUS_FILTERS: "3"
 
   - name: suspicious_account_filter
     strategy: suspicious_account_filter
@@ -56,8 +54,6 @@ workers:
     outputs:
       - direct_exchange:q4_suspicious_account_shards
     env:
-      N_SHARDERS: "3"
-      K_PATH_FINDERS: "3"
       SUSPICIOUS_THRESHOLD: "5"
 
   - name: path_finder_q4
@@ -66,9 +62,6 @@ workers:
     input: direct_exchange:q4_suspicious_account_shards:{REPLICA_ID}
     outputs:
       - direct_exchange:q4_pair_shards
-    env:
-      K_COUNTERS: "3"
-      N_SUSPICIOUS_FILTERS: "3"
 
   - name: counter_q4
     strategy: counter_q4
@@ -77,8 +70,6 @@ workers:
     outputs:
       - direct_exchange:results
     env:
-      N_PATH_FINDERS: "3"
-      N_FINAL_JOINERS: "2"
       MIN_INTERMEDIATES: "5"
 
   - name: final_joiner
@@ -86,7 +77,4 @@ workers:
     replicas: 2
     input: direct_exchange:results:{REPLICA_ID}
     outputs:
-      - final_queue:final_1
-      - final_queue:final_2
-    env:
-      EXPECTED_EOFS_Q4: "3"      # = K_COUNTERS (replicas de counter_q4)
+      - final_queues

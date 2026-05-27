@@ -329,6 +329,161 @@ func stripInlineComment(s string) string {
 	return s
 }
 
+// injectDerivedEnvs auto-populates all cross-reference env vars (N_FINAL_JOINERS,
+// K_AGGREGATORS_Q2, EXPECTED_PARTIAL_EOFS, EXPECTED_EOFS_Q*, etc.) from replica
+// counts so specs only need to declare domain-logic params (thresholds, dirs, …).
+// Values already set in the spec take precedence (explicit override).
+func injectDerivedEnvs(workers []workerSpec, fetchers []fetcherSpec) {
+	r := func(name string) int {
+		for _, w := range workers {
+			if w.Name == name {
+				return w.Replicas
+			}
+		}
+		return 0
+	}
+	itoa := strconv.Itoa
+	set := func(env map[string]string, key, val string) {
+		if _, ok := env[key]; !ok {
+			env[key] = val
+		}
+	}
+
+	// Count distinct worker types that feed into joiner_usd (each ring-worker
+	// emits exactly 1 EOF downstream regardless of replica count).
+	joinerUSDUpstreams := 0
+	for _, w := range workers {
+		for _, o := range w.Outputs {
+			if strings.Contains(o, "joiner_usd_input") {
+				joinerUSDUpstreams++
+				break
+			}
+		}
+	}
+
+	for i := range workers {
+		env := workers[i].Env
+		switch workers[i].Strategy {
+		case "sharder_q1":
+			if n := r("final_joiner"); n > 0 {
+				set(env, "N_FINAL_JOINERS", itoa(n))
+			}
+		case "max_q2":
+			if n := r("aggregator_q2"); n > 0 {
+				set(env, "K_AGGREGATORS_Q2", itoa(n))
+			}
+		case "bank_aggregator":
+			if n := r("aggregator_q2"); n > 0 {
+				set(env, "K_AGGREGATORS_Q2", itoa(n))
+			}
+		case "aggregator_q2":
+			if n := r("max_q2") + r("bank_aggregator"); n > 0 {
+				set(env, "EXPECTED_PARTIAL_EOFS", itoa(n))
+			}
+			if n := r("final_joiner"); n > 0 {
+				set(env, "N_FINAL_JOINERS", itoa(n))
+			}
+		case "sum_q3":
+			if n := r("aggregator_q3"); n > 0 {
+				set(env, "K_AGGREGATORS_Q3", itoa(n))
+			}
+		case "aggregator_q3":
+			if n := r("sum_q3"); n > 0 {
+				set(env, "EXPECTED_PARTIAL_EOFS", itoa(n))
+			}
+			if n := r("filter_q3"); n > 0 {
+				set(env, "N_FILTER_Q3", itoa(n))
+			}
+		case "filter_q3":
+			if n := r("final_joiner"); n > 0 {
+				set(env, "N_FINAL_JOINERS", itoa(n))
+			}
+		case "sharder_q4":
+			if n := r("suspicious_account_filter"); n > 0 {
+				set(env, "K_SUSPICIOUS_FILTERS", itoa(n))
+			}
+		case "suspicious_account_filter":
+			if n := r("sharder_q4"); n > 0 {
+				set(env, "N_SHARDERS", itoa(n))
+			}
+			if n := r("path_finder_q4"); n > 0 {
+				set(env, "K_PATH_FINDERS", itoa(n))
+			}
+		case "path_finder_q4":
+			if n := r("suspicious_account_filter"); n > 0 {
+				set(env, "N_SUSPICIOUS_FILTERS", itoa(n))
+			}
+			if n := r("counter_q4"); n > 0 {
+				set(env, "K_COUNTERS", itoa(n))
+			}
+		case "counter_q4":
+			if n := r("path_finder_q4"); n > 0 {
+				set(env, "N_PATH_FINDERS", itoa(n))
+			}
+			if n := r("final_joiner"); n > 0 {
+				set(env, "N_FINAL_JOINERS", itoa(n))
+			}
+		case "micro_transaction_counter":
+			if n := r("aggregator_q5"); n > 0 {
+				set(env, "N_AGGREGATOR_Q5", itoa(n))
+			}
+		case "aggregator_q5":
+			if n := r("micro_transaction_counter"); n > 0 {
+				set(env, "N_MICRO_TX_COUNTER", itoa(n))
+			}
+			if n := r("final_joiner"); n > 0 {
+				set(env, "N_FINAL_JOINERS", itoa(n))
+			}
+		case "joiner_usd":
+			if joinerUSDUpstreams > 0 {
+				set(env, "EXPECTED_EOFS", itoa(joinerUSDUpstreams))
+			}
+		case "final_joiner":
+			if r("sharder_q1") > 0 {
+				set(env, "EXPECTED_EOFS_Q1", "1")
+			}
+			if n := r("aggregator_q2"); n > 0 {
+				set(env, "EXPECTED_EOFS_Q2", itoa(n))
+			}
+			if n := r("filter_q3"); n > 0 {
+				set(env, "EXPECTED_EOFS_Q3", itoa(n))
+			}
+			if n := r("counter_q4"); n > 0 {
+				set(env, "EXPECTED_EOFS_Q4", itoa(n))
+			}
+			if r("aggregator_q5") > 0 {
+				set(env, "EXPECTED_EOFS_Q5", "1")
+			}
+		}
+	}
+
+	for i := range fetchers {
+		switch fetchers[i].Name {
+		case "fetcher_q5":
+			if n := r("micro_transaction_counter"); n > 0 {
+				set(fetchers[i].Env, "N_MICRO_TX_COUNTER", itoa(n))
+			}
+		}
+	}
+}
+
+// expandOutputs replaces the magic token "final_queues" with one
+// final_queue:final_<i> entry per gateway so the final_joiner always has
+// exactly as many outputs as gateways, without manual bookkeeping in specs.
+func expandOutputs(outputs []string, gateways int) []string {
+	result := make([]string, 0, len(outputs))
+	for _, o := range outputs {
+		if o == "final_queues" {
+			for i := 1; i <= gateways; i++ {
+				result = append(result, fmt.Sprintf("final_queue:final_%d", i))
+			}
+		} else {
+			result = append(result, o)
+		}
+	}
+	return result
+}
+
 func (s *spec) render(w io.Writer) error {
 	fmt.Fprintln(w, "services:")
 
@@ -362,9 +517,10 @@ func (s *spec) render(w io.Writer) error {
 	for i := 1; i <= s.Gateways; i++ {
 		writeGateway(w, i, logLevel, s.ExpectedQueryEOFs)
 	}
+	injectDerivedEnvs(s.Workers, s.Fetchers)
 	for _, ws := range s.Workers {
 		for r := 0; r < ws.Replicas; r++ {
-			writeWorker(w, ws, r, logLevel)
+			writeWorker(w, ws, r, logLevel, s.Gateways)
 		}
 	}
 	for _, fs := range s.Fetchers {
@@ -433,7 +589,7 @@ func writeGateway(w io.Writer, id int, logLevel string, expectedQueryEOFs int) {
 	fmt.Fprintf(w, "      - LOG_LEVEL=%s\n", logLevel)
 }
 
-func writeWorker(w io.Writer, ws workerSpec, replica int, logLevel string) {
+func writeWorker(w io.Writer, ws workerSpec, replica int, logLevel string, gateways int) {
 	fmt.Fprintf(w, "  %s:\n", serviceName(ws, replica))
 	fmt.Fprintln(w, "    build: { context: ./src/, dockerfile: worker/Dockerfile }")
 	fmt.Fprintln(w, "    depends_on: { rabbitmq: { condition: service_healthy } }")
@@ -452,8 +608,9 @@ func writeWorker(w io.Writer, ws workerSpec, replica int, logLevel string) {
 			fmt.Fprintf(w, "      - INPUT_%d=%s\n", j, input)
 		}
 	}
+	outputs := expandOutputs(ws.Outputs, gateways)
 	fmt.Fprintf(w, "      - OUTPUTS_MATCH_COUNT=%d\n", ws.MatchCount)
-	for j, o := range ws.Outputs {
+	for j, o := range outputs {
 		fmt.Fprintf(w, "      - OUTPUT_%d=%s\n", j, o)
 	}
 	fmt.Fprintf(w, "      - LOG_LEVEL=%s\n", logLevel)

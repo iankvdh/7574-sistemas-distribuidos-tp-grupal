@@ -1,13 +1,13 @@
-# Escenario más exigente: 2 clientes (cada uno publica el dataset completo),
-# 2 gateways, y N=3 réplicas en todos los filters y en el joiner_usd (K=3).
-# Mismo modelo que scaled: fan-out por queues nombradas (una por consumer-type)
-# y sharding al joiner_usd vía sharded_queues:joiner_usd_input:3.
+# Escenario optimizado basado en profiling con docker stats (simple_client, 1 réplica).
+#
+# Criterio de escalado para 2 clientes (carga doble):
+#   CPU > 20% con 1 réplica → 3 réplicas  (filter_period1/2, filter_currency_usd_p1/p2)
+#   CPU 7-20%               → 2 réplicas  (filter_wire_ach, joiner_usd, sharder_q4, max_q2, ...)
+#   CPU < 5%                → 1 réplica   (counter_q4, micro_transaction_counter, aggregator_q5)
 
 clients: 2
-gateways: 2
+gateways: 4
 log_level: info
-# Q1, Q2, Q3, Q4 y Q5 implementadas en la pipeline distribuida; el cliente
-# y el gateway cierran sesión con esos cinco EOFs.
 expected_query_eofs: 5
 transactions: /datasets/LI-Small_Trans.csv
 accounts: /datasets/LI-Small_accounts.csv
@@ -19,7 +19,9 @@ fetchers:
       CONVERSIONS_BASE_CURRENCY: USD
 
 workers:
-  - name: filter_period1
+  # --- Filtros de entrada (máxima carga) -----------------------------------
+
+  - name: filter_period1        # ~32% CPU × 2 clientes → 3 réplicas
     strategy: filter_period1
     replicas: 3
     input: queue:all_transactions
@@ -29,25 +31,25 @@ workers:
       - queue:period1_for_currency_usd_p1
       - queue:non_period1_transactions
 
-  - name: filter_wire_ach
+  - name: filter_wire_ach       # ~18% CPU → 2 réplicas
     strategy: filter_wire_ach
-    replicas: 3
+    replicas: 2
     input: queue:period1_for_wire_ach
     match_count: 1
     outputs:
       - queue:period1_wire_ach
 
-  - name: filter_currency_usd_p1
+  - name: filter_currency_usd_p1  # ~22% CPU × 2 clientes → 3 réplicas
     strategy: filter_currency_usd_p1
     replicas: 3
     input: queue:period1_for_currency_usd_p1
     match_count: 3
     outputs:
       - queue:period1_usd_transactions
-      - sharded_queues:joiner_usd_input:3
+      - sharded_queues:joiner_usd_input:2
       - queue:q3_p1_usd
 
-  - name: filter_period2
+  - name: filter_period2        # ~25% CPU × 2 clientes → 3 réplicas
     strategy: filter_period2
     replicas: 3
     input: queue:non_period1_transactions
@@ -56,114 +58,122 @@ workers:
       - queue:period2_transactions
       - queue:other_dates_transactions
 
-  - name: filter_currency_usd_p2
+  - name: filter_currency_usd_p2  # ~22% CPU × 2 clientes → 3 réplicas
     strategy: filter_currency_usd_p2
     replicas: 3
     input: queue:period2_transactions
     match_count: 2
     outputs:
-      - sharded_queues:joiner_usd_input:3
+      - sharded_queues:joiner_usd_input:2
       - queue:q3_p2_for_filter
 
-  - name: filter_currency_usd_other_periods
+  - name: filter_currency_usd_other_periods  # tráfico mínimo (fechas residuales) → 1 réplica
     strategy: filter_currency_usd_other_periods
-    replicas: 3
+    replicas: 1
     input: queue:other_dates_transactions
     match_count: 1
     outputs:
-      - sharded_queues:joiner_usd_input:3
+      - sharded_queues:joiner_usd_input:2
 
-  - name: joiner_usd
+  # --- Merge y downstream Q1/Q2 --------------------------------------------
+
+  - name: joiner_usd            # ~8% CPU → 2 réplicas (shard count = 2)
     strategy: joiner_usd
-    replicas: 3
+    replicas: 2
     input: queue:joiner_usd_input_{REPLICA_ID}
     outputs:
       - queue:usd_for_amount_lt_50
       - queue:q2_input
 
-  - name: filter_amount_lt_50
+  - name: filter_amount_lt_50   # ~7% CPU → 2 réplicas
     strategy: filter_amount_lt_50
-    replicas: 3
+    replicas: 2
     input: queue:usd_for_amount_lt_50
     match_count: 1
     outputs:
       - queue:q1_input
 
-  - name: sharder_q1
+  - name: sharder_q1            # <2% CPU → 2 réplicas (una por final_joiner)
     strategy: sharder_q1
-    replicas: 3
+    replicas: 2
     input: queue:q1_input
     outputs:
       - direct_exchange:results
 
-  - name: sharder_q4
+  # --- Q4 ------------------------------------------------------------------
+
+  - name: sharder_q4            # ~12% CPU → 2 réplicas
     strategy: sharder_q4
-    replicas: 3
+    replicas: 2
     input: queue:period1_usd_transactions
     outputs:
       - direct_exchange:q4_account_shards
 
-  - name: suspicious_account_filter
+  - name: suspicious_account_filter  # ~32% CPU al inicio (bufferiza toda la ventana) → 2 réplicas
     strategy: suspicious_account_filter
-    replicas: 3
+    replicas: 2
     input: direct_exchange:q4_account_shards:{REPLICA_ID}
     outputs:
       - direct_exchange:q4_suspicious_account_shards
     env:
       SUSPICIOUS_THRESHOLD: "5"
 
-  - name: path_finder_q4
+  - name: path_finder_q4        # ~7% CPU (pico) → 2 réplicas
     strategy: path_finder_q4
-    replicas: 3
+    replicas: 2
     input: direct_exchange:q4_suspicious_account_shards:{REPLICA_ID}
     outputs:
       - direct_exchange:q4_pair_shards
 
-  - name: counter_q4
+  - name: counter_q4            # <1% CPU → 1 réplica
     strategy: counter_q4
-    replicas: 3
+    replicas: 1
     input: direct_exchange:q4_pair_shards:{REPLICA_ID}
     outputs:
       - direct_exchange:results
     env:
       MIN_INTERMEDIATES: "5"
 
-  - name: max_q2
+  # --- Q2 ------------------------------------------------------------------
+
+  - name: max_q2                # ~8% CPU → 2 réplicas
     strategy: max_q2
-    replicas: 3
+    replicas: 2
     input: queue:q2_input
     outputs:
       - direct_exchange:q2_agg_input
 
-  - name: bank_aggregator
+  - name: bank_aggregator       # procesa accounts (carga baja) → 2 réplicas
     strategy: bank_aggregator
-    replicas: 3
+    replicas: 2
     input: queue:all_accounts
     outputs:
       - direct_exchange:q2_agg_input
 
-  - name: aggregator_q2
+  - name: aggregator_q2         # 1 réplica
     strategy: aggregator_q2
-    replicas: 2
+    replicas: 1
     input: direct_exchange:q2_agg_input:{REPLICA_ID}
     outputs:
       - direct_exchange:results
 
-  - name: sum_q3
+  # --- Q3 ------------------------------------------------------------------
+
+  - name: sum_q3                # ~6% CPU → 2 réplicas
     strategy: sum_q3
-    replicas: 3
+    replicas: 2
     input: queue:q3_p1_usd
     outputs:
       - direct_exchange:q3_avg_global_input
 
-  - name: aggregator_q3
+  - name: aggregator_q3         # 1 réplica
     strategy: aggregator_q3
     replicas: 1
     input: direct_exchange:q3_avg_global_input:{REPLICA_ID}
     outputs:
       - direct_exchange:q3_averages
 
-  - name: filter_q3
+  - name: filter_q3             # ~7% CPU, stateful → 1 réplica
     strategy: filter_q3
     replicas: 1
     inputs:
@@ -175,9 +185,11 @@ workers:
       AMOUNT_THRESHOLD_PCT: "0.01"
       BUFFER_DIR: "/tmp"
 
-  - name: micro_transaction_counter
+  # --- Q5 ------------------------------------------------------------------
+
+  - name: micro_transaction_counter  # ~2% CPU → 2 réplicas
     strategy: micro_transaction_counter
-    replicas: 3
+    replicas: 2
     inputs:
       - queue:conversions_{REPLICA_ID}
       - queue:period1_wire_ach
@@ -186,12 +198,14 @@ workers:
     env:
       MAX_CONVERTED_AMOUNT_USD: "1"
 
-  - name: aggregator_q5
+  - name: aggregator_q5         # 2 réplicas (1 por final_joiner)
     strategy: aggregator_q5
     replicas: 2
     input: direct_exchange:partial_counts_q5:{REPLICA_ID}
     outputs:
       - direct_exchange:results
+
+  # --- Salida --------------------------------------------------------------
 
   - name: final_joiner
     strategy: final_joiner
