@@ -40,6 +40,10 @@ DATASETS = {
         "trans":    ROOT / "datasets/LI-Medium_Trans.csv",
         "accounts": ROOT / "datasets/LI-Medium_accounts.csv",
     },
+    "large": {
+        "trans":    ROOT / "datasets/LI-Large_Trans.csv",
+        "accounts": ROOT / "datasets/LI-Large_accounts.csv",
+    },
 }
 
 COTIZACIONES = ROOT / "datasets/cotizaciones.json"
