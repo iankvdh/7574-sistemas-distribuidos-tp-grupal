@@ -1,334 +1,182 @@
 package inner
 
 import (
-	"encoding/binary"
-	"encoding/json"
 	"errors"
+	"fmt"
 
-	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/middleware"
+	"github.com/google/uuid"
+	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/messageprotocol/external/serializer"
 )
 
 type ClientID string
 type GatewayID int
 
+// MessageType discriminates the on-the-wire message type of the internal
+// protocol. It is the first byte of every serialized message and is read by
+// NewFromSerializedData to build the corresponding concrete type.
+type MessageType uint8
+
+const (
+	// Batch groups N items of the same item_kind (see MsgKind). It unifies the
+	// internal pipeline batches and the final batch towards the gateway.
+	Batch MessageType = iota + 1
+	// EOF signals the end of a stream between stages (transactions, accounts or
+	// internal EOF; the concrete stream is distinguished by the input it arrives on).
+	EOF
+	// RingToken carries the ring token between replicas of a strategy.
+	RingToken
+)
+
+// MsgKind identifies the type of item that travels inside a Batch.
 type MsgKind uint8
 
 const (
-	AllTransactionsBatch MsgKind = iota + 1
-	AllTransactionsEOF
-	AllAccountsBatch
-	AllAccountsEOF
-	// FinalQueryResultBatch groups N query results into a single AMQP post.
-	// Binary payload: 2B (LE) count | { 1B QueryID | 1B len | len bytes Data } × count
-	FinalQueryResultBatch
-	// TransactionMessage carries a single transaction (Payload = SerializeTransaction(tx)).
-	// Used in internal pipeline queues after the gateway unpacks the external batch.
-	TransactionMessage
-	// AccountMessage carries a single account (Payload = SerializeAccount(acc)).
+	// TransactionMessage: payload = external.SerializeTransaction(tx).
+	TransactionMessage MsgKind = iota + 1
+	// AccountMessage: payload = external.SerializeAccount(acc).
 	AccountMessage
-	// InternalEOF: EOF entre stages internas del pipeline; Total = items publicados por
-	// el iniciador del anillo a la output queue correspondiente.
-	InternalEOF
-	// RingTokenMessage transporta el token del anillo entre réplicas de una misma strategy.
-	// Payload = JSON del RingToken.
-	RingTokenMessage
-	// InnerBatch agrupa N payloads de un mismo item_kind en una única publicación
-	// AMQP. El cuerpo binario:
-	//   1B item_kind | 2B (LE) count | { 4B (LE) len | len bytes payload } × count
-	// El número de query al que pertenece el batch (cuando aplica) viaja en
-	// Envelope.QueryID; 0 indica "sin query asociada".
-	InnerBatch
-	// ShardedTxMessage transporta una transacción ya shardeada por una de sus
-	// cuentas (origen o destino). Item dentro de un InnerBatch emitido por
-	// el Sharder del pipeline de Q4.
+	// ShardedTxMessage: transaction sharded by one of its accounts (Q4).
 	ShardedTxMessage
-	// SuspiciousPathMessage transporta una terna (cuenta origen, cuenta intermedia,
-	// cuenta destino). Item dentro de un InnerBatch emitido por el Path-Finder.
+	// SuspiciousPathMessage: triple (origin, intermediate, destination) (Q4).
 	SuspiciousPathMessage
-	// Query4PairItem transporta un par (cuenta origen, cuenta destino) detectado
-	// como sospechoso de scatter por el Counter. Item dentro de un InnerBatch
-	// emitido por el Counter al exchange `results`.
+	// Query4PairItem: pair (origin, destination) suspected of scatter (Q4).
 	Query4PairItem
-	// Query1RowItem transporta una transacción USD <50 ya proyectada
-	// (cuenta origen, cuenta destino, monto). Item dentro de un InnerBatch
-	// emitido por el Sharder de Q1 al exchange `results`.
+	// Query1RowItem: projected USD <50 transaction (Q1).
 	Query1RowItem
-	// Q2PartialMaxItem transporta un parcial (BankID, FromAccount, MaxAmount)
-	// emitido por una réplica de max_q2 al cierre del ring hacia aggregator_q2.
+	// Q2PartialMaxItem: partial (BankID, FromAccount, MaxAmount) (Q2).
 	Q2PartialMaxItem
-	// Q2BankNameItem transporta (BankID, BankName) extraído por bank_aggregator
-	// del catálogo de accounts hacia aggregator_q2.
+	// Q2BankNameItem: (BankID, BankName) from the accounts catalog (Q2).
 	Q2BankNameItem
-	// Q2ResultItem transporta el máximo global por banco ya joineado con su
-	// nombre (BankName, FromAccount, MaxAmount). Emitido por aggregator_q2 al
-	// exchange `results` para consumo del final_joiner.
+	// Q2ResultItem: global maximum per bank with name and account (Q2).
 	Q2ResultItem
-	// Q3PartialAvgItem transporta un parcial (PaymentFormat, Sum, Count) de los
-	// montos USD de Period 1 emitido por una réplica de sum_q3 al
-	// cierre del ring hacia aggregator_q3.
+	// Q3PartialAvgItem: partial (PaymentFormat, Sum, Count) (Q3).
 	Q3PartialAvgItem
-	// Q3AverageItem transporta el promedio global (PaymentFormat, Average) de
-	// Period 1 USD emitido por aggregator_q3 (broadcast) hacia las réplicas
-	// de filter_q3.
+	// Q3AverageItem: global average (PaymentFormat, Average) (Q3).
 	Q3AverageItem
-	// Query3RowItem transporta una fila final de Q3 (SourceBank, SourceAccount,
-	// Amount) emitida por filter_q3 al exchange `results` para consumo del
-	// final_joiner.
+	// Query3RowItem: final row (SourceBank, SourceAccount, Amount) (Q3).
 	Query3RowItem
-	// Q5ConversionsItem transporta el mapa de cotizaciones (date → currency → rate)
-	// emitido una sola vez por el fetcher al inicio del sistema hacia cada réplica
-	// de micro_transaction_counter. Las cotizaciones tienen como base USD.
+	// Q5ConversionsItem: map of exchange rates date→currency→rate (Q5).
 	Q5ConversionsItem
-	// Q5PartialCountItem transporta el conteo parcial de transacciones por debajo
-	// del umbral USD emitido por una réplica de micro_transaction_counter al cierre
-	// del ring hacia aggregator_q5.
+	// Q5PartialCountItem: partial count of microtransactions (Q5).
 	Q5PartialCountItem
-	// Query5RowItem transporta el conteo total final por cliente emitido por
-	// aggregator_q5 al exchange `results` para consumo del final_joiner.
+	// Query5RowItem: final total count per client (Q5).
 	Query5RowItem
+	// ResultRow: final row towards the gateway (CSV or the "EOF" sentinel). It is
+	// the item_kind of the Batch that travels through the final_queues.
+	ResultRow
 )
 
 var (
-	ErrMalformedEnvelope = errors.New("malformed inner envelope")
+	ErrMalformedEnvelope = errors.New("malformed inner message")
 	ErrUnexpectedKind    = errors.New("unexpected inner message kind")
 )
 
-type Envelope struct {
-	GatewayID  GatewayID `json:"g,omitempty"`
-	ClientID   ClientID  `json:"c"`
-	Kind       MsgKind   `json:"k"`
-	Total      uint32    `json:"t,omitempty"`
-	QueryID    uint8     `json:"q,omitempty"`
-	Payload    []byte    `json:"p,omitempty"`
-	InputIndex int       `json:"-"`
+// Header is the common header of every internal protocol message. On-the-wire:
+//
+//	[ MessageType u8 ][ GatewayID u16 BE ][ ClientID 16 bytes (UUID) ]
+type Header struct {
+	GatewayID GatewayID
+	ClientID  ClientID
 }
 
-// QueryResultItem is an item within a FinalQueryResultBatch: a CSV or "EOF" row.
+// headerSize is the fixed size of the serialized header: type (1) + gatewayID (2)
+// + clientID (16 bytes UUID).
+const headerSize = 1 + int(serializer.UINT16_SIZE) + 16
+
+// Envelope is the IN-MEMORY representation of an item that the runtime delivers
+// to the strategies. It is NOT the wire format: the runtime builds it when
+// exploding a Batch (one Envelope per item) or when receiving an EOF.
+type Envelope struct {
+	GatewayID  GatewayID
+	ClientID   ClientID
+	Kind       MsgKind
+	Total      uint32
+	QueryID    uint8
+	Payload    []byte
+	InputIndex int
+}
+
+// QueryResultItem is a result row: a CSV or the "EOF" sentinel.
 type QueryResultItem struct {
 	QueryID uint8
 	Data    string
 }
 
-func SerializeEnvelope(kind MsgKind, gatewayID GatewayID, clientID ClientID, total uint32, payload []byte) (*middleware.Message, error) {
-	return SerializeEnvelopeWithQuery(kind, gatewayID, clientID, total, 0, payload)
+// InternalMessage is every serializable message of the internal protocol.
+// Serialization is binary and big-endian. Deserialization is done with the
+// NewFromSerializedData factory (Go interfaces do not allow constructors).
+type InternalMessage interface {
+	Serialize() ([]byte, error)
+	Type() MessageType
 }
 
-func SerializeEnvelopeWithQuery(kind MsgKind, gatewayID GatewayID, clientID ClientID, total uint32, queryID uint8, payload []byte) (*middleware.Message, error) {
-	body, err := json.Marshal(Envelope{
-		GatewayID: gatewayID,
-		ClientID:  clientID,
-		Kind:      kind,
-		Total:     total,
-		QueryID:   queryID,
-		Payload:   payload,
-	})
+// NewFromSerializedData reads the MessageType (first byte) and the common
+// header, and delegates to the parser of the corresponding concrete type.
+func NewFromSerializedData(data []byte) (InternalMessage, error) {
+	msgType, header, body, err := parseHeader(data)
 	if err != nil {
 		return nil, err
 	}
-	return &middleware.Message{Body: string(body)}, nil
-}
-
-func DeserializeEnvelope(msg *middleware.Message) (*Envelope, error) {
-	if msg == nil || msg.Body == "" {
-		return nil, ErrMalformedEnvelope
-	}
-
-	var envelope Envelope
-	if err := json.Unmarshal([]byte(msg.Body), &envelope); err != nil {
-		return nil, ErrMalformedEnvelope
-	}
-	if envelope.ClientID == "" {
-		return nil, ErrMalformedEnvelope
-	}
-	if envelope.GatewayID <= 0 {
-		return nil, ErrMalformedEnvelope
-	}
-	if envelope.Kind == 0 {
-		return nil, ErrMalformedEnvelope
-	}
-	return &envelope, nil
-}
-
-func SerializeAllTransactionsBatch(gatewayID GatewayID, clientID ClientID, payload []byte) (*middleware.Message, error) {
-	return SerializeEnvelope(AllTransactionsBatch, gatewayID, clientID, 0, payload)
-}
-
-func SerializeAllTransactionsEOF(gatewayID GatewayID, clientID ClientID, total uint32) (*middleware.Message, error) {
-	return SerializeEnvelope(AllTransactionsEOF, gatewayID, clientID, total, nil)
-}
-
-func SerializeAllAccountsBatch(gatewayID GatewayID, clientID ClientID, payload []byte) (*middleware.Message, error) {
-	return SerializeEnvelope(AllAccountsBatch, gatewayID, clientID, 0, payload)
-}
-
-func SerializeAllAccountsEOF(gatewayID GatewayID, clientID ClientID, total uint32) (*middleware.Message, error) {
-	return SerializeEnvelope(AllAccountsEOF, gatewayID, clientID, total, nil)
-}
-
-// SerializeTransactionMessage envuelve una transaction serializada en un envelope con Kind=TransactionMessage.
-func SerializeTransactionMessage(gatewayID GatewayID, clientID ClientID, payload []byte) (*middleware.Message, error) {
-	return SerializeEnvelope(TransactionMessage, gatewayID, clientID, 0, payload)
-}
-
-// SerializeAccountMessage envuelve un account serializado en un envelope con Kind=AccountMessage.
-func SerializeAccountMessage(gatewayID GatewayID, clientID ClientID, payload []byte) (*middleware.Message, error) {
-	return SerializeEnvelope(AccountMessage, gatewayID, clientID, 0, payload)
-}
-
-// SerializeInternalEOF emite un EOF interno con total agregado (count emitido a la output).
-// queryID se propaga en el envelope para que los consumidores polimórficos (p.ej. un
-// FinalJoiner compartido entre queries) puedan acumular EOFs por (clientID, queryID).
-// Pasar 0 cuando el productor no participa de una query concreta.
-func SerializeInternalEOF(gatewayID GatewayID, clientID ClientID, total uint32, queryID uint8) (*middleware.Message, error) {
-	return SerializeEnvelopeWithQuery(InternalEOF, gatewayID, clientID, total, queryID, nil)
-}
-
-// SerializeRingToken envuelve el token JSON del anillo en un envelope.
-func SerializeRingToken(gatewayID GatewayID, clientID ClientID, tokenJSON []byte) (*middleware.Message, error) {
-	return SerializeEnvelope(RingTokenMessage, gatewayID, clientID, 0, tokenJSON)
-}
-
-func validInnerBatchItemKind(kind MsgKind) bool {
-	switch kind {
-	case TransactionMessage, AccountMessage, ShardedTxMessage, SuspiciousPathMessage, Query4PairItem, Query1RowItem, Q2PartialMaxItem, Q2BankNameItem, Q2ResultItem, Q3PartialAvgItem, Q3AverageItem, Query3RowItem, Q5ConversionsItem, Q5PartialCountItem, Query5RowItem:
-		return true
+	switch msgType {
+	case Batch:
+		return parseBatch(header, body)
+	case EOF:
+		return parseEOF(header, body)
+	case RingToken:
+		return parseRingToken(header, body)
 	default:
-		return false
-	}
-}
-
-// SerializeInnerBatch agrupa N payloads de un mismo item_kind en un envelope
-// InnerBatch. items NO debe estar vacío y todos sus elementos deben venir ya
-// serializados con la forma esperada por item_kind. El queryID se propaga en
-// el envelope (Envelope.QueryID); 0 indica "sin query asociada" — comportamiento
-// por default para todos los flujos pre-Q4. Los nodos del pipeline de Q4 usan
-// queryID=4 desde el Sharder y propagan ese valor a través de Path-Finder y
-// Counter.
-func SerializeInnerBatch(queryID uint8, itemKind MsgKind, gatewayID GatewayID, clientID ClientID, items [][]byte) (*middleware.Message, error) {
-	if len(items) == 0 {
-		return nil, errors.New("inner batch must contain at least one item")
-	}
-	if len(items) > 0xFFFF {
-		return nil, errors.New("inner batch exceeds max items (65535)")
-	}
-	if !validInnerBatchItemKind(itemKind) {
-		return nil, errors.New("inner batch unsupported item kind")
-	}
-
-	total := 1 + 2
-	for _, it := range items {
-		total += 4 + len(it)
-	}
-	buf := make([]byte, 0, total)
-	buf = append(buf, byte(itemKind))
-	var countBuf [2]byte
-	binary.LittleEndian.PutUint16(countBuf[:], uint16(len(items)))
-	buf = append(buf, countBuf[:]...)
-	for _, it := range items {
-		var lenBuf [4]byte
-		binary.LittleEndian.PutUint32(lenBuf[:], uint32(len(it)))
-		buf = append(buf, lenBuf[:]...)
-		buf = append(buf, it...)
-	}
-	return SerializeEnvelopeWithQuery(InnerBatch, gatewayID, clientID, 0, queryID, buf)
-}
-
-// DeserializeInnerBatch parsea el payload binario de un envelope InnerBatch.
-// Retorna el item_kind original y la lista de payloads sin decodificar. El
-// QueryID está en env.QueryID y debe ser leído por el caller cuando aplique.
-func DeserializeInnerBatch(env *Envelope) (MsgKind, [][]byte, error) {
-	if env == nil || env.Kind != InnerBatch {
-		return 0, nil, ErrUnexpectedKind
-	}
-	p := env.Payload
-	if len(p) < 3 {
-		return 0, nil, ErrMalformedEnvelope
-	}
-	itemKind := MsgKind(p[0])
-	if !validInnerBatchItemKind(itemKind) {
-		return 0, nil, ErrMalformedEnvelope
-	}
-	count := binary.LittleEndian.Uint16(p[1:3])
-	items, err := readBatchItems(p[3:], int(count))
-	if err != nil {
-		return 0, nil, err
-	}
-	return itemKind, items, nil
-}
-
-func readBatchItems(p []byte, count int) ([][]byte, error) {
-	items := make([][]byte, 0, count)
-	off := 0
-	for i := 0; i < count; i++ {
-		if off+4 > len(p) {
-			return nil, ErrMalformedEnvelope
-		}
-		itemLen := binary.LittleEndian.Uint32(p[off : off+4])
-		off += 4
-		if off+int(itemLen) > len(p) {
-			return nil, ErrMalformedEnvelope
-		}
-		items = append(items, p[off:off+int(itemLen)])
-		off += int(itemLen)
-	}
-	if off != len(p) {
-		return nil, ErrMalformedEnvelope
-	}
-	return items, nil
-}
-
-func SerializeFinalQueryResultBatch(gatewayID GatewayID, clientID ClientID, items []QueryResultItem) (*middleware.Message, error) {
-	if len(items) == 0 {
-		return nil, errors.New("result batch must contain at least one item")
-	}
-	if len(items) > 0xFFFF {
-		return nil, errors.New("result batch exceeds max items (65535)")
-	}
-	size := 2
-	for _, item := range items {
-		size += 1 + 1 + len(item.Data)
-	}
-	buf := make([]byte, 0, size)
-	var countBuf [2]byte
-	binary.LittleEndian.PutUint16(countBuf[:], uint16(len(items)))
-	buf = append(buf, countBuf[:]...)
-	for _, item := range items {
-		buf = append(buf, item.QueryID)
-		buf = append(buf, byte(len(item.Data)))
-		buf = append(buf, item.Data...)
-	}
-	return SerializeEnvelope(FinalQueryResultBatch, gatewayID, clientID, 0, buf)
-}
-
-func DeserializeFinalQueryResultBatch(env *Envelope) ([]QueryResultItem, error) {
-	if env == nil || env.Kind != FinalQueryResultBatch {
 		return nil, ErrUnexpectedKind
 	}
-	p := env.Payload
-	if len(p) < 2 {
-		return nil, ErrMalformedEnvelope
+}
+
+// writeHeader serializes the header (including the MessageType byte) into a new
+// buffer ready for the message body to be concatenated onto it.
+func writeHeader(msgType MessageType, h Header) ([]byte, error) {
+	clientID, err := serializeClientID(h.ClientID)
+	if err != nil {
+		return nil, err
 	}
-	count := binary.LittleEndian.Uint16(p[0:2])
-	items := make([]QueryResultItem, 0, count)
-	off := 2
-	for i := 0; i < int(count); i++ {
-		if off+2 > len(p) {
-			return nil, ErrMalformedEnvelope
-		}
-		queryID := p[off]
-		dataLen := int(p[off+1])
-		off += 2
-		if off+dataLen > len(p) {
-			return nil, ErrMalformedEnvelope
-		}
-		items = append(items, QueryResultItem{
-			QueryID: queryID,
-			Data:    string(p[off : off+dataLen]),
-		})
-		off += dataLen
+	buf := make([]byte, 0, headerSize+8)
+	buf = append(buf, byte(msgType))
+	buf = append(buf, serializer.SerializeUint16(uint16(h.GatewayID))...)
+	buf = append(buf, clientID...)
+	return buf, nil
+}
+
+// parseHeader extracts the MessageType, the header and returns the rest of the
+// buffer (the type-specific body).
+func parseHeader(data []byte) (MessageType, Header, []byte, error) {
+	if len(data) < headerSize {
+		return 0, Header{}, nil, ErrMalformedEnvelope
 	}
-	if off != len(p) {
-		return nil, ErrMalformedEnvelope
+	msgType := MessageType(data[0])
+	gatewayID := serializer.DeserializeUint16(data[1:3])
+	clientID, err := deserializeClientID(data[3:headerSize])
+	if err != nil {
+		return 0, Header{}, nil, ErrMalformedEnvelope
 	}
-	return items, nil
+	header := Header{GatewayID: GatewayID(gatewayID), ClientID: clientID}
+	return msgType, header, data[headerSize:], nil
+}
+
+// serializeClientID encodes the ClientID (UUID in string format) as 16 bytes.
+func serializeClientID(c ClientID) ([]byte, error) {
+	parsed, err := uuid.Parse(string(c))
+	if err != nil {
+		return nil, fmt.Errorf("client id is not a valid uuid: %w", err)
+	}
+	bytes, err := parsed.MarshalBinary()
+	if err != nil {
+		return nil, err
+	}
+	return bytes, nil
+}
+
+// deserializeClientID reconstructs the ClientID (string format) from 16 bytes.
+func deserializeClientID(data []byte) (ClientID, error) {
+	parsed, err := uuid.FromBytes(data)
+	if err != nil {
+		return "", err
+	}
+	return ClientID(parsed.String()), nil
 }

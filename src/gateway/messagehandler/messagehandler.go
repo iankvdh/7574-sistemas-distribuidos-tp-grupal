@@ -28,22 +28,26 @@ func (handler *MessageHandler) ClientID() inner.ClientID {
 	return handler.clientID
 }
 
-// SerializeTransactionBatch produces a single InnerBatch envelope carrying all
+// SerializeTransactionBatch produces a single Batch message carrying all
 // transactions in the TCP batch. One Publish instead of N drastically cuts
 // AMQP framing overhead through the pipeline.
 func (handler *MessageHandler) SerializeTransactionBatch(batch []transaction.Transaction) (*middleware.Message, error) {
 	if len(batch) == 0 {
 		return nil, nil
 	}
-	items := make([][]byte, 0, len(batch))
+	items := make([]inner.BatchItem, 0, len(batch))
 	for i := range batch {
 		payload, err := external.SerializeTransaction(&batch[i])
 		if err != nil {
 			return nil, err
 		}
-		items = append(items, payload)
+		items = append(items, inner.BatchItem{QueryID: 0, Payload: payload})
 	}
-	msg, err := inner.SerializeInnerBatch(0, inner.TransactionMessage, handler.gatewayID, handler.clientID, items)
+	msg, err := serialize(&inner.BatchMessage{
+		Header:   inner.Header{GatewayID: handler.gatewayID, ClientID: handler.clientID},
+		ItemKind: inner.TransactionMessage,
+		Items:    items,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -52,24 +56,31 @@ func (handler *MessageHandler) SerializeTransactionBatch(batch []transaction.Tra
 }
 
 func (handler *MessageHandler) SerializeTransactionEOFMessage() (*middleware.Message, error) {
-	return inner.SerializeAllTransactionsEOF(handler.gatewayID, handler.clientID, handler.transactionAmount)
+	return serialize(&inner.EOFMessage{
+		Header: inner.Header{GatewayID: handler.gatewayID, ClientID: handler.clientID},
+		Total:  handler.transactionAmount,
+	})
 }
 
-// SerializeAccountBatch produces a single InnerBatch envelope carrying all
-// accounts in the TCP batch.
+// SerializeAccountBatch produces a single Batch message carrying all accounts in
+// the TCP batch.
 func (handler *MessageHandler) SerializeAccountBatch(batch []account.Account) (*middleware.Message, error) {
 	if len(batch) == 0 {
 		return nil, nil
 	}
-	items := make([][]byte, 0, len(batch))
+	items := make([]inner.BatchItem, 0, len(batch))
 	for i := range batch {
 		payload, err := external.SerializeAccount(&batch[i])
 		if err != nil {
 			return nil, err
 		}
-		items = append(items, payload)
+		items = append(items, inner.BatchItem{QueryID: 0, Payload: payload})
 	}
-	msg, err := inner.SerializeInnerBatch(0, inner.AccountMessage, handler.gatewayID, handler.clientID, items)
+	msg, err := serialize(&inner.BatchMessage{
+		Header:   inner.Header{GatewayID: handler.gatewayID, ClientID: handler.clientID},
+		ItemKind: inner.AccountMessage,
+		Items:    items,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -78,7 +89,19 @@ func (handler *MessageHandler) SerializeAccountBatch(batch []account.Account) (*
 }
 
 func (handler *MessageHandler) SerializeAccountEOFMessage() (*middleware.Message, error) {
-	return inner.SerializeAllAccountsEOF(handler.gatewayID, handler.clientID, handler.accountAmount)
+	return serialize(&inner.EOFMessage{
+		Header: inner.Header{GatewayID: handler.gatewayID, ClientID: handler.clientID},
+		Total:  handler.accountAmount,
+	})
+}
+
+// serialize wraps the bytes of an InternalMessage in a middleware.Message.
+func serialize(msg inner.InternalMessage) (*middleware.Message, error) {
+	raw, err := msg.Serialize()
+	if err != nil {
+		return nil, err
+	}
+	return &middleware.Message{Body: string(raw)}, nil
 }
 
 type FinalBatch struct {
@@ -88,23 +111,23 @@ type FinalBatch struct {
 }
 
 func DeserializeFinalBatch(message *middleware.Message) (*FinalBatch, error) {
-	envelope, err := inner.DeserializeEnvelope(message)
+	msg, err := inner.NewFromSerializedData([]byte(message.Body))
 	if err != nil {
 		return nil, err
 	}
 
-	switch envelope.Kind {
-	case inner.FinalQueryResultBatch:
-		items, err := inner.DeserializeFinalQueryResultBatch(envelope)
-		if err != nil {
-			return nil, err
-		}
-		return &FinalBatch{
-			GatewayID: envelope.GatewayID,
-			ClientID:  envelope.ClientID,
-			Items:     items,
-		}, nil
-	default:
-		return nil, fmt.Errorf("%w: %d", inner.ErrUnexpectedKind, envelope.Kind)
+	batch, ok := msg.(*inner.BatchMessage)
+	if !ok || batch.ItemKind != inner.ResultRow {
+		return nil, fmt.Errorf("%w: expected ResultRow batch", inner.ErrUnexpectedKind)
 	}
+
+	items := make([]inner.QueryResultItem, 0, len(batch.Items))
+	for _, item := range batch.Items {
+		items = append(items, inner.QueryResultItem{QueryID: item.QueryID, Data: string(item.Payload)})
+	}
+	return &FinalBatch{
+		GatewayID: batch.GatewayID,
+		ClientID:  batch.ClientID,
+		Items:     items,
+	}, nil
 }
