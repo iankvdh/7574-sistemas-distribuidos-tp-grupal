@@ -47,7 +47,7 @@ func (s *Sharder) Init(cfg strategy.StrategyConfig) error {
 	for i := 0; i < n; i++ {
 		s.rkCache[i] = strconv.Itoa(i)
 	}
-	s.ringCoordinator = eof.NewRingCoordinator(cfg.ReplicaID, cfg.NReplicas)
+	s.ringCoordinator = eof.NewBroadcastRingCoordinator(cfg.ReplicaID, cfg.NReplicas)
 	return nil
 }
 

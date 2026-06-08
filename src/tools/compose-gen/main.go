@@ -439,8 +439,8 @@ func injectDerivedEnvs(workers []workerSpec, fetchers []fetcherSpec) {
 				set(env, "EXPECTED_EOFS", itoa(joinerUSDUpstreams))
 			}
 		case "final_joiner":
-			if r("sharder_q1") > 0 {
-				set(env, "EXPECTED_EOFS_Q1", "1")
+			if n := r("sharder_q1"); n > 0 {
+				set(env, "EXPECTED_EOFS_Q1", itoa(n))
 			}
 			if n := r("aggregator_q2"); n > 0 {
 				set(env, "EXPECTED_EOFS_Q2", itoa(n))
