@@ -15,7 +15,7 @@ import (
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/fetcher/config"
 )
 
-const frankfurterClientID inner.ClientID = "frankfurter"
+const frankfurterClientID inner.ClientID = "00000000-0000-0000-0000-000000000005"
 
 type Fetcher struct {
 	cfg config.FetcherConfig
@@ -108,18 +108,28 @@ func (f *Fetcher) publishToAllQueues(rates *inner.Q5Conversions) error {
 }
 
 func (f *Fetcher) publishOne(mw middleware.Middleware, gatewayID inner.GatewayID, payload []byte) error {
-	batch, err := inner.SerializeInnerBatch(5, inner.Q5ConversionsItem, gatewayID, frankfurterClientID, [][]byte{payload})
+	batch := &inner.BatchMessage{
+		Header:   inner.Header{GatewayID: gatewayID, ClientID: frankfurterClientID},
+		ItemKind: inner.Q5ConversionsItem,
+		Items:    []inner.BatchItem{{QueryID: 5, Payload: payload}},
+	}
+	batchRaw, err := batch.Serialize()
 	if err != nil {
 		return err
 	}
-	if err := mw.Send(*batch); err != nil {
+	if err := mw.Send(middleware.Message{Body: string(batchRaw)}); err != nil {
 		return err
 	}
-	eof, err := inner.SerializeInternalEOF(gatewayID, frankfurterClientID, 1, 5)
+	eofMsg := &inner.EOFMessage{
+		Header:  inner.Header{GatewayID: gatewayID, ClientID: frankfurterClientID},
+		QueryID: 5,
+		Total:   1,
+	}
+	eofRaw, err := eofMsg.Serialize()
 	if err != nil {
 		return err
 	}
-	return mw.Send(*eof)
+	return mw.Send(middleware.Message{Body: string(eofRaw)})
 }
 
 func fromISODate(iso string) (uint32, error) {

@@ -251,15 +251,22 @@ func (w *Worker) consumeRing() {
 }
 
 func (w *Worker) handleInputMessage(inputIndex int, msg middleware.Message, ack func(), nack func()) {
-	envelope, err := inner.DeserializeEnvelope(&msg)
+	parsed, err := inner.NewFromSerializedData([]byte(msg.Body))
 	if err != nil {
-		slog.Error("Malformed envelope in input queue", "input_index", inputIndex, "err", err)
+		slog.Error("Malformed message in input queue", "input_index", inputIndex, "err", err)
 		ack()
 		return
 	}
-	envelope.InputIndex = inputIndex
 
-	if isEOFKind(envelope.Kind) {
+	switch typed := parsed.(type) {
+	case *inner.EOFMessage:
+		envelope := &inner.Envelope{
+			GatewayID:  typed.GatewayID,
+			ClientID:   typed.ClientID,
+			Total:      typed.Total,
+			QueryID:    typed.QueryID,
+			InputIndex: inputIndex,
+		}
 		w.cacheUpstreamEOF(envelope.ClientID, inputIndex, msg)
 		w.strategyMu.Lock()
 		outcome, err := w.strategy.OnUpstreamEOF(envelope)
@@ -277,47 +284,33 @@ func (w *Worker) handleInputMessage(inputIndex int, msg middleware.Message, ack 
 		}
 		w.strategyMu.Unlock()
 		ack()
-		return
-	}
-
-	w.strategyMu.Lock()
-	if envelope.Kind == inner.InnerBatch {
-		itemKind, items, err := inner.DeserializeInnerBatch(envelope)
-		if err != nil {
+	case *inner.BatchMessage:
+		w.strategyMu.Lock()
+		if err := w.processBatch(typed, inputIndex); err != nil {
 			w.strategyMu.Unlock()
-			slog.Error("Malformed InnerBatch envelope", "err", err)
-			ack()
-			return
-		}
-		if err := w.processBatchItems(envelope, itemKind, items); err != nil {
-			w.strategyMu.Unlock()
-			slog.Error("Strategy ProcessMessage failed", "client_id", envelope.ClientID, "err", err)
+			slog.Error("Strategy ProcessMessage failed", "client_id", typed.ClientID, "err", err)
 			nack()
 			return
 		}
-	} else {
-		if err := w.processSingleItem(envelope); err != nil {
-			w.strategyMu.Unlock()
-			slog.Error("Strategy ProcessMessage failed", "client_id", envelope.ClientID, "err", err)
-			nack()
-			return
-		}
+		w.strategyMu.Unlock()
+		ack()
+	default:
+		slog.Error("Unexpected message type in input queue", "input_index", inputIndex, "type", parsed.Type())
+		ack()
 	}
-	w.strategyMu.Unlock()
-	ack()
 }
 
-func (w *Worker) processBatchItems(parent *inner.Envelope, itemKind inner.MsgKind, items [][]byte) error {
-	for _, payload := range items {
-		item := &inner.Envelope{
-			Kind:       itemKind,
-			GatewayID:  parent.GatewayID,
-			ClientID:   parent.ClientID,
-			QueryID:    parent.QueryID,
-			Payload:    payload,
-			InputIndex: parent.InputIndex,
+func (w *Worker) processBatch(batch *inner.BatchMessage, inputIndex int) error {
+	for _, item := range batch.Items {
+		envelope := &inner.Envelope{
+			Kind:       batch.ItemKind,
+			GatewayID:  batch.GatewayID,
+			ClientID:   batch.ClientID,
+			QueryID:    item.QueryID,
+			Payload:    item.Payload,
+			InputIndex: inputIndex,
 		}
-		if err := w.processSingleItem(item); err != nil {
+		if err := w.processSingleItem(envelope); err != nil {
 			return err
 		}
 	}
@@ -344,23 +337,25 @@ func (w *Worker) processSingleItem(env *inner.Envelope) error {
 }
 
 func (w *Worker) handleRingMessage(msg middleware.Message, ack func(), nack func()) {
-	ringMessageEnvelope, err := inner.DeserializeEnvelope(&msg)
+	parsed, err := inner.NewFromSerializedData([]byte(msg.Body))
 	if err != nil {
-		slog.Error("Malformed envelope in ring queue", "err", err)
+		slog.Error("Malformed message in ring queue", "err", err)
 		ack()
 		return
 	}
-	if ringMessageEnvelope.Kind != inner.RingTokenMessage {
-		slog.Warn("Unexpected kind on ring queue", "kind", ringMessageEnvelope.Kind)
+	ringMessage, ok := parsed.(*inner.RingTokenMessage)
+	if !ok {
+		slog.Warn("Unexpected message type on ring queue", "type", parsed.Type())
 		ack()
 		return
 	}
 
-	token, err := eof.UnmarshalToken(ringMessageEnvelope.Payload)
-	if err != nil {
-		slog.Error("Malformed ring token", "err", err)
-		ack()
-		return
+	token := &eof.Token{
+		ClientID:      ringMessage.ClientID,
+		InitiatorID:   int(ringMessage.InitiatorID),
+		AggMatched:    ringMessage.AggMatched,
+		AggNotMatched: ringMessage.AggNotMatched,
+		Phase:         eof.TokenPhase(ringMessage.Phase),
 	}
 
 	w.strategyMu.Lock()
@@ -372,7 +367,7 @@ func (w *Worker) handleRingMessage(msg middleware.Message, ack func(), nack func
 		return
 	}
 
-	resultEnvelope := &inner.Envelope{GatewayID: ringMessageEnvelope.GatewayID, ClientID: token.ClientID}
+	resultEnvelope := &inner.Envelope{GatewayID: ringMessage.GatewayID, ClientID: token.ClientID}
 	if err := w.applyEOFOutcome(resultEnvelope, outcome); err != nil {
 		w.strategyMu.Unlock()
 		slog.Error("Applying ring outcome failed", "client_id", token.ClientID, "err", err)
@@ -437,11 +432,14 @@ func (w *Worker) forwardToken(env *inner.Envelope, token *eof.Token) error {
 	if token == nil {
 		return errors.New("strategy asked to forward a nil ring token")
 	}
-	payload, err := eof.MarshalToken(token)
-	if err != nil {
-		return err
+	ringMessage := &inner.RingTokenMessage{
+		Header:        inner.Header{GatewayID: env.GatewayID, ClientID: token.ClientID},
+		InitiatorID:   int32(token.InitiatorID),
+		AggMatched:    token.AggMatched,
+		AggNotMatched: token.AggNotMatched,
+		Phase:         uint8(token.Phase),
 	}
-	msg, err := inner.SerializeRingToken(env.GatewayID, token.ClientID, payload)
+	msg, err := serialize(ringMessage)
 	if err != nil {
 		return err
 	}
@@ -536,22 +534,24 @@ func (w *Worker) flushBatch(idx, shard int, key batchKey) error {
 	return nil
 }
 
-// serializePending picks the on-wire envelope shape for a pending batch based
-// on the target kind: queue/direct_exchange/sharded_queues use InnerBatch (so
-// the downstream worker can unwrap it); final_queue uses FinalQueryResultBatch
-// (so the gateway's final consumer can pick it up unchanged).
+// serializePending builds the on-wire Batch for a pending batch. Internal targets
+// keep their item_kind so the downstream worker interprets each payload; final_queue
+// targets use ResultRow (the gateway's final consumer reads each payload as a CSV
+// row). Both shapes are the same BatchMessage type.
 func (w *Worker) serializePending(target OutputTarget, pending *pendingBatch) (*middleware.Message, error) {
+	itemKind := pending.itemKind
 	if target.Kind == config.KindFinalQueue {
-		items := make([]inner.QueryResultItem, 0, len(pending.items))
-		for _, payload := range pending.items {
-			items = append(items, inner.QueryResultItem{
-				QueryID: pending.queryID,
-				Data:    string(payload),
-			})
-		}
-		return inner.SerializeFinalQueryResultBatch(pending.gatewayID, pending.clientID, items)
+		itemKind = inner.ResultRow
 	}
-	return inner.SerializeInnerBatch(pending.queryID, pending.itemKind, pending.gatewayID, pending.clientID, pending.items)
+	items := make([]inner.BatchItem, 0, len(pending.items))
+	for _, payload := range pending.items {
+		items = append(items, inner.BatchItem{QueryID: pending.queryID, Payload: payload})
+	}
+	return serialize(&inner.BatchMessage{
+		Header:   inner.Header{GatewayID: pending.gatewayID, ClientID: pending.clientID},
+		ItemKind: itemKind,
+		Items:    items,
+	})
 }
 
 func sendOnTarget(mw middleware.Middleware, msg middleware.Message, routingKey string) error {
@@ -627,17 +627,23 @@ func (w *Worker) publishEOFs(env *inner.Envelope, emits []eof.EOFEmit) error {
 	return nil
 }
 
-// serializeEOF picks the on-wire EOF envelope shape based on the target kind.
-// Internal pipeline targets get an InternalEOF (downstream workers count them);
-// final_queue targets get a FinalQueryResultBatch carrying a single
-// QueryResultItem{Data: "EOF"} (the gateway's final consumer interprets that
-// item as "this query is done for this client").
+// serializeEOF picks the on-wire EOF shape based on the target kind. Internal
+// pipeline targets get an EOFMessage (downstream workers count them); final_queue
+// targets get a Batch with a single ResultRow item carrying "EOF" (the gateway's
+// final consumer interprets that item as "this query is done for this client").
 func (w *Worker) serializeEOF(target OutputTarget, env *inner.Envelope, e eof.EOFEmit) (*middleware.Message, error) {
 	if target.Kind == config.KindFinalQueue {
-		items := []inner.QueryResultItem{{QueryID: e.QueryID, Data: "EOF"}}
-		return inner.SerializeFinalQueryResultBatch(env.GatewayID, env.ClientID, items)
+		return serialize(&inner.BatchMessage{
+			Header:   inner.Header{GatewayID: env.GatewayID, ClientID: env.ClientID},
+			ItemKind: inner.ResultRow,
+			Items:    []inner.BatchItem{{QueryID: e.QueryID, Payload: []byte("EOF")}},
+		})
 	}
-	return inner.SerializeInternalEOF(env.GatewayID, env.ClientID, e.Total, e.QueryID)
+	return serialize(&inner.EOFMessage{
+		Header:  inner.Header{GatewayID: env.GatewayID, ClientID: env.ClientID},
+		QueryID: e.QueryID,
+		Total:   e.Total,
+	})
 }
 
 func (w *Worker) reenqueueUpstreamEOF(clientID inner.ClientID) error {
@@ -726,11 +732,11 @@ func closeAll(inputs []middleware.Middleware, ringIn middleware.Middleware, ring
 	}
 }
 
-func isEOFKind(kind inner.MsgKind) bool {
-	switch kind {
-	case inner.AllTransactionsEOF, inner.AllAccountsEOF, inner.InternalEOF:
-		return true
-	default:
-		return false
+// serialize wraps the bytes of an InternalMessage in a middleware.Message.
+func serialize(msg inner.InternalMessage) (*middleware.Message, error) {
+	raw, err := msg.Serialize()
+	if err != nil {
+		return nil, err
 	}
+	return &middleware.Message{Body: string(raw)}, nil
 }
