@@ -329,7 +329,18 @@ func (w *Worker) processSingleItem(env *inner.Envelope) error {
 	if err != nil {
 		return err
 	}
-	return w.appendOutputMessages(env.GatewayID, outputMessages)
+	if err := w.appendOutputMessages(env.GatewayID, outputMessages); err != nil {
+		return err
+	}
+	emitter, ok := w.strategy.(strategy.ReadyEOFEmitter)
+	if !ok {
+		return nil
+	}
+	outcome, ready := emitter.ReadyEOFs(env)
+	if !ready {
+		return nil
+	}
+	return w.applyEOFOutcome(env, outcome)
 }
 
 func (w *Worker) handleRingMessage(msg middleware.Message, ack func(), nack func()) {

@@ -53,3 +53,7 @@ type Strategy interface {
 type DeferredInputProvider interface {
 	DeferredInputs() []int
 }
+
+type ReadyEOFEmitter interface {
+	ReadyEOFs(env *inner.Envelope) (EOFOutcome, bool)
+}
