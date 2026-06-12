@@ -2,13 +2,17 @@
 //
 // Usage:
 //
-//	compose-gen <spec.yaml>          → writes the compose to stdout
+//	compose-gen <spec.yaml> server [DATASET]          → server compose (gateways+workers+rabbit)
+//	compose-gen <spec.yaml> client [LABEL [DATASET]]  → single-client compose
+//
+// DATASET is one of: small, medium, large (default: small).
+// LABEL   is the client identifier used for the results directory (default: 0).
 //
 // Spec format (whitespace-significant, YAML-subset; no external deps):
 //
-//	clients: <int>           how many client_N services to declare
 //	gateways: <int>          how many gateway_N services to declare
 //	log_level: <string>      optional; LOG_LEVEL emitted to every service (default: info)
+//	expected_query_eofs: <int>  number of query EOFs the gateway/client expect (default: 5)
 //	workers:
 //	  - name: <prefix>                   docker-compose service name (suffixed by replica index if replicas>1)
 //	    strategy: <STRATEGY env value>   which strategy this worker runs
@@ -55,7 +59,6 @@ type fetcherSpec struct {
 }
 
 type spec struct {
-	Clients           int
 	Gateways          int
 	Transactions      string
 	Accounts          string
@@ -109,9 +112,22 @@ func strategyUsesRing(strategy string) bool {
 	return ok
 }
 
+// sharedNetworkName is the explicit Docker network that links the server and
+// client compose projects when running in split mode.
+const sharedNetworkName = "tp_grupal_network"
+
+// datasetFilePaths maps short dataset names (small, medium, large) to their
+// transactions and accounts CSV paths inside the container.
+var datasetFilePaths = map[string][2]string{
+	"small":  {"/datasets/LI-Small_Trans.csv", "/datasets/LI-Small_accounts.csv"},
+	"medium": {"/datasets/LI-Medium_Trans.csv", "/datasets/LI-Medium_accounts.csv"},
+	"large":  {"/datasets/LI-Large_Trans.csv", "/datasets/LI-Large_accounts.csv"},
+}
+
 func main() {
-	if len(os.Args) != 2 {
-		fmt.Fprintln(os.Stderr, "usage: compose-gen <spec.yaml>")
+	// usage: compose-gen <spec.yaml> [server [DATASET] | client [LABEL [DATASET]]]
+	if len(os.Args) < 2 || len(os.Args) > 5 {
+		fmt.Fprintln(os.Stderr, "usage: compose-gen <spec.yaml> [server [DATASET] | client [LABEL [DATASET]]]")
 		os.Exit(2)
 	}
 	body, err := os.ReadFile(os.Args[1])
@@ -124,8 +140,46 @@ func main() {
 		fmt.Fprintf(os.Stderr, "parse: %v\n", err)
 		os.Exit(1)
 	}
-	if err := s.render(os.Stdout); err != nil {
-		fmt.Fprintf(os.Stderr, "render: %v\n", err)
+	if len(os.Args) < 3 {
+		fmt.Fprintln(os.Stderr, "usage: compose-gen <spec.yaml> server [DATASET] | client [LABEL [DATASET]]")
+		os.Exit(2)
+	}
+	mode := os.Args[2]
+	clientLabel := "0"
+	datasetOverride := ""
+	switch mode {
+	case "server":
+		if len(os.Args) >= 4 {
+			datasetOverride = os.Args[3]
+		}
+	case "client":
+		if len(os.Args) >= 4 {
+			clientLabel = os.Args[3]
+		}
+		if len(os.Args) >= 5 {
+			datasetOverride = os.Args[4]
+		}
+	default:
+		fmt.Fprintf(os.Stderr, "unknown mode %q; expected server or client\n", mode)
+		os.Exit(2)
+	}
+	if paths, ok := datasetFilePaths[datasetOverride]; ok {
+		s.Transactions = paths[0]
+		s.Accounts = paths[1]
+		s.Dataset = datasetOverride
+	} else if datasetOverride != "" {
+		fmt.Fprintf(os.Stderr, "unknown dataset %q; expected small, medium or large\n", datasetOverride)
+		os.Exit(2)
+	}
+	var renderErr error
+	switch mode {
+	case "server":
+		renderErr = s.renderServer(os.Stdout)
+	case "client":
+		renderErr = s.renderClient(os.Stdout, clientLabel)
+	}
+	if renderErr != nil {
+		fmt.Fprintf(os.Stderr, "render: %v\n", renderErr)
 		os.Exit(1)
 	}
 }
@@ -141,7 +195,7 @@ func main() {
 //	     section headers "outputs:" / "env:"
 //	6 :  "- <value>" items of outputs, "KEY: value" entries of env
 func parseSpec(src string) (*spec, error) {
-	s := &spec{Clients: 1, Gateways: 1}
+	s := &spec{Gateways: 1}
 	var cur *workerSpec
 	var curFetcher *fetcherSpec
 	var section, currentList string
@@ -171,8 +225,6 @@ func parseSpec(src string) (*spec, error) {
 			flushFetcher()
 			key, value := splitKV(trimmed)
 			switch key {
-			case "clients":
-				s.Clients, _ = strconv.Atoi(value)
 			case "gateways":
 				s.Gateways, _ = strconv.Atoi(value)
 			case "transactions":
@@ -484,36 +536,31 @@ func expandOutputs(outputs []string, gateways int) []string {
 	return result
 }
 
-func (s *spec) render(w io.Writer) error {
-	fmt.Fprintln(w, "services:")
-
-	// Build the list of every worker service the clients should wait for.
-	dependencies := make([]string, 0)
-	for _, ws := range s.Workers {
-		for r := 0; r < ws.Replicas; r++ {
-			dependencies = append(dependencies, serviceName(ws, r))
-		}
-	}
-
-	transactions := s.Transactions
+func (s *spec) resolveParams() (transactions, accounts, dataset, logLevel string) {
+	transactions = s.Transactions
 	if transactions == "" {
 		transactions = "/datasets/LI-Small_Trans.csv"
 	}
-	accounts := s.Accounts
+	accounts = s.Accounts
 	if accounts == "" {
 		accounts = "/datasets/LI-Small_accounts.csv"
 	}
-	dataset := s.Dataset
+	dataset = s.Dataset
 	if dataset == "" {
 		dataset = datasetFromTransactions(transactions)
 	}
-	logLevel := s.LogLevel
+	logLevel = s.LogLevel
 	if logLevel == "" {
 		logLevel = defaultLogLevel
 	}
-	for i := 0; i < s.Clients; i++ {
-		writeClient(w, i, s.Gateways, dependencies, transactions, accounts, dataset, logLevel, s.ExpectedQueryEOFs)
-	}
+	return
+}
+
+// renderServer writes a compose file with all services except clients.
+// It creates the shared Docker network so the client compose can attach to it.
+func (s *spec) renderServer(w io.Writer) error {
+	fmt.Fprintln(w, "services:")
+	_, _, _, logLevel := s.resolveParams()
 	for i := 1; i <= s.Gateways; i++ {
 		writeGateway(w, i, logLevel, s.ExpectedQueryEOFs)
 	}
@@ -527,7 +574,32 @@ func (s *spec) render(w io.Writer) error {
 		writeFetcher(w, fs, logLevel)
 	}
 	writeRabbit(w)
+	writeNetwork(w, false)
 	return nil
+}
+
+// renderClient writes a compose file with only the client services.
+// It joins the shared Docker network created by the server compose.
+// No depends_on references to server services — the client has its own retry
+// logic (CONNECT_MAX_ATTEMPTS / BACKOFF_BASE_MS) to wait for the gateway.
+func (s *spec) renderClient(w io.Writer, clientLabel string) error {
+	fmt.Fprintln(w, "services:")
+	transactions, accounts, dataset, logLevel := s.resolveParams()
+	writeClientSplit(w, clientLabel, s.Gateways, transactions, accounts, dataset, logLevel, s.ExpectedQueryEOFs)
+	writeNetwork(w, true)
+	return nil
+}
+
+// writeNetwork appends the networks section that pins the default network to
+// sharedNetworkName. external=true is used by the client compose (joins an
+// existing network); external=false is used by the server compose (creates it).
+func writeNetwork(w io.Writer, external bool) {
+	fmt.Fprintln(w, "networks:")
+	fmt.Fprintln(w, "  default:")
+	fmt.Fprintf(w, "    name: %s\n", sharedNetworkName)
+	if external {
+		fmt.Fprintln(w, "    external: true")
+	}
 }
 
 func serviceName(ws workerSpec, replica int) string {
@@ -537,17 +609,11 @@ func serviceName(ws workerSpec, replica int) string {
 	return fmt.Sprintf("%s_%d", ws.Name, replica)
 }
 
-func writeClient(w io.Writer, idx, gateways int, deps []string, transactions, accounts, dataset, logLevel string, expectedQueryEOFs int) {
-	fmt.Fprintf(w, "  client_%d:\n", idx)
+// writeClientSplit is like writeClient but omits depends_on entirely — used in
+// the split-compose client file where all server services are in another project.
+func writeClientSplit(w io.Writer, label string, gateways int, transactions, accounts, dataset, logLevel string, expectedQueryEOFs int) {
+	fmt.Fprintln(w, "  client:")
 	fmt.Fprintln(w, "    build: { context: ./src/, dockerfile: client/Dockerfile }")
-	fmt.Fprintln(w, "    depends_on:")
-	fmt.Fprintln(w, "      rabbitmq: { condition: service_healthy }")
-	for i := 1; i <= gateways; i++ {
-		fmt.Fprintf(w, "      gateway_%d: { condition: service_started }\n", i)
-	}
-	for _, d := range deps {
-		fmt.Fprintf(w, "      %s: { condition: service_started }\n", d)
-	}
 	fmt.Fprintln(w, "    env_file:")
 	fmt.Fprintln(w, "      - .env")
 	fmt.Fprintln(w, "    environment:")
@@ -567,7 +633,7 @@ func writeClient(w io.Writer, idx, gateways int, deps []string, transactions, ac
 	fmt.Fprintf(w, "      - LOG_LEVEL=%s\n", logLevel)
 	fmt.Fprintln(w, "    volumes:")
 	fmt.Fprintln(w, "      - ./datasets:/datasets")
-	fmt.Fprintf(w, "      - ./results/%s/client_%d:/results\n", dataset, idx)
+	fmt.Fprintf(w, "      - ./results/%s/client_%s:/results\n", dataset, label)
 }
 
 func writeGateway(w io.Writer, id int, logLevel string, expectedQueryEOFs int) {
