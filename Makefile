@@ -1,20 +1,25 @@
 SHELL := /bin/bash
-COMPOSE_FILE := docker-compose.yaml
-COMPOSE_PROJECT_NAME := tp_grupal
 
-compose = COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT_NAME) docker compose -f $(COMPOSE_FILE)
+COMPOSE_SERVER_FILE := docker-compose-server.yaml
+COMPOSE_PROJECT_NAME_SERVER := tp_grupal_server
 
-# Every scenarios/specs/*.yaml is a declarative spec that compose-gen expands
-# into scenarios/<name>.yaml (the compose docker actually runs).
+compose-server = COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT_NAME_SERVER) docker compose -f $(COMPOSE_SERVER_FILE)
+
 SPECS := $(patsubst %.yaml,%,$(notdir $(wildcard scenarios/specs/*.yaml)))
 SPEC ?= default
 
-# --- Compose lifecycle -----------------------------------------------------
+# --- Validación de resultados -----------------------------------------------
+DATASET     ?= small
+CLIENT_NAME ?= 0
+CLIENT_COMPOSE_FILE = /tmp/tp-client-$(DATASET)-$(CLIENT_NAME).yaml
+CLIENT_PROJECT_NAME = tp_grupal_client_$(DATASET)_$(CLIENT_NAME)
 
-# Muestra el exit code de cada contenedor. 137 = SIGKILL (graceful shutdown roto).
+# Muestra el exit code de cada contenedor de un proyecto dado.
+# Uso: $(call show_exit_codes,<project_name>)
+# 137 = SIGKILL (graceful shutdown roto).
 define show_exit_codes
 	echo "--- Exit codes ---" && \
-	docker ps -a --filter "label=com.docker.compose.project=$(COMPOSE_PROJECT_NAME)" \
+	docker ps -a --filter "label=com.docker.compose.project=$(1)" \
 		--format '{{.Names}}' | while read name; do \
 		code=$$(docker inspect --format '{{.State.ExitCode}}' "$$name" 2>/dev/null); \
 		if [ "$$code" = "137" ]; then \
@@ -29,31 +34,29 @@ define show_exit_codes
 	done && echo "-----------------"
 endef
 
+# ---------------------------------------------------------------------------
+
 help:
 	@echo ""
 	@echo "Uso: make <target> [FLAGS]"
 	@echo ""
-	@echo "--- Ciclo principal ---"
-	@echo "  up-pipeline [SPEC=default]      Genera el compose desde specs/<SPEC>.yaml y levanta el sistema (foreground)."
-	@echo "  up          		            Levanta docker-compose.yaml actual (foreground, Ctrl-C hace graceful stop)."
-	@echo "  up-detach                        Igual que up pero en background."
-	@echo "  down                             Para y elimina todos los contenedores."
-	@echo "  logs                             Muestra los logs de todos los contenedores."
+	@echo "--- Servidor ---"
+	@echo "  up-server [SPEC=default]                              Genera y levanta el servidor (foreground, Ctrl-C graceful stop)."
+	@echo "  down-server                                           Para y elimina los contenedores del servidor."
+	@echo "  logs                                                  Muestra los logs del servidor."
+	@echo ""
+	@echo "--- Clientes ---"
+	@echo "  up-client SPEC=<s> [DATASET=small] [CLIENT_NAME=N]   Levanta un cliente contra el servidor en ejecución."
+	@echo "  down-client [CLIENT_NAME=N]                          Para y elimina el cliente N."
+	@echo "  down-all-clients                                      Para y elimina todos los clientes activos."
+	@echo ""
+	@echo "--- Todo junto ---"
+	@echo "  down                                                  Para servidor y todos los clientes."
 	@echo ""
 	@echo "--- Validación de resultados ---"
-	@echo "  generate-ref [DATASET=small]     Calcula las queries de referencia para el dataset y las guarda"
-	@echo "                                   en notebooks/<DATASET>/reference/. Correr una vez por dataset."
-	@echo "  compare [DATASET=small]          Compara los resultados de results/<DATASET>/client_<CLIENT>/"
-	@echo "          [CLIENT=0]               contra la referencia. Reporta OK/FAIL por query y por UUID."
-	@echo ""
-	@echo "  Ejemplos:"
-	@echo "    make generate-ref DATASET=medium"
-	@echo "    make compare DATASET=small CLIENT=1"
-	@echo ""
-	@echo "--- Generación de compose ---"
-	@echo "  gen [SPEC=default]               Expande scenarios/specs/<SPEC>.yaml → scenarios/<SPEC>.yaml."
-	@echo "  gen-all                          Expande todos los specs de scenarios/specs/."
-	@echo "  switch                           Menú interactivo para seleccionar el scenario activo."
+	@echo "  generate-ref [DATASET=small]     Calcula la referencia serial para el dataset (correr una vez)."
+	@echo "  compare [DATASET=small]          Compara results/<DATASET>/client_<CLIENT_NAME>/ contra la referencia."
+	@echo "          [CLIENT_NAME=0]"
 	@echo ""
 	@echo "--- Tests ---"
 	@echo "  test                             Corre go test ./... en src/."
@@ -62,74 +65,68 @@ help:
 	@echo ""
 .PHONY: help
 
-up:
-	@trap '$(compose) stop -t 30 && $(show_exit_codes)' INT TERM EXIT; \
-	COMPOSE_HTTP_TIMEOUT=300 COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT_NAME) docker compose -f $(COMPOSE_FILE) up --build --remove-orphans
-.PHONY: up
+# --- Servidor ---------------------------------------------------------------
 
-up-detach:
-	@COMPOSE_HTTP_TIMEOUT=300 COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT_NAME) docker compose -f $(COMPOSE_FILE) up --build --remove-orphans --detach
-.PHONY: up-detach
+up-server:
+	@cd src && go run ./tools/compose-gen ../scenarios/specs/$(SPEC).yaml server > ../$(COMPOSE_SERVER_FILE)
+	@trap '$(compose-server) stop -t 30 && $(call show_exit_codes,$(COMPOSE_PROJECT_NAME_SERVER))' INT TERM EXIT; \
+	COMPOSE_HTTP_TIMEOUT=300 COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT_NAME_SERVER) docker compose -f $(COMPOSE_SERVER_FILE) up --build --remove-orphans
+.PHONY: up-server
 
-down:
-	@$(compose) stop -t 30
-	@$(show_exit_codes)
-	@$(compose) down
-.PHONY: down
+down-server:
+	@$(compose-server) stop -t 30
+	@$(call show_exit_codes,$(COMPOSE_PROJECT_NAME_SERVER))
+	@$(compose-server) down
+.PHONY: down-server
 
 logs:
-	@$(compose) logs
+	@$(compose-server) logs
 .PHONY: logs
 
-test:
-	@cd src && go test ./...
-.PHONY: test
+# --- Clientes ---------------------------------------------------------------
+
+up-client:
+	@cd src && go run ./tools/compose-gen ../scenarios/specs/$(SPEC).yaml client $(CLIENT_NAME) $(DATASET) > $(CLIENT_COMPOSE_FILE)
+	@trap 'COMPOSE_PROJECT_NAME=$(CLIENT_PROJECT_NAME) docker compose --project-directory $(CURDIR) -f $(CLIENT_COMPOSE_FILE) stop -t 30 && $(call show_exit_codes,$(CLIENT_PROJECT_NAME))' INT TERM EXIT; \
+	COMPOSE_HTTP_TIMEOUT=300 COMPOSE_PROJECT_NAME=$(CLIENT_PROJECT_NAME) docker compose --project-directory $(CURDIR) -f $(CLIENT_COMPOSE_FILE) up --build --remove-orphans
+.PHONY: up-client
+
+down-client:
+	@COMPOSE_PROJECT_NAME=$(CLIENT_PROJECT_NAME) docker compose --project-directory $(CURDIR) -f $(CLIENT_COMPOSE_FILE) stop -t 30
+	@$(call show_exit_codes,$(CLIENT_PROJECT_NAME))
+	@COMPOSE_PROJECT_NAME=$(CLIENT_PROJECT_NAME) docker compose --project-directory $(CURDIR) -f $(CLIENT_COMPOSE_FILE) down
+	@rm -f $(CLIENT_COMPOSE_FILE)
+.PHONY: down-client
+
+down-all-clients:
+	@for f in /tmp/tp-client-*.yaml; do \
+		[ -f "$$f" ] || continue; \
+		suffix=$$(basename "$$f" .yaml | sed 's/tp-client-//'); \
+		project=tp_grupal_client_$$(echo "$$suffix" | tr '-' '_'); \
+		echo "Stopping client $$suffix..."; \
+		COMPOSE_PROJECT_NAME=$$project docker compose --project-directory $(CURDIR) -f "$$f" stop -t 30 2>/dev/null || true; \
+		COMPOSE_PROJECT_NAME=$$project docker compose --project-directory $(CURDIR) -f "$$f" down 2>/dev/null || true; \
+		rm -f "$$f"; \
+	done
+.PHONY: down-all-clients
+
+down:
+	@$(MAKE) --no-print-directory down-server
+	@$(MAKE) --no-print-directory down-all-clients
+.PHONY: down
 
 # --- Validación de resultados -----------------------------------------------
-# DATASET: dataset de referencia a usar (default: small)
-# CLIENT:  número de cliente a comparar  (default: 0)
-DATASET ?= small
-CLIENT  ?= 0
 
-# Genera los CSVs de referencia a partir del dataset. Correr una vez por dataset.
 generate-ref:
 	@python3 compare_results.py generate --dataset $(DATASET)
 .PHONY: generate-ref
 
-# Compara todos los resultados de results/client_<CLIENT> contra la referencia.
 compare:
-	@python3 compare_results.py compare --dataset $(DATASET) --results-dir results/$(DATASET)/client_$(CLIENT)
+	@python3 compare_results.py compare --dataset $(DATASET) --results-dir results/$(DATASET)/client_$(CLIENT_NAME)
 .PHONY: compare
 
-# --- Spec → compose generation --------------------------------------------
+# --- Tests ------------------------------------------------------------------
 
-gen:
-	@cd src && go run ./tools/compose-gen ../scenarios/specs/$(SPEC).yaml > ../scenarios/$(SPEC).yaml
-	@echo "Wrote scenarios/$(SPEC).yaml from scenarios/specs/$(SPEC).yaml"
-.PHONY: gen
-
-gen-all:
-	@for spec in $(SPECS); do \
-		echo "Generating $$spec.yaml from specs/$$spec.yaml..."; \
-		(cd src && go run ./tools/compose-gen ../scenarios/specs/$$spec.yaml > ../scenarios/$$spec.yaml); \
-	done
-.PHONY: gen-all
-
-# --- Scenario selection ----------------------------------------------------
-
-switch:
-	@bash ./scripts/switch.sh
-.PHONY: switch
-
-# --- One-shot helpers ------------------------------------------------------
-
-up-legacy:
-	@cp ./scenarios/2_serial.yaml $(COMPOSE_FILE)
-	@$(MAKE) up
-.PHONY: up-legacy
-
-up-pipeline:
-	@$(MAKE) gen SPEC=$(SPEC)
-	@cp ./scenarios/$(SPEC).yaml $(COMPOSE_FILE)
-	@$(MAKE) up
-.PHONY: up-pipeline
+test:
+	@cd src && go test ./...
+.PHONY: test

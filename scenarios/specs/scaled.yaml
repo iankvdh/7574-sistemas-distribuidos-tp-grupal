@@ -1,16 +1,8 @@
-# Escenario más exigente: 2 clientes (cada uno publica el dataset completo),
-# 2 gateways, y N=3 réplicas en todos los filters y en el joiner_usd (K=3).
-# Mismo modelo que scaled: fan-out por queues nombradas (una por consumer-type)
-# y sharding al joiner_usd vía sharded_queues:joiner_usd_input:3.
+# Topología de alta carga: 4 gateways, réplicas ajustadas por profiling de CPU.
 
-clients: 2
-gateways: 2
+gateways: 4
 log_level: info
-# Q1, Q2, Q3, Q4 y Q5 implementadas en la pipeline distribuida; el cliente
-# y el gateway cierran sesión con esos cinco EOFs.
 expected_query_eofs: 5
-transactions: /datasets/LI-Small_Trans.csv
-accounts: /datasets/LI-Small_accounts.csv
 
 fetchers:
   - name: fetcher_q5
@@ -31,7 +23,7 @@ workers:
 
   - name: filter_wire_ach
     strategy: filter_wire_ach
-    replicas: 3
+    replicas: 2
     input: queue:period1_for_wire_ach
     match_count: 1
     outputs:
@@ -44,7 +36,7 @@ workers:
     match_count: 3
     outputs:
       - queue:period1_usd_transactions
-      - sharded_queues:joiner_usd_input:3
+      - sharded_queues:joiner_usd_input:2
       - queue:q3_p1_usd
 
   - name: filter_period2
@@ -62,20 +54,20 @@ workers:
     input: queue:period2_transactions
     match_count: 2
     outputs:
-      - sharded_queues:joiner_usd_input:3
+      - sharded_queues:joiner_usd_input:2
       - queue:q3_p2_for_filter
 
   - name: filter_currency_usd_other_periods
     strategy: filter_currency_usd_other_periods
-    replicas: 3
+    replicas: 1
     input: queue:other_dates_transactions
     match_count: 1
     outputs:
-      - sharded_queues:joiner_usd_input:3
+      - sharded_queues:joiner_usd_input:2
 
   - name: joiner_usd
     strategy: joiner_usd
-    replicas: 3
+    replicas: 2
     input: queue:joiner_usd_input_{REPLICA_ID}
     outputs:
       - queue:usd_for_amount_lt_50
@@ -83,7 +75,7 @@ workers:
 
   - name: filter_amount_lt_50
     strategy: filter_amount_lt_50
-    replicas: 3
+    replicas: 2
     input: queue:usd_for_amount_lt_50
     match_count: 1
     outputs:
@@ -91,21 +83,21 @@ workers:
 
   - name: sharder_q1
     strategy: sharder_q1
-    replicas: 3
+    replicas: 2
     input: queue:q1_input
     outputs:
       - direct_exchange:results
 
   - name: sharder_q4
     strategy: sharder_q4
-    replicas: 3
+    replicas: 2
     input: queue:period1_usd_transactions
     outputs:
       - direct_exchange:q4_account_shards
 
   - name: suspicious_account_filter
     strategy: suspicious_account_filter
-    replicas: 3
+    replicas: 2
     input: direct_exchange:q4_account_shards:{REPLICA_ID}
     outputs:
       - direct_exchange:q4_suspicious_account_shards
@@ -114,14 +106,14 @@ workers:
 
   - name: path_finder_q4
     strategy: path_finder_q4
-    replicas: 3
+    replicas: 2
     input: direct_exchange:q4_suspicious_account_shards:{REPLICA_ID}
     outputs:
       - direct_exchange:q4_pair_shards
 
   - name: counter_q4
     strategy: counter_q4
-    replicas: 3
+    replicas: 1
     input: direct_exchange:q4_pair_shards:{REPLICA_ID}
     outputs:
       - direct_exchange:results
@@ -130,28 +122,28 @@ workers:
 
   - name: max_q2
     strategy: max_q2
-    replicas: 3
+    replicas: 2
     input: queue:q2_input
     outputs:
       - direct_exchange:q2_agg_input
 
   - name: bank_aggregator
     strategy: bank_aggregator
-    replicas: 3
+    replicas: 2
     input: queue:all_accounts
     outputs:
       - direct_exchange:q2_agg_input
 
   - name: aggregator_q2
     strategy: aggregator_q2
-    replicas: 2
+    replicas: 1
     input: direct_exchange:q2_agg_input:{REPLICA_ID}
     outputs:
       - direct_exchange:results
 
   - name: sum_q3
     strategy: sum_q3
-    replicas: 3
+    replicas: 2
     input: queue:q3_p1_usd
     outputs:
       - direct_exchange:q3_avg_global_input
@@ -177,7 +169,7 @@ workers:
 
   - name: micro_transaction_counter
     strategy: micro_transaction_counter
-    replicas: 3
+    replicas: 2
     inputs:
       - queue:conversions_{REPLICA_ID}
       - queue:period1_wire_ach

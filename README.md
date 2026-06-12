@@ -3,7 +3,7 @@
 Sistema distribuido para detección de anomalías en transacciones bancarias.
 Implementa cinco consultas analíticas sobre un dataset de transferencias: transacciones menores a 50 USD, máximos por banco, anomalías contra el promedio por formato de pago, patrón scatter-gather, y micro-transacciones Wire/ACH convertidas a USD.
 
-La arquitectura es una pipeline de workers stateless/stateful comunicados por RabbitMQ. Cada tipo de worker implementa una `strategy`; la topología se declara en un spec YAML y se expande automáticamente a un `docker-compose.yaml`.
+La arquitectura es una pipeline de workers stateless/stateful comunicados por RabbitMQ. Cada tipo de worker implementa una `strategy`; la topología se declara en un spec YAML y se expande automáticamente a un compose del servidor.
 
 ## Integrantes
 
@@ -24,75 +24,102 @@ La arquitectura es una pipeline de workers stateless/stateful comunicados por Ra
 
 ---
 
-## Flujo típico
+## Flujo de uso
+
+El sistema separa el servidor (gateways + workers + RabbitMQ) de los clientes. El servidor se levanta una vez y los clientes se conectan de forma independiente, cada uno en su propia terminal.
+
+### 1. Levantar el servidor
 
 ```bash
-# 1. Generar los scenarios en base a los specs
-make gen-all
-
-# 2. Seleccionar un scenario:
-make switch
-
-# 3. Correrlo:
-make up
-
-# 4. Esperar que todos los clientes terminen (Ctrl-C hace graceful stop)
-
-# 5. Generar la referencia serial para comparar contra los resultados obtenidos (solo una vez por dataset)
-make generate-ref DATASET=small
-
-# 6. Comparar resultados de ejecución serial contra la distribuída
-make compare DATASET=small CLIENT=0
+make up-server SPEC=default
 ```
+
+El servidor queda corriendo en primer plano. Ctrl-C hace graceful stop.
+
+### 2. Levantar clientes
+
+En terminales separadas, una por cliente:
+
+```bash
+make up-client SPEC=default DATASET=small CLIENT_NAME=0
+make up-client SPEC=default DATASET=medium CLIENT_NAME=1
+make up-client SPEC=default DATASET=large CLIENT_NAME=2
+```
+
+`DATASET` determina qué CSVs lee el cliente (`small` / `medium` / `large`, default `small`).  
+`CLIENT_NAME` es un identificador libre (número o string) que nombra el subdirectorio donde se guardan los resultados: `results/<dataset>/client_<CLIENT_NAME>/`.
+
+`up-client` usa el spec para saber cuántos gateways hay y cómo se llaman, y genera un compose de un único cliente en `/tmp/tp-client-<CLIENT_NAME>.yaml`. Ese archivo se borra automáticamente al hacer `down-client` o `down`.
+
+Cada cliente es completamente independiente. Se puede correr cualquier combinación de datasets y clientes contra el mismo servidor.
+
+### 3. Bajar el sistema
+
+```bash
+make down-server                  # para el servidor
+make down-client CLIENT_NAME=0    # para un cliente específico
+make down-all-clients             # para todos los clientes activos
+make down                         # para servidor y todos los clientes
+```
+
+### 4. Generar la referencia serial (una sola vez por dataset)
+
+```bash
+make generate-ref DATASET=small
+make generate-ref DATASET=medium
+make generate-ref DATASET=large
+```
+
+Calcula los resultados correctos de forma serial y los guarda en `notebooks/<dataset>/reference/`. Solo hay que correrlo una vez.
+
+### 5. Comparar resultados
+
+```bash
+make compare DATASET=small CLIENT_NAME=0
+make compare DATASET=medium CLIENT_NAME=1
+```
+
+`CLIENT_NAME` debe ser el mismo identificador usado al levantar ese cliente. Compara todos los CSVs de `results/<dataset>/client_<CLIENT_NAME>/` contra la referencia y reporta OK/FAIL por query.
 
 ---
 
-## Makefile
+## Specs disponibles
+
+Los specs definen la topología del servidor: número de gateways y réplicas por worker. El dataset se pasa por parámetro al momento de correr.
+
+| Spec | Gateways | Réplicas | Uso recomendado |
+|------|----------|----------|-----------------|
+| `minimal` | 1 | 1 por worker | modelo mínimo |
+| `default` | 2 | 3 en workers de alta carga | Dataset small/medium, múltiples clientes |
+| `scaled` | 4 | Ajustadas por profiling de CPU | Dataset más grades, alta concurrencia |
+
+---
+
+## Makefile — referencia de targets
 
 | Target | Descripción |
 |--------|-------------|
-| `make up-pipeline [SPEC=x]` | Genera el compose desde `specs/<x>.yaml`, lo copia a `docker-compose.yaml` y levanta el sistema. Ctrl-C hace graceful stop. |
-| `make up` | Levanta el `docker-compose.yaml` actual (sin regenerar). |
-| `make up-detach` | Igual que `up` pero en background. |
-| `make down` | Para y elimina todos los contenedores. |
-| `make logs` | Muestra logs del compose actual. |
-| `make gen [SPEC=x]` | Expande `scenarios/specs/<x>.yaml` → `scenarios/<x>.yaml`. |
-| `make gen-all` | Expande todos los specs de `scenarios/specs/`. |
-| `make switch` | Menú interactivo para seleccionar el escenario activo. |
-| `make generate-ref [DATASET=x]` | Calcula los CSVs de referencia desde el dataset (correr una vez). `DATASET` ∈ `small` \| `medium` \| `large`. |
-| `make compare [DATASET=x] [CLIENT=n]` | Compara `results/<x>/client_<n>/` contra la referencia. `DATASET` ∈ `small` \| `medium` \| `large`, default `small`. |
-| `make test` | Corre `go test ./...` en `src/` si los hay. |
-
----
-
-## Escenarios disponibles
-
-Los specs viven en `scenarios/specs/`. El dataset se detecta automáticamente del path de transacciones (`LI-Small_Trans.csv` → `small`, `LI-Medium_Trans.csv` → `medium`, `LI-Large_Trans.csv` → `large`) y determina el subdirectorio de resultados (`results/<dataset>/client_N/`). Para correr con otro dataset basta cambiar `transactions:` y `accounts:` en el spec.
-
-| Spec | Clientes | Gateways | Queries | Descripción |
-|------|----------|----------|---------|-------------|
-| `simple_client` | 1 | 1 | Q1–Q5 | Mínimo, 1 réplica por worker. Útil para comparar contra la referencia serial. |
-| `multi_client` | 2 | 2 | Q1–Q5 | 3 réplicas en filtros y joiner. |
-| `multi_client_optimized` | 2 | 4 | Q1–Q5 | Réplicas ajustadas por profiling de CPU. |
-| `multi_client_q1` | 2 | 2 | Q1 | Solo la rama Q1 activa. |
-| `multi_client_q2` | 2 | 2 | Q2 | Solo la rama Q2 activa. |
-| `multi_client_q3` | 2 | 2 | Q3 | Solo la rama Q3 activa. |
-| `multi_client_q4` | 2 | 2 | Q4 | Solo la rama Q4 activa. |
-| `multi_client_q5` | 2 | 2 | Q5 | Solo la rama Q5 activa. |
+| `make up-server SPEC=<s>` | Genera el compose del servidor y lo levanta en primer plano. |
+| `make up-client SPEC=<s> [DATASET=small] [CLIENT_NAME=N]` | Levanta un cliente contra el servidor en ejecución. |
+| `make down-server` | Para y elimina los contenedores del servidor. |
+| `make down-client [CLIENT_NAME=N]` | Para y elimina el cliente N. |
+| `make down-all-clients` | Para y elimina todos los clientes activos. |
+| `make down` | Para y elimina servidor y todos los clientes. |
+| `make generate-ref [DATASET=small]` | Calcula los CSVs de referencia (correr una vez por dataset). |
+| `make compare [DATASET=small] [CLIENT_NAME=N]` | Compara `results/<dataset>/client_<N>/` contra la referencia. |
+| `make test` | Corre `go test ./...` en `src/`. |
+| `make logs` | Muestra logs del compose de servidor actual. |
 
 ---
 
 ## Specs — cómo leerlos y modificarlos
 
-Cada spec es un YAML declarativo que describe la topología. `compose-gen` lo expande a un `docker-compose.yaml` completo, inyectando automáticamente todas las variables de coordinación (N_FINAL_JOINERS, EXPECTED_EOFS, K_SUSPICIOUS_FILTERS, etc.) a partir de los replica counts.
+Cada spec es un YAML declarativo que describe la topología del servidor. `compose-gen` lo expande inyectando automáticamente todas las variables de coordinación (N_FINAL_JOINERS, EXPECTED_EOFS, K_SUSPICIOUS_FILTERS, etc.) a partir de los replica counts.
 
 ```yaml
-clients: 2
 gateways: 2
 log_level: info
 expected_query_eofs: 5
-transactions: /datasets/LI-Small_Trans.csv
-accounts:    /datasets/LI-Small_accounts.csv
 
 fetchers:
   - name: fetcher_q5
@@ -136,13 +163,12 @@ workers:
 | `sharded_queues:PREFIX:K` | K colas `PREFIX_0..PREFIX_{K-1}`; el runtime rutea por `FNV(client_id) mod K`. |
 | `final_queues` | Solo en `final_joiner`; se expande a una cola por gateway. |
 
-**Solo hay que declarar** los parámetros de lógica de negocio (`SUSPICIOUS_THRESHOLD`, `MIN_INTERMEDIATES`, `AMOUNT_THRESHOLD_PCT`, `BUFFER_DIR`, `MAX_CONVERTED_AMOUNT_USD`). Los de coordinación entre workers los infiere el generador.
+Solo hay que declarar los parámetros de lógica de negocio (`SUSPICIOUS_THRESHOLD`, `MIN_INTERMEDIATES`, `AMOUNT_THRESHOLD_PCT`, `BUFFER_DIR`, `MAX_CONVERTED_AMOUNT_USD`). Los de coordinación entre workers los infiere el generador.
 
-### Agregar un escenario nuevo
+### Agregar un spec nuevo
 
 1. Crear `scenarios/specs/<nombre>.yaml`.
-2. `make gen SPEC=<nombre>` para verificar que expande sin errores.
-3. `make up-pipeline SPEC=<nombre>` para levantarlo.
+2. `make up-server SPEC=<nombre>` para verificar que expande sin errores y levantarlo.
 
 ---
 
@@ -189,8 +215,8 @@ workers:
 
 ```
 scenarios/
-  specs/          # fuentes declarativas (editar estos)
-  *.yaml          # composes generados (no editar a mano)
+  specs/                   # fuentes declarativas (editar estos)
+docker-compose-server.yaml # compose del servidor generado por up-server
 src/
   client/         # cliente Go: sube CSV y recibe resultados
   gateway/        # gateway TCP ↔ RabbitMQ

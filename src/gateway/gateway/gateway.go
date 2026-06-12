@@ -223,6 +223,9 @@ func (gateway *Gateway) handleClientSession(state *clientregistry.ClientState, h
 		return
 	}
 
+	slog.Info("Client connected", "client_id", handler.ClientID(), "remote_addr", state.Conn.RemoteAddr())
+	defer slog.Info("Client disconnected", "client_id", handler.ClientID())
+
 	gateway.waitingGroup.Add(1)
 	go gateway.handleClientResultOutput(state, handler.ClientID())
 
