@@ -21,11 +21,14 @@ Ejemplos:
 import argparse
 import json
 import sys
+import urllib.request
 from pathlib import Path
 
 import pandas as pd
 
 ROOT = Path(__file__).parent
+
+FRANKFURTER_API = "https://api.frankfurter.dev/v2"
 
 # ---------------------------------------------------------------------------
 # Configuración de datasets
@@ -45,8 +48,6 @@ DATASETS = {
         "accounts": ROOT / "datasets/LI-Large_accounts.csv",
     },
 }
-
-COTIZACIONES = ROOT / "datasets/cotizaciones.json"
 
 # ---------------------------------------------------------------------------
 # Queries de referencia
@@ -127,6 +128,19 @@ def ref_q4(trans_df: pd.DataFrame) -> pd.DataFrame:
     }).reset_index(drop=True)
 
 
+def _fetch_rates_from_api(date_from: str, date_to: str) -> dict:
+    url = f"{FRANKFURTER_API}/rates?from={date_from}&to={date_to}&base=USD"
+    print(f"  Consultando cotizaciones: {url} ...", end=" ", flush=True)
+    req = urllib.request.Request(url, headers={"User-Agent": "compare_results/1.0"})
+    with urllib.request.urlopen(req) as resp:
+        entries = json.load(resp)
+    print(f"{len(entries)} registros")
+    raw: dict = {}
+    for e in entries:
+        raw.setdefault(e["date"], {})[e["quote"]] = e["rate"]
+    return raw
+
+
 def _build_rates_df(date_range: pd.DatetimeIndex) -> pd.DataFrame:
     CURRENCY_NAME_TO_CODE = {
         "Australian Dollar": "AUD", "Brazil Real": "BRL", "Canadian Dollar": "CAD",
@@ -134,11 +148,9 @@ def _build_rates_df(date_range: pd.DatetimeIndex) -> pd.DataFrame:
         "Saudi Riyal": "SAR", "Shekel": "ILS", "Swiss Franc": "CHF",
         "UK Pound": "GBP", "US Dollar": None, "Yen": "JPY", "Yuan": "CNY",
     }
-    with open(COTIZACIONES) as f:
-        entries = json.load(f)
-    raw: dict = {}
-    for e in entries:
-        raw.setdefault(e["date"], {})[e["quote"]] = e["rate"]
+    date_from = date_range[0].strftime("%Y-%m-%d")
+    date_to   = date_range[-1].strftime("%Y-%m-%d")
+    raw = _fetch_rates_from_api(date_from, date_to)
     available = sorted(raw.keys())
 
     def rates_for(date_str: str) -> dict:
