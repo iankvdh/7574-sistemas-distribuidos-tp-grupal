@@ -3,6 +3,8 @@ package config
 import (
 	"errors"
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/env"
 )
@@ -26,6 +28,13 @@ type WorkerConfig struct {
 	MomHost               string
 	MomPort               int
 	MaxInternalBatchBytes int
+
+	// Heartbeat (Sentinel liveness).
+	HeartbeatEnabled  bool
+	ContainerName     string
+	SentinelUDPAddrs  []string
+	HeartbeatInterval time.Duration
+	HeartbeatJitter   time.Duration
 }
 
 func Load() (WorkerConfig, error) {
@@ -90,6 +99,18 @@ func Load() (WorkerConfig, error) {
 		return WorkerConfig{}, errors.New("RING_QUEUE_IN and RING_QUEUE_OUT must be set together")
 	}
 
+	heartbeatEnabled := strings.EqualFold(env.StringWithDefault("HEARTBEAT_ENABLED", "true"), "true")
+	containerName := env.StringWithDefault("CONTAINER_NAME", "")
+	sentinelUDP := splitNonEmpty(env.StringWithDefault("SENTINEL_UDP", ""))
+	hbIntervalSec, err := env.IntWithDefault("HEARTBEAT_INTERVAL_SECONDS", 5, true)
+	if err != nil {
+		return WorkerConfig{}, err
+	}
+	hbJitterMs, err := env.IntWithDefault("HEARTBEAT_JITTER_MS", 1000, false)
+	if err != nil {
+		return WorkerConfig{}, err
+	}
+
 	return WorkerConfig{
 		StrategyName:          strategyName,
 		ReplicaID:             replicaID,
@@ -102,5 +123,21 @@ func Load() (WorkerConfig, error) {
 		MomHost:               momHost,
 		MomPort:               momPort,
 		MaxInternalBatchBytes: maxInternalBatchBytes,
+
+		HeartbeatEnabled:  heartbeatEnabled,
+		ContainerName:     containerName,
+		SentinelUDPAddrs:  sentinelUDP,
+		HeartbeatInterval: time.Duration(hbIntervalSec) * time.Second,
+		HeartbeatJitter:   time.Duration(hbJitterMs) * time.Millisecond,
 	}, nil
+}
+
+func splitNonEmpty(raw string) []string {
+	var out []string
+	for _, p := range strings.Split(raw, ",") {
+		if s := strings.TrimSpace(p); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
 }
