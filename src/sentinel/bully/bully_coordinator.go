@@ -138,7 +138,7 @@ func (bc *BullyCoordinator) monitorLeader(ctx context.Context) {
 			failures++
 			if failures >= bc.cfg.LeaderPingFailures {
 				failures = 0
-				slog.Info("bully: leader not responding over UDP, starting election", "leader", leader, "sentinel_id", bc.cfg.SelfID)
+				slog.Info("bully: leader not responding over UDP, starting election", "leader", leader)
 				bc.triggerElection()
 			}
 		}
@@ -163,7 +163,7 @@ func (bc *BullyCoordinator) Handle(msg SentinelMessage) {
 
 func (bc *BullyCoordinator) onCoord(sender byte) {
 	if sender < bc.cfg.SelfID {
-		slog.Info("bully: Coord from a lower ID, re-contesting leadership", "from", sender, "sentinel_id", bc.cfg.SelfID)
+		slog.Info("bully: Coord from a lower ID, re-contesting leadership", "from", sender)
 		go bc.triggerElection()
 		return
 	}
@@ -171,7 +171,7 @@ func (bc *BullyCoordinator) onCoord(sender byte) {
 	bc.leaderID = sender
 	bc.state = Follower
 	bc.mu.Unlock()
-	slog.Info("bully: new leader registered", "leader", sender, "sentinel_id", bc.cfg.SelfID)
+	slog.Info("bully: new leader registered", "leader", sender)
 	signal(bc.coordReceived)
 }
 
@@ -206,7 +206,7 @@ func (bc *BullyCoordinator) runElection() {
 		case <-bc.coordReceived:
 			return
 		case <-time.After(bc.cfg.CoordTimeout):
-			slog.Info("bully: no Coord arrived after OK, retrying election", "sentinel_id", bc.cfg.SelfID)
+			slog.Info("bully: no Coord arrived after OK, retrying election")
 		}
 	}
 }
@@ -219,7 +219,7 @@ func (bc *BullyCoordinator) becomeLeader() {
 	for _, p := range bc.cfg.Peers {
 		_ = bc.control.Send(p.TCPAddr, SentinelMessage{MsgCoord, bc.cfg.SelfID})
 	}
-	slog.Info("bully: proclaiming myself leader", "sentinel_id", bc.cfg.SelfID)
+	slog.Info("bully: proclaiming myself leader")
 }
 
 func (bc *BullyCoordinator) setState(s State) {
