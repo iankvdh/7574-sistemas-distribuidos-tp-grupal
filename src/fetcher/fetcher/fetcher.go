@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math/rand"
 	"net/http"
 	"strconv"
 	"time"
@@ -16,6 +17,7 @@ import (
 )
 
 const frankfurterClientID inner.ClientID = "00000000-0000-0000-0000-000000000005"
+const userAgent = "fetcher_q5/1.0"
 
 type Fetcher struct {
 	cfg config.FetcherConfig
@@ -40,22 +42,56 @@ func (f *Fetcher) Run() error {
 }
 
 func (f *Fetcher) fetchRates() (*inner.Q5Conversions, error) {
-	request_url := fmt.Sprintf("%s/rates?from=%s&to=%s&base=%s", f.cfg.APIURL, f.cfg.Period1Start, f.cfg.Period1End, f.cfg.BaseCurrency)
+	requestURL := fmt.Sprintf("%s/rates?from=%s&to=%s&base=%s", f.cfg.APIURL, f.cfg.Period1Start, f.cfg.Period1End, f.cfg.BaseCurrency)
 
+	backoff := time.Duration(f.cfg.HTTPInitialBackoffMs) * time.Millisecond
+	maxBackoff := time.Duration(f.cfg.HTTPMaxBackoffSeconds) * time.Second
+	var lastErr error
+
+	for attempt := 0; attempt <= f.cfg.MaxHTTPRetries; attempt++ {
+		rates, retryable, err := f.fetchRatesOnce(requestURL)
+		if err == nil {
+			return rates, nil
+		}
+		lastErr = err
+		if !retryable {
+			return nil, err
+		}
+		if attempt == f.cfg.MaxHTTPRetries {
+			break
+		}
+
+		jitter := time.Duration(rand.Int63n(int64(backoff/2) + 1))
+		slog.Warn("Fetcher HTTP attempt failed; retrying",
+			"attempt", attempt, "max_retries", f.cfg.MaxHTTPRetries, "backoff", backoff+jitter, "err", err)
+		time.Sleep(backoff + jitter)
+		backoff = min(backoff*2, maxBackoff)
+	}
+	return nil, fmt.Errorf("fetcher: exhausted %d retries: %w", f.cfg.MaxHTTPRetries, lastErr)
+}
+
+func (f *Fetcher) fetchRatesOnce(requestURL string) (*inner.Q5Conversions, bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(f.cfg.RequestTimeoutSec)*time.Second)
 	defer cancel()
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, request_url, nil)
+
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
+	request.Header.Set("User-Agent", userAgent)
+
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
-		return nil, fmt.Errorf("GET %s: %w", request_url, err)
+		// Network error / timeout: retryable.
+		return nil, true, fmt.Errorf("GET %s: %w", requestURL, err)
 	}
 	defer response.Body.Close()
+
 	if response.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(response.Body, 1024))
-		return nil, fmt.Errorf("GET %s returned %d: %s", request_url, response.StatusCode, string(body))
+		err := fmt.Errorf("GET %s returned %d: %s", requestURL, response.StatusCode, string(body))
+		retryable := response.StatusCode >= 500 || response.StatusCode == http.StatusTooManyRequests
+		return nil, retryable, err
 	}
 
 	var entries []struct {
@@ -64,7 +100,7 @@ func (f *Fetcher) fetchRates() (*inner.Q5Conversions, error) {
 		Rate  float64 `json:"rate"`
 	}
 	if err := json.NewDecoder(response.Body).Decode(&entries); err != nil {
-		return nil, fmt.Errorf("decode frankfurter response: %w", err)
+		return nil, false, fmt.Errorf("decode frankfurter response: %w", err)
 	}
 
 	formatted_rates := &inner.Q5Conversions{Rates: make(map[uint32]map[string]float64)}
@@ -79,7 +115,7 @@ func (f *Fetcher) fetchRates() (*inner.Q5Conversions, error) {
 		}
 		formatted_rates.Rates[key][entry.Quote] = entry.Rate
 	}
-	return formatted_rates, nil
+	return formatted_rates, false, nil
 }
 
 func (f *Fetcher) publishToAllQueues(rates *inner.Q5Conversions) error {

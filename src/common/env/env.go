@@ -53,3 +53,13 @@ func RequiredInt(name string, mustBePositive bool) (int, error) {
 	}
 	return parsed, nil
 }
+
+func SplitNonEmpty(raw string) []string {
+	var out []string
+	for _, p := range strings.Split(raw, ",") {
+		if s := strings.TrimSpace(p); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
