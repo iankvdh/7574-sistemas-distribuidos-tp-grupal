@@ -80,7 +80,7 @@ down-server:
 .PHONY: down-server
 
 logs:
-	@$(compose-server) logs
+	@$(compose-server) logs --follow
 .PHONY: logs
 
 # --- Clientes ---------------------------------------------------------------
