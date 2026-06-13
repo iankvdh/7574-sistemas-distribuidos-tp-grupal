@@ -101,7 +101,7 @@ func Load() (WorkerConfig, error) {
 
 	heartbeatEnabled := strings.EqualFold(env.StringWithDefault("HEARTBEAT_ENABLED", "true"), "true")
 	containerName := env.StringWithDefault("CONTAINER_NAME", "")
-	sentinelUDP := splitNonEmpty(env.StringWithDefault("SENTINEL_UDP", ""))
+	sentinelUDP := env.SplitNonEmpty(env.StringWithDefault("SENTINEL_UDP", ""))
 	hbIntervalSec, err := env.IntWithDefault("HEARTBEAT_INTERVAL_SECONDS", 5, true)
 	if err != nil {
 		return WorkerConfig{}, err
@@ -132,12 +132,3 @@ func Load() (WorkerConfig, error) {
 	}, nil
 }
 
-func splitNonEmpty(raw string) []string {
-	var out []string
-	for _, p := range strings.Split(raw, ",") {
-		if s := strings.TrimSpace(p); s != "" {
-			out = append(out, s)
-		}
-	}
-	return out
-}

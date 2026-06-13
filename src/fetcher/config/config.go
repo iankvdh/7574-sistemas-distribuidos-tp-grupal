@@ -8,11 +8,14 @@ import (
 )
 
 const (
-	defaultMomPort           = 5672
-	defaultAPIURL            = "https://api.frankfurter.dev/v2"
-	defaultQueuePrefix       = "conversions"
-	defaultBaseCurrency      = "USD"
-	defaultRequestTimeoutSec = 30
+	defaultMomPort               = 5672
+	defaultAPIURL                = "https://api.frankfurter.dev/v2"
+	defaultQueuePrefix           = "conversions"
+	defaultBaseCurrency          = "USD"
+	defaultRequestTimeoutSec     = 30
+	defaultMaxHTTPRetries        = 5
+	defaultHTTPInitialBackoffMs  = 200
+	defaultHTTPMaxBackoffSeconds = 5
 )
 
 type FetcherConfig struct {
@@ -26,6 +29,10 @@ type FetcherConfig struct {
 	NMicroTxCounter   int
 	GatewayID         int
 	RequestTimeoutSec int
+
+	MaxHTTPRetries        int
+	HTTPInitialBackoffMs  int
+	HTTPMaxBackoffSeconds int
 }
 
 func Load() (FetcherConfig, error) {
@@ -65,6 +72,18 @@ func Load() (FetcherConfig, error) {
 	if err != nil {
 		return FetcherConfig{}, err
 	}
+	maxHTTPRetries, err := env.IntWithDefault("MAX_HTTP_RETRIES", defaultMaxHTTPRetries, false)
+	if err != nil {
+		return FetcherConfig{}, err
+	}
+	httpInitialBackoffMs, err := env.IntWithDefault("HTTP_INITIAL_BACKOFF_MS", defaultHTTPInitialBackoffMs, true)
+	if err != nil {
+		return FetcherConfig{}, err
+	}
+	httpMaxBackoffSeconds, err := env.IntWithDefault("HTTP_MAX_BACKOFF_SECONDS", defaultHTTPMaxBackoffSeconds, true)
+	if err != nil {
+		return FetcherConfig{}, err
+	}
 
 	return FetcherConfig{
 		MomHost:           momHost,
@@ -77,6 +96,10 @@ func Load() (FetcherConfig, error) {
 		NMicroTxCounter:   n,
 		GatewayID:         gatewayID,
 		RequestTimeoutSec: timeout,
+
+		MaxHTTPRetries:        maxHTTPRetries,
+		HTTPInitialBackoffMs:  httpInitialBackoffMs,
+		HTTPMaxBackoffSeconds: httpMaxBackoffSeconds,
 	}, nil
 }
 

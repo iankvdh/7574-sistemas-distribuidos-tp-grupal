@@ -11,8 +11,10 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/heartbeat"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/messageprotocol/external"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/messageprotocol/inner"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/middleware"
@@ -37,6 +39,12 @@ type Gateway struct {
 	ctx                   context.Context
 	cancel                context.CancelFunc
 	waitingGroup          sync.WaitGroup
+
+	heartbeatEnabled  bool
+	containerName     string
+	sentinelUDPAddrs  []string
+	heartbeatInterval time.Duration
+	heartbeatJitter   time.Duration
 }
 
 func NewGateway(config gatewayconfig.GatewayConfig) (*Gateway, error) {
@@ -83,6 +91,12 @@ func NewGateway(config gatewayconfig.GatewayConfig) (*Gateway, error) {
 		listener:              listener,
 		ctx:                   ctx,
 		cancel:                cancel,
+
+		heartbeatEnabled:  config.HeartbeatEnabled,
+		containerName:     config.ContainerName,
+		sentinelUDPAddrs:  config.SentinelUDPAddrs,
+		heartbeatInterval: config.HeartbeatInterval,
+		heartbeatJitter:   config.HeartbeatJitter,
 	}
 
 	return gateway, nil
@@ -100,6 +114,8 @@ func (gateway *Gateway) Run() error {
 
 	gateway.waitingGroup.Add(1)
 	go gateway.handleSignals()
+
+	gateway.startHeartbeat()
 
 	slog.Info("Gateway accepting client connections")
 
@@ -122,6 +138,24 @@ func (gateway *Gateway) Run() error {
 	}
 
 	return nil
+}
+
+func (gateway *Gateway) startHeartbeat() {
+	if !gateway.heartbeatEnabled || len(gateway.sentinelUDPAddrs) == 0 {
+		slog.Debug("Gateway heartbeat disabled")
+		return
+	}
+	emitter, err := heartbeat.New(gateway.containerName, gateway.sentinelUDPAddrs,
+		gateway.heartbeatInterval, gateway.heartbeatJitter)
+	if err != nil {
+		slog.Error("Could not initialize gateway heartbeat emitter", "err", err)
+		return
+	}
+	gateway.waitingGroup.Add(1)
+	go func() {
+		defer gateway.waitingGroup.Done()
+		emitter.Run(gateway.ctx)
+	}()
 }
 
 func (gateway *Gateway) handleSignals() {
