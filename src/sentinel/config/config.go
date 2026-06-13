@@ -62,7 +62,7 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	expected := splitNonEmpty(expectedRaw)
+	expected := env.SplitNonEmpty(expectedRaw)
 	if len(expected) == 0 {
 		return Config{}, fmt.Errorf("EXPECTED_CONTAINERS must list at least one container")
 	}
@@ -136,7 +136,7 @@ func Load() (Config, error) {
 
 func parsePeers(raw string) ([]bully.Peer, error) {
 	var peers []bully.Peer
-	for _, entry := range splitNonEmpty(raw) {
+	for _, entry := range env.SplitNonEmpty(raw) {
 		parts := strings.Split(entry, ":")
 		if len(parts) != 4 {
 			return nil, fmt.Errorf("PEERS entry %q must be id:host:tcpPort:udpPort", entry)
@@ -167,15 +167,6 @@ func net_JoinHostPort(host, port string) string {
 	return host + ":" + port
 }
 
-func splitNonEmpty(raw string) []string {
-	var out []string
-	for _, p := range strings.Split(raw, ",") {
-		if s := strings.TrimSpace(p); s != "" {
-			out = append(out, s)
-		}
-	}
-	return out
-}
 
 func secs(n int) time.Duration  { return time.Duration(n) * time.Second }
 func msecs(n int) time.Duration { return time.Duration(n) * time.Millisecond }

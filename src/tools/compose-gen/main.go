@@ -24,6 +24,9 @@
 //	      - <kind>:<target>[:<key>]
 //	    env:                             optional arbitrary env vars (EXPECTED_EOFS, WINDOW_SIZE, ...)
 //	      KEY: value
+//	chaos_monkey:            optional; when present, emits a chaos_monkey service
+//	  env:                   optional tuning vars (KILL_INTERVAL_SECONDS, ...)
+//	    KEY: value           TARGETS/EXCLUDE are computed automatically
 //
 // All worker and gateway services automatically load .env (repo root) so that
 // shared variables (MOM_HOST, MOM_PORT, PERIOD1_START, …) are defined once.
@@ -59,6 +62,13 @@ type fetcherSpec struct {
 	Env  map[string]string
 }
 
+// chaosSpec declares the Chaos Monkey service. Its TARGETS/EXCLUDE lists are
+// computed automatically by compose-gen (like EXPECTED_CONTAINERS); the spec
+// only carries the optional tuning env vars (KILL_INTERVAL_SECONDS, ...).
+type chaosSpec struct {
+	Env map[string]string
+}
+
 type spec struct {
 	Gateways          int
 	Sentinels         int // 0 means "use defaultSentinelReplicas" (= 3)
@@ -69,6 +79,7 @@ type spec struct {
 	ExpectedQueryEOFs int // 0 means "leave gateway/client defaults" (= 5)
 	Workers           []workerSpec
 	Fetchers          []fetcherSpec
+	ChaosMonkey       *chaosSpec // non-nil when the spec declares a chaos_monkey
 }
 
 // datasetFromTransactions extracts a lowercase dataset name from a transactions
@@ -266,6 +277,8 @@ func parseSpec(src string) (*spec, error) {
 				s.LogLevel = value
 			case "expected_query_eofs":
 				s.ExpectedQueryEOFs, _ = strconv.Atoi(value)
+			case "chaos_monkey":
+				s.ChaosMonkey = &chaosSpec{Env: map[string]string{}}
 			}
 			section = key
 			currentList = ""
@@ -333,6 +346,22 @@ func parseSpec(src string) (*spec, error) {
 				key, value := splitKV(trimmed)
 				if key != "" {
 					curFetcher.Env[key] = value
+				}
+			}
+		case section == "chaos_monkey" && indent == 2:
+			currentList = ""
+			key, value := splitKV(trimmed)
+			if value == "" && key == "env" {
+				currentList = key
+			}
+		case section == "chaos_monkey" && indent >= 4:
+			if s.ChaosMonkey == nil {
+				continue
+			}
+			if currentList == "env" {
+				key, value := splitKV(trimmed)
+				if key != "" {
+					s.ChaosMonkey.Env[key] = value
 				}
 			}
 		}
@@ -594,8 +623,10 @@ func (s *spec) renderServer(w io.Writer) error {
 	if sentinels <= 0 {
 		sentinels = defaultSentinelReplicas
 	}
+	var gatewayNames []string
 	for i := 1; i <= s.Gateways; i++ {
-		writeGateway(w, i, logLevel, s.ExpectedQueryEOFs)
+		writeGateway(w, i, logLevel, s.ExpectedQueryEOFs, sentinels)
+		gatewayNames = append(gatewayNames, gatewayName(i))
 	}
 	injectDerivedEnvs(s.Workers, s.Fetchers)
 	var workerNames []string
@@ -608,19 +639,26 @@ func (s *spec) renderServer(w io.Writer) error {
 	for _, fs := range s.Fetchers {
 		writeFetcher(w, fs, logLevel)
 	}
-	writeSentinels(w, workerNames, logLevel, sentinels)
+	// Both workers and gateways emit heartbeats and are restarted by the
+	// Sentinel, so both are monitored (EXPECTED_CONTAINERS) and both are valid
+	// Chaos Monkey targets.
+	monitored := append(append([]string{}, workerNames...), gatewayNames...)
+	writeSentinels(w, monitored, logLevel, sentinels)
+	if s.ChaosMonkey != nil {
+		writeChaosMonkey(w, s.ChaosMonkey, monitored, sentinels, s.Fetchers, logLevel)
+	}
 	writeRabbit(w)
 	writeNetwork(w, false)
 	return nil
 }
 
 // writeSentinels emits the Sentinel cluster. Each replica gets the
-// full list of worker containers to watch (EXPECTED_CONTAINERS), the addresses
-// of its peers (PEERS, as id:host:tcpPort:udpPort), and the host docker socket
-// mounted read-write so it can `docker restart` crashed workers
-// (docker-from-docker). Sentinels are NOT monitored themselves.
-func writeSentinels(w io.Writer, workerNames []string, logLevel string, replicas int) {
-	expected := strings.Join(workerNames, ",")
+// full list of monitored containers to watch (EXPECTED_CONTAINERS: workers +
+// gateways), the addresses of its peers (PEERS, as id:host:tcpPort:udpPort),
+// and the host docker socket mounted read-write so it can `docker restart`
+// crashed containers (docker-from-docker). Sentinels are NOT monitored themselves.
+func writeSentinels(w io.Writer, monitored []string, logLevel string, replicas int) {
+	expected := strings.Join(monitored, ",")
 	for i := 0; i < replicas; i++ {
 		var peers []string
 		for j := 0; j < replicas; j++ {
@@ -704,9 +742,13 @@ func writeClientSplit(w io.Writer, label string, gateways int, transactions, acc
 	fmt.Fprintf(w, "      - ./results/%s/client_%s:/results\n", dataset, label)
 }
 
-func writeGateway(w io.Writer, id int, logLevel string, expectedQueryEOFs int) {
-	fmt.Fprintf(w, "  gateway_%d:\n", id)
+func gatewayName(id int) string { return fmt.Sprintf("gateway_%d", id) }
+
+func writeGateway(w io.Writer, id int, logLevel string, expectedQueryEOFs, sentinels int) {
+	name := gatewayName(id)
+	fmt.Fprintf(w, "  %s:\n", name)
 	fmt.Fprintln(w, "    build: { context: ./src/, dockerfile: gateway/Dockerfile }")
+	fmt.Fprintf(w, "    container_name: %s\n", name)
 	fmt.Fprintln(w, "    depends_on: { rabbitmq: { condition: service_healthy } }")
 	fmt.Fprintln(w, "    env_file:")
 	fmt.Fprintln(w, "      - .env")
@@ -721,6 +763,10 @@ func writeGateway(w io.Writer, id int, logLevel string, expectedQueryEOFs int) {
 		fmt.Fprintf(w, "      - EXPECTED_QUERY_EOFS=%d\n", expectedQueryEOFs)
 	}
 	fmt.Fprintf(w, "      - LOG_LEVEL=%s\n", logLevel)
+	fmt.Fprintf(w, "      - CONTAINER_NAME=%s\n", name)
+	fmt.Fprintf(w, "      - SENTINEL_UDP=%s\n", sentinelHeartbeatTargets(sentinels))
+	fmt.Fprintf(w, "      - HEARTBEAT_INTERVAL_SECONDS=%d\n", heartbeatIntervalS)
+	fmt.Fprintf(w, "      - HEARTBEAT_JITTER_MS=%d\n", heartbeatJitterMs)
 }
 
 func writeWorker(w io.Writer, ws workerSpec, replica int, logLevel string, gateways, sentinels int) {
@@ -798,6 +844,44 @@ func writeFetcher(w io.Writer, fs fetcherSpec, logLevel string) {
 			fmt.Fprintf(w, "      - %s=%s\n", k, fs.Env[k])
 		}
 	}
+}
+
+// writeChaosMonkey emits the Chaos Monkey service. TARGETS and EXCLUDE are
+// computed automatically: TARGETS lists every monitored container (workers +
+// gateways), EXCLUDE protects rabbitmq, the sentinels and the one-shot fetchers.
+// It mounts the docker socket and kills victims via the docker CLI (like the
+// Sentinel's restarter), so the image bundles docker-cli. Tuning env vars come
+// from the spec (or fall back to defaults).
+func writeChaosMonkey(w io.Writer, cs *chaosSpec, monitored []string, sentinels int, fetchers []fetcherSpec, logLevel string) {
+	exclude := []string{"rabbitmq"}
+	for i := 0; i < sentinels; i++ {
+		exclude = append(exclude, sentinelName(i))
+	}
+	for _, fs := range fetchers {
+		exclude = append(exclude, fs.Name)
+	}
+
+	fmt.Fprintln(w, "  chaos_monkey:")
+	fmt.Fprintln(w, "    build: { context: ./src/, dockerfile: chaos_monkey/Dockerfile }")
+	fmt.Fprintln(w, "    container_name: chaos_monkey")
+	fmt.Fprintln(w, "    environment:")
+	fmt.Fprintf(w, "      - TARGETS=%s\n", strings.Join(monitored, ","))
+	fmt.Fprintf(w, "      - EXCLUDE=%s\n", strings.Join(exclude, ","))
+	fmt.Fprintf(w, "      - LOG_LEVEL=%s\n", logLevel)
+	// Deterministic order for the extra tuning env vars (KILL_INTERVAL_SECONDS,
+	// KILL_TIMEOUT_SECONDS, ...) so diffs only reflect real spec changes.
+	if len(cs.Env) > 0 {
+		keys := make([]string, 0, len(cs.Env))
+		for k := range cs.Env {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			fmt.Fprintf(w, "      - %s=%s\n", k, cs.Env[k])
+		}
+	}
+	fmt.Fprintln(w, "    volumes:")
+	fmt.Fprintf(w, "      - %s\n", dockerSocketMount)
 }
 
 func writeRabbit(w io.Writer) {

@@ -1,6 +1,9 @@
 package config
 
 import (
+	"strings"
+	"time"
+
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/env"
 )
 
@@ -24,6 +27,12 @@ type GatewayConfig struct {
 	ServerPort            string
 	MomHost               string
 	MomPort               int
+
+	HeartbeatEnabled  bool
+	ContainerName     string
+	SentinelUDPAddrs  []string
+	HeartbeatInterval time.Duration
+	HeartbeatJitter   time.Duration
 }
 
 func Load() (GatewayConfig, error) {
@@ -62,6 +71,18 @@ func Load() (GatewayConfig, error) {
 		return GatewayConfig{}, err
 	}
 
+	heartbeatEnabled := strings.EqualFold(env.StringWithDefault("HEARTBEAT_ENABLED", "true"), "true")
+	containerName := env.StringWithDefault("CONTAINER_NAME", "")
+	sentinelUDP := env.SplitNonEmpty(env.StringWithDefault("SENTINEL_UDP", ""))
+	hbIntervalSec, err := env.IntWithDefault("HEARTBEAT_INTERVAL_SECONDS", 5, true)
+	if err != nil {
+		return GatewayConfig{}, err
+	}
+	hbJitterMs, err := env.IntWithDefault("HEARTBEAT_JITTER_MS", 1000, false)
+	if err != nil {
+		return GatewayConfig{}, err
+	}
+
 	return GatewayConfig{
 		AllTransactionsQueue:  env.StringWithDefault("ALL_TRANSACTIONS_QUEUE", defaultAllTransactionsQueue),
 		AllAccountsQueue:      env.StringWithDefault("ALL_ACCOUNTS_QUEUE", defaultAllAccountsQueue),
@@ -73,5 +94,11 @@ func Load() (GatewayConfig, error) {
 		ServerPort:            serverPort,
 		MomHost:               momHost,
 		MomPort:               momPort,
+
+		HeartbeatEnabled:  heartbeatEnabled,
+		ContainerName:     containerName,
+		SentinelUDPAddrs:  sentinelUDP,
+		HeartbeatInterval: time.Duration(hbIntervalSec) * time.Second,
+		HeartbeatJitter:   time.Duration(hbJitterMs) * time.Millisecond,
 	}, nil
 }
