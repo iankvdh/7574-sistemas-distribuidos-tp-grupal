@@ -1,6 +1,7 @@
 # Topología balanceada: 2 gateways, 3 réplicas en los workers de mayor carga.
 
 gateways: 2
+sentinels: 3
 log_level: info
 expected_query_eofs: 5
 

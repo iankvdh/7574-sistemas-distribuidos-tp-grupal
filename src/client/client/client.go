@@ -34,13 +34,9 @@ type ClientConfig struct {
 }
 
 type Client struct {
-	conn         net.Conn
-	clientID     string
-	running      atomic.Bool
-	// allEOFsReceived flips to true when the gateway has delivered every
-	// expected per-query EOF for this client. It is checked by the ingest
-	// path to distinguish "scenario already finished, abort remaining sends
-	// gracefully" from a real I/O error.
+	conn            net.Conn
+	clientID        string
+	running         atomic.Bool
 	allEOFsReceived atomic.Bool
 	config          ClientConfig
 	gatewayAddrs    []string

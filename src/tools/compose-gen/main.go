@@ -11,6 +11,7 @@
 // Spec format (whitespace-significant, YAML-subset; no external deps):
 //
 //	gateways: <int>          how many gateway_N services to declare
+//	sentinels: <int>         optional; how many sentinel_N replicas to declare (default: 3)
 //	log_level: <string>      optional; LOG_LEVEL emitted to every service (default: info)
 //	expected_query_eofs: <int>  number of query EOFs the gateway/client expect (default: 5)
 //	workers:
@@ -60,6 +61,7 @@ type fetcherSpec struct {
 
 type spec struct {
 	Gateways          int
+	Sentinels         int // 0 means "use defaultSentinelReplicas" (= 3)
 	Transactions      string
 	Accounts          string
 	Dataset           string // optional; auto-derived from Transactions if empty
@@ -115,6 +117,31 @@ func strategyUsesRing(strategy string) bool {
 // sharedNetworkName is the explicit Docker network that links the server and
 // client compose projects when running in split mode.
 const sharedNetworkName = "tp_grupal_network"
+
+// Sentinel cluster constants. The replica count is configurable per scenario
+// (spec.Sentinels); everything else is derived here.
+const (
+	defaultSentinelReplicas = 3
+	sentinelTCPPort         = 8090 // bully control (Election/OK/Coord)
+	sentinelUDPPort         = 8092 // bully ping/pong liveness
+	sentinelWorkerPort      = 8091 // worker heartbeats
+	sentinelStartGrace      = 90   // STARTUP_GRACE_SECONDS
+	heartbeatIntervalS      = 5
+	heartbeatJitterMs       = 1000
+	dockerSocketMount       = "/var/run/docker.sock:/var/run/docker.sock"
+)
+
+func sentinelName(i int) string { return fmt.Sprintf("sentinel_%d", i) }
+
+// sentinelHeartbeatTargets is the SENTINEL_UDP value injected into every
+// monitored worker: the worker-heartbeat port on each sentinel replica.
+func sentinelHeartbeatTargets(replicas int) string {
+	parts := make([]string, 0, replicas)
+	for i := 0; i < replicas; i++ {
+		parts = append(parts, fmt.Sprintf("%s:%d", sentinelName(i), sentinelWorkerPort))
+	}
+	return strings.Join(parts, ",")
+}
 
 // datasetFilePaths maps short dataset names (small, medium, large) to their
 // transactions and accounts CSV paths inside the container.
@@ -227,6 +254,8 @@ func parseSpec(src string) (*spec, error) {
 			switch key {
 			case "gateways":
 				s.Gateways, _ = strconv.Atoi(value)
+			case "sentinels":
+				s.Sentinels, _ = strconv.Atoi(value)
 			case "transactions":
 				s.Transactions = value
 			case "accounts":
@@ -561,21 +590,60 @@ func (s *spec) resolveParams() (transactions, accounts, dataset, logLevel string
 func (s *spec) renderServer(w io.Writer) error {
 	fmt.Fprintln(w, "services:")
 	_, _, _, logLevel := s.resolveParams()
+	sentinels := s.Sentinels
+	if sentinels <= 0 {
+		sentinels = defaultSentinelReplicas
+	}
 	for i := 1; i <= s.Gateways; i++ {
 		writeGateway(w, i, logLevel, s.ExpectedQueryEOFs)
 	}
 	injectDerivedEnvs(s.Workers, s.Fetchers)
+	var workerNames []string
 	for _, ws := range s.Workers {
 		for r := 0; r < ws.Replicas; r++ {
-			writeWorker(w, ws, r, logLevel, s.Gateways)
+			writeWorker(w, ws, r, logLevel, s.Gateways, sentinels)
+			workerNames = append(workerNames, serviceName(ws, r))
 		}
 	}
 	for _, fs := range s.Fetchers {
 		writeFetcher(w, fs, logLevel)
 	}
+	writeSentinels(w, workerNames, logLevel, sentinels)
 	writeRabbit(w)
 	writeNetwork(w, false)
 	return nil
+}
+
+// writeSentinels emits the Sentinel cluster. Each replica gets the
+// full list of worker containers to watch (EXPECTED_CONTAINERS), the addresses
+// of its peers (PEERS, as id:host:tcpPort:udpPort), and the host docker socket
+// mounted read-write so it can `docker restart` crashed workers
+// (docker-from-docker). Sentinels are NOT monitored themselves.
+func writeSentinels(w io.Writer, workerNames []string, logLevel string, replicas int) {
+	expected := strings.Join(workerNames, ",")
+	for i := 0; i < replicas; i++ {
+		var peers []string
+		for j := 0; j < replicas; j++ {
+			if j == i {
+				continue
+			}
+			peers = append(peers, fmt.Sprintf("%d:%s:%d:%d", j, sentinelName(j), sentinelTCPPort, sentinelUDPPort))
+		}
+		fmt.Fprintf(w, "  %s:\n", sentinelName(i))
+		fmt.Fprintln(w, "    build: { context: ./src/, dockerfile: sentinel/Dockerfile }")
+		fmt.Fprintf(w, "    container_name: %s\n", sentinelName(i))
+		fmt.Fprintln(w, "    environment:")
+		fmt.Fprintf(w, "      - SENTINEL_ID=%d\n", i)
+		fmt.Fprintf(w, "      - PEERS=%s\n", strings.Join(peers, ","))
+		fmt.Fprintf(w, "      - EXPECTED_CONTAINERS=%s\n", expected)
+		fmt.Fprintf(w, "      - SENTINEL_BULLY_TCP_PORT=%d\n", sentinelTCPPort)
+		fmt.Fprintf(w, "      - SENTINEL_BULLY_UDP_PORT=%d\n", sentinelUDPPort)
+		fmt.Fprintf(w, "      - SENTINEL_UDP_PORT=%d\n", sentinelWorkerPort)
+		fmt.Fprintf(w, "      - STARTUP_GRACE_SECONDS=%d\n", sentinelStartGrace)
+		fmt.Fprintf(w, "      - LOG_LEVEL=%s\n", logLevel)
+		fmt.Fprintln(w, "    volumes:")
+		fmt.Fprintf(w, "      - %s\n", dockerSocketMount)
+	}
 }
 
 // renderClient writes a compose file with only the client services.
@@ -655,9 +723,11 @@ func writeGateway(w io.Writer, id int, logLevel string, expectedQueryEOFs int) {
 	fmt.Fprintf(w, "      - LOG_LEVEL=%s\n", logLevel)
 }
 
-func writeWorker(w io.Writer, ws workerSpec, replica int, logLevel string, gateways int) {
-	fmt.Fprintf(w, "  %s:\n", serviceName(ws, replica))
+func writeWorker(w io.Writer, ws workerSpec, replica int, logLevel string, gateways, sentinels int) {
+	name := serviceName(ws, replica)
+	fmt.Fprintf(w, "  %s:\n", name)
 	fmt.Fprintln(w, "    build: { context: ./src/, dockerfile: worker/Dockerfile }")
+	fmt.Fprintf(w, "    container_name: %s\n", name)
 	fmt.Fprintln(w, "    depends_on: { rabbitmq: { condition: service_healthy } }")
 	fmt.Fprintln(w, "    env_file:")
 	fmt.Fprintln(w, "      - .env")
@@ -680,6 +750,10 @@ func writeWorker(w io.Writer, ws workerSpec, replica int, logLevel string, gatew
 		fmt.Fprintf(w, "      - OUTPUT_%d=%s\n", j, o)
 	}
 	fmt.Fprintf(w, "      - LOG_LEVEL=%s\n", logLevel)
+	fmt.Fprintf(w, "      - CONTAINER_NAME=%s\n", name)
+	fmt.Fprintf(w, "      - SENTINEL_UDP=%s\n", sentinelHeartbeatTargets(sentinels))
+	fmt.Fprintf(w, "      - HEARTBEAT_INTERVAL_SECONDS=%d\n", heartbeatIntervalS)
+	fmt.Fprintf(w, "      - HEARTBEAT_JITTER_MS=%d\n", heartbeatJitterMs)
 	if ws.Replicas > 1 && strategyUsesRing(ws.Strategy) {
 		ringIn := fmt.Sprintf("ring_%s_%d", ws.Name, replica)
 		ringOut := fmt.Sprintf("ring_%s_%d", ws.Name, (replica+1)%ws.Replicas)

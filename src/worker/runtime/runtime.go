@@ -12,6 +12,7 @@ import (
 
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/eof"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/hashing"
+	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/heartbeat"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/messageprotocol/inner"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/middleware"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/config"
@@ -218,8 +219,29 @@ func (w *Worker) Run() error {
 		}
 		w.startInput(i)
 	}
+
+	w.startHeartbeat()
+
 	w.inputWG.Wait()
 	return nil
+}
+
+func (w *Worker) startHeartbeat() {
+	if !w.cfg.HeartbeatEnabled || len(w.cfg.SentinelUDPAddrs) == 0 {
+		slog.Debug("Heartbeat disabled")
+		return
+	}
+	emitter, err := heartbeat.New(w.cfg.ContainerName, w.cfg.SentinelUDPAddrs,
+		w.cfg.HeartbeatInterval, w.cfg.HeartbeatJitter)
+	if err != nil {
+		slog.Error("Could not initialize heartbeat emitter", "err", err)
+		return
+	}
+	w.waitingGroup.Add(1)
+	go func() {
+		defer w.waitingGroup.Done()
+		emitter.Run(w.ctx)
+	}()
 }
 
 func (w *Worker) startInput(idx int) {

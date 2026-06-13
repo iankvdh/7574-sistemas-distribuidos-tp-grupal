@@ -1,6 +1,7 @@
 # Topología de alta carga: 4 gateways, réplicas ajustadas por profiling de CPU.
 
 gateways: 4
+sentinels: 5
 log_level: info
 expected_query_eofs: 5
 
