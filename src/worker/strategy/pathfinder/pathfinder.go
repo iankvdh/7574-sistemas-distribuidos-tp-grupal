@@ -136,7 +136,7 @@ func (p *PathFinder) appendTriple(outputs []strategy.OutputMessage, clientID inn
 }
 
 func (p *PathFinder) OnUpstreamEOF(envelope *inner.Envelope) (strategy.EOFOutcome, error) {
-	action := p.coordinator.OnUpstreamEOF(envelope.ClientID, envelope.Total)
+	action := p.coordinator.OnUpstreamEOF(envelope.ClientID, envelope.SenderStageType, envelope.SenderReplicaID, envelope.Total)
 	if action.Kind != eof.ActionEmitEOFs {
 		return strategy.EOFOutcome{Action: action}, nil
 	}

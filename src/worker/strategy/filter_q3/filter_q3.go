@@ -129,7 +129,7 @@ func (f *FilterQ3) OnUpstreamEOF(envelope *inner.Envelope) (strategy.EOFOutcome,
 	st := f.stateFor(envelope.ClientID)
 
 	if envelope.InputIndex == inputIndexAverages {
-		action := f.avgCoord.OnUpstreamEOF(envelope.ClientID, envelope.Total)
+		action := f.avgCoord.OnUpstreamEOF(envelope.ClientID, envelope.SenderStageType, envelope.SenderReplicaID, envelope.Total)
 		if action.Kind != eof.ActionEmitEOFs {
 			return strategy.EOFOutcome{Action: eof.Action{Kind: eof.ActionNone}}, nil
 		}

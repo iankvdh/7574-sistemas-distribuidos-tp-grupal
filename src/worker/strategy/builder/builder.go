@@ -9,7 +9,6 @@ import (
 	aggregator_q5 "github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/aggregator_q5"
 	bank_aggregator "github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/bank_aggregator"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/counter"
-	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/drain"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/filter"
 	filter_q3 "github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/filter_q3"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/finaljoiner"
@@ -25,8 +24,6 @@ import (
 
 func Build(name string) (strategy.Strategy, error) {
 	switch name {
-	case "drain":
-		return drain.New(), nil
 	case "joiner_usd":
 		return joiner.NewEOFJoiner(), nil
 	case "filter_wire_ach":
@@ -68,8 +65,6 @@ func Build(name string) (strategy.Strategy, error) {
 		return pathfinder.New(), nil
 	case "counter_q4":
 		return counter.New(), nil
-	case "drain_q4":
-		return drain.NewQ4(), nil
 	case "max_q2":
 		return max_q2.New(), nil
 	case "bank_aggregator":

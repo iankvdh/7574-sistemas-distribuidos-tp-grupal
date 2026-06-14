@@ -124,7 +124,7 @@ func (c *Counter) ProcessMessage(envelope *inner.Envelope) ([]strategy.OutputMes
 }
 
 func (c *Counter) OnUpstreamEOF(envelope *inner.Envelope) (strategy.EOFOutcome, error) {
-	action := c.coordinator.OnUpstreamEOF(envelope.ClientID, envelope.Total)
+	action := c.coordinator.OnUpstreamEOF(envelope.ClientID, envelope.SenderStageType, envelope.SenderReplicaID, envelope.Total)
 	if action.Kind != eof.ActionEmitEOFs {
 		return strategy.EOFOutcome{Action: action}, nil
 	}
