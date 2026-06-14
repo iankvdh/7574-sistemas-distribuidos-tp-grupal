@@ -14,6 +14,7 @@ import (
 const queryID uint8 = 5
 
 type AggregatorQ5 struct {
+	strategy.NoopValidator
 	cfg           strategy.StrategyConfig
 	coordinator   *eof.JoinerAccumulateCoordinator
 	totals        map[inner.ClientID]uint64

@@ -15,6 +15,7 @@ import (
 const queryID uint8 = 4
 
 type Sharder struct {
+	strategy.NoopValidator
 	cfg                strategy.StrategyConfig
 	kSuspiciousFilters int
 	coordinator        *eof.RingCoordinator

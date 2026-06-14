@@ -283,11 +283,13 @@ func (w *Worker) handleInputMessage(inputIndex int, msg middleware.Message, ack 
 	switch typed := parsed.(type) {
 	case *inner.EOFMessage:
 		envelope := &inner.Envelope{
-			GatewayID:  typed.GatewayID,
-			ClientID:   typed.ClientID,
-			Total:      typed.Total,
-			QueryID:    typed.QueryID,
-			InputIndex: inputIndex,
+			GatewayID:       typed.GatewayID,
+			ClientID:        typed.ClientID,
+			Total:           typed.Total,
+			QueryID:         typed.QueryID,
+			InputIndex:      inputIndex,
+			SenderStageType: typed.SenderStageType,
+			SenderReplicaID: typed.SenderReplicaID,
 		}
 		w.cacheUpstreamEOF(envelope.ClientID, inputIndex, msg)
 		w.strategyMu.Lock()
@@ -308,7 +310,7 @@ func (w *Worker) handleInputMessage(inputIndex int, msg middleware.Message, ack 
 		ack()
 	case *inner.BatchMessage:
 		w.strategyMu.Lock()
-		if err := w.processBatch(typed, inputIndex); err != nil {
+		if err := w.processBatch(typed, []byte(msg.Body), inputIndex); err != nil {
 			w.strategyMu.Unlock()
 			slog.Error("Strategy ProcessMessage failed", "client_id", typed.ClientID, "err", err)
 			nack()
@@ -322,15 +324,36 @@ func (w *Worker) handleInputMessage(inputIndex int, msg middleware.Message, ack 
 	}
 }
 
-func (w *Worker) processBatch(batch *inner.BatchMessage, inputIndex int) error {
+func (w *Worker) processBatch(batch *inner.BatchMessage, rawBatch []byte, inputIndex int) error {
+	if rawStrat, ok := w.strategy.(strategy.RawBatchStrategy); ok {
+		if err := rawStrat.ValidateRawBatch(batch, rawBatch, inputIndex); err != nil {
+			if errors.Is(err, strategy.ErrInvalidData) {
+				slog.Warn("RawBatchStrategy: invalid batch, discarding", "client_id", batch.ClientID, "err", err)
+				return nil
+			}
+			return err
+		}
+		outputs, _, handled, err := rawStrat.ProcessRawBatch(batch, rawBatch, inputIndex)
+		if err != nil {
+			return err
+		}
+		if err := w.appendOutputMessages(batch.GatewayID, outputs); err != nil {
+			return err
+		}
+		if handled {
+			return nil
+		}
+	}
 	for _, item := range batch.Items {
 		envelope := &inner.Envelope{
-			Kind:       batch.ItemKind,
-			GatewayID:  batch.GatewayID,
-			ClientID:   batch.ClientID,
-			QueryID:    item.QueryID,
-			Payload:    item.Payload,
-			InputIndex: inputIndex,
+			Kind:            batch.ItemKind,
+			GatewayID:       batch.GatewayID,
+			ClientID:        batch.ClientID,
+			QueryID:         item.QueryID,
+			Payload:         item.Payload,
+			InputIndex:      inputIndex,
+			SenderStageType: batch.SenderStageType,
+			SenderReplicaID: batch.SenderReplicaID,
 		}
 		if err := w.processSingleItem(envelope); err != nil {
 			return err
@@ -340,6 +363,13 @@ func (w *Worker) processBatch(batch *inner.BatchMessage, inputIndex int) error {
 }
 
 func (w *Worker) processSingleItem(env *inner.Envelope) error {
+	if err := w.strategy.Validate(env); err != nil {
+		if errors.Is(err, strategy.ErrInvalidData) {
+			slog.Warn("Strategy.Validate: invalid data, discarding", "client_id", env.ClientID, "err", err)
+			return nil
+		}
+		return err
+	}
 	outputMessages, _, err := w.strategy.ProcessMessage(env)
 	if err != nil {
 		return err

@@ -34,6 +34,7 @@ type clientState struct {
 }
 
 type SuspiciousFilter struct {
+	strategy.NoopValidator
 	cfg          strategy.StrategyConfig
 	nSharders    int
 	kPathFinders int

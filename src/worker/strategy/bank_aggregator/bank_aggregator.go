@@ -20,6 +20,7 @@ type clientState struct {
 }
 
 type BankAggregator struct {
+	strategy.NoopValidator
 	cfg             strategy.StrategyConfig
 	kAggregators    int
 	ringCoordinator *eof.RingCoordinator

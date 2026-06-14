@@ -13,6 +13,7 @@ import (
 var supportedQueries = []uint8{1, 2, 3, 4, 5}
 
 type FinalJoiner struct {
+	strategy.NoopValidator
 	cfg          strategy.StrategyConfig
 	coordinators map[uint8]*eof.JoinerAccumulateCoordinator
 }

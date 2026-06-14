@@ -1,11 +1,14 @@
 package strategy
 
 import (
+	"errors"
 	"iter"
 
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/eof"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/messageprotocol/inner"
 )
+
+var ErrInvalidData = errors.New("strategy: invalid data")
 
 type OutputMessage struct {
 	OutputIndices []int // output target indices to send the message to
@@ -41,10 +44,16 @@ type EOFOutcome struct {
 	Outputs             []OutputMessage // data messages to emit before downstream EOFs
 	OutputsIterator     iter.Seq[OutputMessage]
 	StartDeferredInputs []int
+	ClientCompleted     bool
 }
+
+type NoopValidator struct{}
+
+func (NoopValidator) Validate(_ *inner.Envelope) error { return nil }
 
 type Strategy interface {
 	Init(cfg StrategyConfig) error
+	Validate(env *inner.Envelope) error
 	ProcessMessage(env *inner.Envelope) ([]OutputMessage, LocalCounts, error)
 	OnUpstreamEOF(env *inner.Envelope) (EOFOutcome, error)
 	OnRingToken(token *eof.Token) (EOFOutcome, error)
@@ -56,4 +65,19 @@ type DeferredInputProvider interface {
 
 type ReadyEOFEmitter interface {
 	ReadyEOFs(env *inner.Envelope) (EOFOutcome, bool)
+}
+
+type RecoverableStrategy interface {
+	Strategy
+	MarshalClientState(clientID inner.ClientID) ([]byte, error)
+	UnmarshalClientState(clientID inner.ClientID, data []byte) error
+	CleanupClient(clientID inner.ClientID)
+}
+
+type RawBatchStrategy interface {
+	Strategy
+	ValidateRawBatch(batch *inner.BatchMessage, rawBatch []byte, inputIndex int) error
+	ProcessRawBatch(batch *inner.BatchMessage, rawBatch []byte, inputIndex int) (
+		outputs []OutputMessage, counts LocalCounts, handled bool, err error,
+	)
 }
