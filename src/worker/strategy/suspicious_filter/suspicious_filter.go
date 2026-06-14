@@ -192,7 +192,7 @@ func (s *SuspiciousFilter) buildOutput(source, dest accountKey, outShardedBySour
 }
 
 func (s *SuspiciousFilter) OnUpstreamEOF(envelope *inner.Envelope) (strategy.EOFOutcome, error) {
-	action := s.coordinator.OnUpstreamEOF(envelope.ClientID, envelope.Total)
+	action := s.coordinator.OnUpstreamEOF(envelope.ClientID, envelope.SenderStageType, envelope.SenderReplicaID, envelope.Total)
 	if action.Kind != eof.ActionEmitEOFs {
 		return strategy.EOFOutcome{Action: action}, nil
 	}

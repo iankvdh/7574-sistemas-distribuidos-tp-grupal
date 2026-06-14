@@ -66,7 +66,7 @@ func (a *AggregatorQ3) ProcessMessage(envelope *inner.Envelope) ([]strategy.Outp
 }
 
 func (a *AggregatorQ3) OnUpstreamEOF(envelope *inner.Envelope) (strategy.EOFOutcome, error) {
-	action := a.coordinator.OnUpstreamEOF(envelope.ClientID, envelope.Total)
+	action := a.coordinator.OnUpstreamEOF(envelope.ClientID, envelope.SenderStageType, envelope.SenderReplicaID, envelope.Total)
 	if action.Kind != eof.ActionEmitEOFs {
 		return strategy.EOFOutcome{Action: action}, nil
 	}
