@@ -45,6 +45,7 @@ type clientState struct {
 }
 
 type MicroTransactionCounter struct {
+	strategy.NoopValidator
 	cfg             strategy.StrategyConfig
 	rates           map[uint32]map[string]float64
 	maxConvertedUSD float64

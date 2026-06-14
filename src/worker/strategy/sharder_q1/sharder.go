@@ -19,6 +19,7 @@ type clientState struct {
 }
 
 type Sharder struct {
+	strategy.NoopValidator
 	cfg             strategy.StrategyConfig
 	nFinalJoiners   int
 	ringCoordinator *eof.RingCoordinator

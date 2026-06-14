@@ -18,6 +18,7 @@ import (
 type Predicate func(transaction.Transaction) bool
 
 type Filter struct {
+	strategy.NoopValidator
 	name              string
 	predicate         Predicate
 	cfg               strategy.StrategyConfig

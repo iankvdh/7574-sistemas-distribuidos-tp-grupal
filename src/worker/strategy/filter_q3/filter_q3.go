@@ -40,6 +40,7 @@ type clientState struct {
 }
 
 type FilterQ3 struct {
+	strategy.NoopValidator
 	cfg           strategy.StrategyConfig
 	nFinalJoiners int
 	bufferDir     string

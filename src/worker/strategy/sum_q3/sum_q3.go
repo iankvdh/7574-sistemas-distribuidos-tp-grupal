@@ -25,6 +25,7 @@ type clientState struct {
 }
 
 type SumQ3 struct {
+	strategy.NoopValidator
 	cfg             strategy.StrategyConfig
 	kAggregators    int
 	ringCoordinator *eof.RingCoordinator

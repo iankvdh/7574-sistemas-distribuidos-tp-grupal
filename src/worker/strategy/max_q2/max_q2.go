@@ -25,6 +25,7 @@ type clientState struct {
 }
 
 type MaxQ2 struct {
+	strategy.NoopValidator
 	cfg             strategy.StrategyConfig
 	kAggregators    int
 	ringCoordinator *eof.RingCoordinator

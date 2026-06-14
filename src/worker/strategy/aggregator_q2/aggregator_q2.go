@@ -25,6 +25,7 @@ type clientState struct {
 }
 
 type AggregatorQ2 struct {
+	strategy.NoopValidator
 	cfg           strategy.StrategyConfig
 	nFinalJoiners int
 	coordinator   *eof.JoinerAccumulateCoordinator

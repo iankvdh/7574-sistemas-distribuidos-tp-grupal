@@ -28,6 +28,7 @@ type clientState struct {
 }
 
 type PathFinder struct {
+	strategy.NoopValidator
 	cfg                strategy.StrategyConfig
 	kCounters          int
 	nSuspiciousFilters int

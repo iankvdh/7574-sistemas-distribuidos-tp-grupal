@@ -34,6 +34,7 @@ type clientState struct {
 }
 
 type Counter struct {
+	strategy.NoopValidator
 	cfg              strategy.StrategyConfig
 	nPathFinders     int
 	nFinalJoiners    int

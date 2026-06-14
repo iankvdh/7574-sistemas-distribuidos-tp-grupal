@@ -18,6 +18,7 @@ type clientState struct {
 }
 
 type AggregatorQ3 struct {
+	strategy.NoopValidator
 	cfg         strategy.StrategyConfig
 	nFilterQ3   int
 	coordinator *eof.JoinerAccumulateCoordinator
