@@ -77,7 +77,10 @@ func New(cfg config.WorkerConfig) (*Worker, error) {
 		return nil, err
 	}
 
-	conn := middleware.ConnSettings{Hostname: cfg.MomHost, Port: cfg.MomPort}
+	conn, err := middleware.NewConnSettings(cfg.MomHost, cfg.MomPort)
+	if err != nil {
+		return nil, err
+	}
 
 	if len(cfg.InputConfigs) == 0 {
 		return nil, errors.New("worker requires at least one input")
@@ -272,6 +275,39 @@ func (w *Worker) consumeRing() {
 	}
 }
 
+func (w *Worker) flushPublishers() error {
+	for _, mw := range w.inputs {
+		if err := mw.FlushPublisher(); err != nil {
+			return err
+		}
+	}
+	if w.ringIn != nil {
+		if err := w.ringIn.FlushPublisher(); err != nil {
+			return err
+		}
+	}
+	if w.ringOut != nil {
+		if err := w.ringOut.FlushPublisher(); err != nil {
+			return err
+		}
+	}
+	for _, target := range w.outputs {
+		for _, mw := range target.Middlewares {
+			if err := mw.FlushPublisher(); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (w *Worker) flushOrCrash() {
+	if err := w.flushPublishers(); err != nil {
+		slog.Error("Publisher flush failed, crashing for redelivery", "err", err)
+		os.Exit(1)
+	}
+}
+
 func (w *Worker) handleInputMessage(inputIndex int, msg middleware.Message, ack func(), nack func()) {
 	parsed, err := inner.NewFromSerializedData([]byte(msg.Body))
 	if err != nil {
@@ -306,6 +342,7 @@ func (w *Worker) handleInputMessage(inputIndex int, msg middleware.Message, ack 
 			nack()
 			return
 		}
+		w.flushOrCrash()
 		w.strategyMu.Unlock()
 		ack()
 	case *inner.BatchMessage:
@@ -316,6 +353,7 @@ func (w *Worker) handleInputMessage(inputIndex int, msg middleware.Message, ack 
 			nack()
 			return
 		}
+		w.flushOrCrash()
 		w.strategyMu.Unlock()
 		ack()
 	default:
@@ -426,6 +464,7 @@ func (w *Worker) handleRingMessage(msg middleware.Message, ack func(), nack func
 		nack()
 		return
 	}
+	w.flushOrCrash()
 	w.strategyMu.Unlock()
 	ack()
 }

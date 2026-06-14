@@ -13,6 +13,8 @@ func BuildInputMiddleware(inputConfig config.InputConfig, conn middleware.ConnSe
 		return middleware.CreateQueueMiddleware(inputConfig.Name, conn)
 	case config.KindDirectExchange:
 		return middleware.CreateExchangeMiddleware(inputConfig.Name, []string{inputConfig.RoutingKey}, conn)
+	case config.KindBoundQueue:
+		return middleware.CreateBoundQueueMiddleware(inputConfig.Name, inputConfig.Exchange, inputConfig.RoutingKey, conn)
 	default:
 		return nil, fmt.Errorf("unsupported input kind for %q", inputConfig.Name)
 	}

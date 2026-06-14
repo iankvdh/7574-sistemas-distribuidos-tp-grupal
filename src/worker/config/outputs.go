@@ -22,6 +22,11 @@ const (
 	// the final_joiner strategy to publish per-client query results to
 	// `final_<gatewayID>`.
 	KindFinalQueue
+	// KindBoundQueue is a named, non-exclusive, non-auto-delete queue bound to a
+	// direct exchange with a fixed routing key. Unlike KindDirectExchange (which
+	// consumes via an anonymous auto-delete queue), it survives a consumer crash
+	// so un-acked messages are redelivered on recovery. Input-only.
+	KindBoundQueue
 )
 
 type OutputConfig struct {
@@ -29,6 +34,7 @@ type OutputConfig struct {
 	Kind       OutputKind
 	RoutingKey string
 	ShardCount int
+	Exchange   string // KindBoundQueue: exchange the queue is bound to
 }
 
 func ParseOutputs() ([]OutputConfig, error) {
@@ -83,6 +89,12 @@ func parseOutputConfig(raw string, idx int) (OutputConfig, error) {
 			return OutputConfig{}, fmt.Errorf("OUTPUT_%d invalid final_queue target", idx)
 		}
 		return OutputConfig{Name: rest, Kind: KindFinalQueue}, nil
+	case "bound_queue":
+		subParts := strings.SplitN(rest, ":", 3)
+		if len(subParts) != 3 || subParts[0] == "" || subParts[1] == "" {
+			return OutputConfig{}, fmt.Errorf("OUTPUT_%d invalid bound_queue config: %q (expected bound_queue:QUEUE:EXCHANGE:ROUTING_KEY)", idx, raw)
+		}
+		return OutputConfig{Name: subParts[0], Kind: KindBoundQueue, Exchange: subParts[1], RoutingKey: subParts[2]}, nil
 	default:
 		return OutputConfig{}, fmt.Errorf("OUTPUT_%d unsupported kind %q", idx, kind)
 	}
