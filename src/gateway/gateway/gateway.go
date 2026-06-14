@@ -48,7 +48,10 @@ type Gateway struct {
 }
 
 func NewGateway(config gatewayconfig.GatewayConfig) (*Gateway, error) {
-	connSettings := middleware.ConnSettings{Hostname: config.MomHost, Port: config.MomPort}
+	connSettings, err := middleware.NewConnSettings(config.MomHost, config.MomPort)
+	if err != nil {
+		return nil, err
+	}
 
 	allTransactionsQueue, err := middleware.CreateQueueMiddleware(config.AllTransactionsQueue, connSettings)
 	if err != nil {
@@ -367,6 +370,9 @@ func (gateway *Gateway) handleHandshake(state *clientregistry.ClientState, clien
 func (gateway *Gateway) sendToQueueAndAck(state *clientregistry.ClientState, msg *middleware.Message, queue middleware.Middleware) error {
 	if msg != nil {
 		if err := queue.Send(*msg); err != nil {
+			return err
+		}
+		if err := queue.FlushPublisher(); err != nil {
 			return err
 		}
 	}

@@ -54,6 +54,18 @@ func RequiredInt(name string, mustBePositive bool) (int, error) {
 	return parsed, nil
 }
 
+func FloatWithDefault(name string, defaultValue float64) (float64, error) {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return defaultValue, nil
+	}
+	parsed, err := strconv.ParseFloat(raw, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid %s: %s", name, raw)
+	}
+	return parsed, nil
+}
+
 func SplitNonEmpty(raw string) []string {
 	var out []string
 	for _, p := range strings.Split(raw, ",") {

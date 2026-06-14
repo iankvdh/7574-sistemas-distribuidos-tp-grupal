@@ -123,7 +123,10 @@ func (f *Fetcher) publishToAllQueues(rates *inner.Q5Conversions) error {
 	if err != nil {
 		return fmt.Errorf("serialize Q5Conversions: %w", err)
 	}
-	conn := middleware.ConnSettings{Hostname: f.cfg.MomHost, Port: f.cfg.MomPort}
+	conn, err := middleware.NewConnSettings(f.cfg.MomHost, f.cfg.MomPort)
+	if err != nil {
+		return fmt.Errorf("build conn settings: %w", err)
+	}
 	gatewayID := inner.GatewayID(f.cfg.GatewayID)
 
 	for i := 0; i < f.cfg.NMicroTxCounter; i++ {
@@ -165,7 +168,11 @@ func (f *Fetcher) publishOne(mw middleware.Middleware, gatewayID inner.GatewayID
 	if err != nil {
 		return err
 	}
-	return mw.Send(middleware.Message{Body: string(eofRaw)})
+	if err := mw.Send(middleware.Message{Body: string(eofRaw)}); err != nil {
+		return err
+	}
+
+	return mw.FlushPublisher()
 }
 
 func fromISODate(iso string) (uint32, error) {

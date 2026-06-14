@@ -1,32 +1,18 @@
 package middleware
 
-import (
-	"fmt"
-
-	amqp "github.com/rabbitmq/amqp091-go"
-)
-
 type exchangeMiddleware struct {
-	conn        *amqp.Connection
-	channel     *amqp.Channel
+	*publisher
 	exchange    string
 	routingKeys []string
 }
 
 func newExchangeMiddleware(exchange string, keys []string, settings ConnSettings) (*exchangeMiddleware, error) {
-	url := fmt.Sprintf("amqp://guest:guest@%s:%d/", settings.Hostname, settings.Port)
-
-	conn, err := amqp.Dial(url)
+	p, err := newPublisher(settings)
 	if err != nil {
-		return nil, ErrMessageMiddlewareDisconnected
+		return nil, err
 	}
 
-	ch, err := conn.Channel()
-	if err != nil {
-		return nil, closeConnection(conn, err)
-	}
-
-	if err := ch.ExchangeDeclare(
+	if err := p.channel.ExchangeDeclare(
 		exchange, // nombre del exchange
 		"direct", // direct porque queremos rutear por routing key
 		false,    // durable
@@ -35,24 +21,15 @@ func newExchangeMiddleware(exchange string, keys []string, settings ConnSettings
 		false,    // no-wait
 		nil,
 	); err != nil {
-		return nil, closeChannelAndConnection(ch, conn, err)
+		return nil, closeChannelAndConnection(p.channel, p.conn, err)
 	}
 
-	if err := ch.Qos(PrefetchCount, 0, false); err != nil {
-		return nil, closeChannelAndConnection(ch, conn, err)
-	}
-
-	return &exchangeMiddleware{
-		conn:        conn,
-		channel:     ch,
-		exchange:    exchange,
-		routingKeys: keys,
-	}, nil
+	return &exchangeMiddleware{publisher: p, exchange: exchange, routingKeys: keys}, nil
 }
 
 func (e *exchangeMiddleware) Send(msg Message) error {
 	for _, key := range e.routingKeys {
-		if err := e.publish(msg, key); err != nil {
+		if err := e.Publish(e.exchange, key, []byte(msg.Body)); err != nil {
 			return err
 		}
 	}
@@ -60,24 +37,7 @@ func (e *exchangeMiddleware) Send(msg Message) error {
 }
 
 func (e *exchangeMiddleware) SendWithKey(msg Message, routingKey string) error {
-	return e.publish(msg, routingKey)
-}
-
-func (e *exchangeMiddleware) publish(msg Message, routingKey string) error {
-	err := e.channel.Publish(
-		e.exchange,
-		routingKey,
-		false,
-		false,
-		amqp.Publishing{
-			ContentType: "text/plain",
-			Body:        []byte(msg.Body),
-		},
-	)
-	if err != nil {
-		return middlewareError(err)
-	}
-	return nil
+	return e.Publish(e.exchange, routingKey, []byte(msg.Body))
 }
 
 func (e *exchangeMiddleware) StartConsuming(callbackFunc func(msg Message, ack func(), nack func())) error {
@@ -118,14 +78,4 @@ func (e *exchangeMiddleware) StartConsuming(callbackFunc func(msg Message, ack f
 
 func (e *exchangeMiddleware) StopConsuming() error {
 	return e.channel.Close()
-}
-
-func (e *exchangeMiddleware) Close() error {
-	if err := e.channel.Close(); err != nil && err != amqp.ErrClosed {
-		return ErrMessageMiddlewareClose
-	}
-	if err := e.conn.Close(); err != nil && err != amqp.ErrClosed {
-		return ErrMessageMiddlewareClose
-	}
-	return nil
 }
