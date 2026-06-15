@@ -2,6 +2,7 @@ package messagehandler
 
 import (
 	"fmt"
+	"strconv"
 
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/account"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/messageprotocol/external"
@@ -15,6 +16,9 @@ type MessageHandler struct {
 	clientID          inner.ClientID
 	transactionAmount uint32
 	accountAmount     uint32
+	outSeqID          uint64
+	txBatchSeq        uint32
+	acctBatchSeq      uint32
 }
 
 func NewMessageHandler(gatewayID inner.GatewayID, clientID inner.ClientID) MessageHandler {
@@ -26,6 +30,33 @@ func NewMessageHandler(gatewayID inner.GatewayID, clientID inner.ClientID) Messa
 
 func (handler *MessageHandler) ClientID() inner.ClientID {
 	return handler.clientID
+}
+
+func (handler *MessageHandler) nextSeqID() uint64 {
+	handler.outSeqID++
+	return handler.outSeqID
+}
+
+func (handler *MessageHandler) outHeader() inner.Header {
+	return inner.Header{
+		GatewayID:       handler.gatewayID,
+		ClientID:        handler.clientID,
+		SeqID:           handler.nextSeqID(),
+		SenderStageType: inner.StageGateway,
+		SenderReplicaID: 0,
+	}
+}
+
+func (handler *MessageHandler) NextTxShard(nShards int) string {
+	key := strconv.Itoa(int(handler.txBatchSeq % uint32(nShards)))
+	handler.txBatchSeq++
+	return key
+}
+
+func (handler *MessageHandler) NextAcctShard(nShards int) string {
+	key := strconv.Itoa(int(handler.acctBatchSeq % uint32(nShards)))
+	handler.acctBatchSeq++
+	return key
 }
 
 // SerializeTransactionBatch produces a single Batch message carrying all
@@ -44,7 +75,7 @@ func (handler *MessageHandler) SerializeTransactionBatch(batch []transaction.Tra
 		items = append(items, inner.BatchItem{QueryID: 0, Payload: payload})
 	}
 	msg, err := serialize(&inner.BatchMessage{
-		Header:   inner.Header{GatewayID: handler.gatewayID, ClientID: handler.clientID},
+		Header:   handler.outHeader(),
 		ItemKind: inner.TransactionMessage,
 		Items:    items,
 	})
@@ -57,7 +88,7 @@ func (handler *MessageHandler) SerializeTransactionBatch(batch []transaction.Tra
 
 func (handler *MessageHandler) SerializeTransactionEOFMessage() (*middleware.Message, error) {
 	return serialize(&inner.EOFMessage{
-		Header: inner.Header{GatewayID: handler.gatewayID, ClientID: handler.clientID},
+		Header: handler.outHeader(),
 		Total:  handler.transactionAmount,
 	})
 }
@@ -77,7 +108,7 @@ func (handler *MessageHandler) SerializeAccountBatch(batch []account.Account) (*
 		items = append(items, inner.BatchItem{QueryID: 0, Payload: payload})
 	}
 	msg, err := serialize(&inner.BatchMessage{
-		Header:   inner.Header{GatewayID: handler.gatewayID, ClientID: handler.clientID},
+		Header:   handler.outHeader(),
 		ItemKind: inner.AccountMessage,
 		Items:    items,
 	})
@@ -90,7 +121,7 @@ func (handler *MessageHandler) SerializeAccountBatch(batch []account.Account) (*
 
 func (handler *MessageHandler) SerializeAccountEOFMessage() (*middleware.Message, error) {
 	return serialize(&inner.EOFMessage{
-		Header: inner.Header{GatewayID: handler.gatewayID, ClientID: handler.clientID},
+		Header: handler.outHeader(),
 		Total:  handler.accountAmount,
 	})
 }

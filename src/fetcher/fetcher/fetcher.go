@@ -148,7 +148,13 @@ func (f *Fetcher) publishToAllQueues(rates *inner.Q5Conversions) error {
 
 func (f *Fetcher) publishOne(mw middleware.Middleware, gatewayID inner.GatewayID, payload []byte) error {
 	batch := &inner.BatchMessage{
-		Header:   inner.Header{GatewayID: gatewayID, ClientID: frankfurterClientID},
+		Header: inner.Header{
+			GatewayID:       gatewayID,
+			ClientID:        frankfurterClientID,
+			SeqID:           1,
+			SenderStageType: inner.StageFetcher,
+			SenderReplicaID: 0,
+		},
 		ItemKind: inner.Q5ConversionsItem,
 		Items:    []inner.BatchItem{{QueryID: 5, Payload: payload}},
 	}
@@ -160,7 +166,13 @@ func (f *Fetcher) publishOne(mw middleware.Middleware, gatewayID inner.GatewayID
 		return err
 	}
 	eofMsg := &inner.EOFMessage{
-		Header:  inner.Header{GatewayID: gatewayID, ClientID: frankfurterClientID},
+		Header: inner.Header{
+			GatewayID:       gatewayID,
+			ClientID:        frankfurterClientID,
+			SeqID:           2,
+			SenderStageType: inner.StageFetcher,
+			SenderReplicaID: 0,
+		},
 		QueryID: 5,
 		Total:   1,
 	}

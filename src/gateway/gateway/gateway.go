@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -29,8 +30,10 @@ const (
 
 type Gateway struct {
 	registry              *clientregistry.ClientRegistry
-	allTransactionsQueue  middleware.Middleware
-	allAccountsQueue      middleware.Middleware
+	txExchange            middleware.Middleware
+	acctExchange          middleware.Middleware
+	nTxShards             int
+	nAcctShards           int
 	finalQueue            middleware.Middleware
 	gatewayID             inner.GatewayID
 	maxExternalBatchBytes int
@@ -53,14 +56,25 @@ func NewGateway(config gatewayconfig.GatewayConfig) (*Gateway, error) {
 		return nil, err
 	}
 
-	allTransactionsQueue, err := middleware.CreateQueueMiddleware(config.AllTransactionsQueue, connSettings)
+	txExchange, err := middleware.CreateExchangeMiddleware(config.AllTransactionsExchange, shardKeys(config.NTxShards), connSettings)
 	if err != nil {
 		return nil, err
 	}
 
-	allAccountsQueue, err := middleware.CreateQueueMiddleware(config.AllAccountsQueue, connSettings)
+	acctExchange, err := middleware.CreateExchangeMiddleware(config.AllAccountsExchange, shardKeys(config.NAccountShards), connSettings)
 	if err != nil {
-		_ = allTransactionsQueue.Close()
+		_ = txExchange.Close()
+		return nil, err
+	}
+
+	if err := declareShardQueues(config.AllTransactionsExchange, config.NTxShards, connSettings); err != nil {
+		_ = txExchange.Close()
+		_ = acctExchange.Close()
+		return nil, err
+	}
+	if err := declareShardQueues(config.AllAccountsExchange, config.NAccountShards, connSettings); err != nil {
+		_ = txExchange.Close()
+		_ = acctExchange.Close()
 		return nil, err
 	}
 
@@ -69,15 +83,15 @@ func NewGateway(config gatewayconfig.GatewayConfig) (*Gateway, error) {
 	finalQueueName := fmt.Sprintf("%s_%d", config.FinalQueue, gatewayID)
 	finalQueue, err := middleware.CreateQueueMiddleware(finalQueueName, connSettings)
 	if err != nil {
-		_ = allTransactionsQueue.Close()
-		_ = allAccountsQueue.Close()
+		_ = txExchange.Close()
+		_ = acctExchange.Close()
 		return nil, err
 	}
 
 	listener, err := net.Listen("tcp", config.ServerHost+":"+config.ServerPort)
 	if err != nil {
-		_ = allTransactionsQueue.Close()
-		_ = allAccountsQueue.Close()
+		_ = txExchange.Close()
+		_ = acctExchange.Close()
 		_ = finalQueue.Close()
 		return nil, err
 	}
@@ -85,8 +99,10 @@ func NewGateway(config gatewayconfig.GatewayConfig) (*Gateway, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	gateway := &Gateway{
 		registry:              clientregistry.NewClientRegistry(),
-		allTransactionsQueue:  allTransactionsQueue,
-		allAccountsQueue:      allAccountsQueue,
+		txExchange:            txExchange,
+		acctExchange:          acctExchange,
+		nTxShards:             config.NTxShards,
+		nAcctShards:           config.NAccountShards,
 		finalQueue:            finalQueue,
 		gatewayID:             gatewayID,
 		maxExternalBatchBytes: config.MaxExternalBatchBytes,
@@ -367,12 +383,32 @@ func (gateway *Gateway) handleHandshake(state *clientregistry.ClientState, clien
 	})
 }
 
-func (gateway *Gateway) sendToQueueAndAck(state *clientregistry.ClientState, msg *middleware.Message, queue middleware.Middleware) error {
+func shardKeys(n int) []string {
+	keys := make([]string, n)
+	for i := range keys {
+		keys[i] = strconv.Itoa(i)
+	}
+	return keys
+}
+
+func declareShardQueues(exchange string, n int, connSettings middleware.ConnSettings) error {
+	for i := 0; i < n; i++ {
+		queueName := fmt.Sprintf("%s_%d", exchange, i)
+		bound, err := middleware.CreateBoundQueueMiddleware(queueName, exchange, strconv.Itoa(i), connSettings)
+		if err != nil {
+			return fmt.Errorf("declare shard queue %s: %w", queueName, err)
+		}
+		_ = bound.Close()
+	}
+	return nil
+}
+
+func (gateway *Gateway) sendShardedAndAck(state *clientregistry.ClientState, msg *middleware.Message, exchange middleware.Middleware, routingKey string) error {
 	if msg != nil {
-		if err := queue.Send(*msg); err != nil {
+		if err := exchange.SendWithKey(*msg, routingKey); err != nil {
 			return err
 		}
-		if err := queue.FlushPublisher(); err != nil {
+		if err := exchange.FlushPublisher(); err != nil {
 			return err
 		}
 	}
@@ -390,7 +426,13 @@ func (gateway *Gateway) handleTransactionBatch(state *clientregistry.ClientState
 	if err != nil {
 		return err
 	}
-	return gateway.sendToQueueAndAck(state, msg, gateway.allTransactionsQueue)
+	// Only consume a shard slot when there is a message to publish (an empty batch
+	// must not advance the round-robin counter).
+	routingKey := ""
+	if msg != nil {
+		routingKey = handler.NextTxShard(gateway.nTxShards)
+	}
+	return gateway.sendShardedAndAck(state, msg, gateway.txExchange, routingKey)
 }
 
 func (gateway *Gateway) handleEndOfTransactions(state *clientregistry.ClientState, handler *messagehandler.MessageHandler) error {
@@ -398,7 +440,7 @@ func (gateway *Gateway) handleEndOfTransactions(state *clientregistry.ClientStat
 	if err != nil {
 		return err
 	}
-	return gateway.sendToQueueAndAck(state, msg, gateway.allTransactionsQueue)
+	return gateway.sendShardedAndAck(state, msg, gateway.txExchange, "0")
 }
 
 func (gateway *Gateway) handleAccountBatch(state *clientregistry.ClientState, handler *messagehandler.MessageHandler) error {
@@ -410,7 +452,11 @@ func (gateway *Gateway) handleAccountBatch(state *clientregistry.ClientState, ha
 	if err != nil {
 		return err
 	}
-	return gateway.sendToQueueAndAck(state, msg, gateway.allAccountsQueue)
+	routingKey := ""
+	if msg != nil {
+		routingKey = handler.NextAcctShard(gateway.nAcctShards)
+	}
+	return gateway.sendShardedAndAck(state, msg, gateway.acctExchange, routingKey)
 }
 
 func (gateway *Gateway) handleEndOfAccounts(state *clientregistry.ClientState, handler *messagehandler.MessageHandler) error {
@@ -418,7 +464,7 @@ func (gateway *Gateway) handleEndOfAccounts(state *clientregistry.ClientState, h
 	if err != nil {
 		return err
 	}
-	return gateway.sendToQueueAndAck(state, msg, gateway.allAccountsQueue)
+	return gateway.sendShardedAndAck(state, msg, gateway.acctExchange, "0")
 }
 
 func (gateway *Gateway) shutdownWatcher() {
@@ -430,6 +476,6 @@ func (gateway *Gateway) shutdownWatcher() {
 
 	_ = gateway.finalQueue.StopConsuming()
 	_ = gateway.finalQueue.Close()
-	_ = gateway.allTransactionsQueue.Close()
-	_ = gateway.allAccountsQueue.Close()
+	_ = gateway.txExchange.Close()
+	_ = gateway.acctExchange.Close()
 }
