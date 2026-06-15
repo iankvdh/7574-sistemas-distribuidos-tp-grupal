@@ -3,15 +3,24 @@ package config
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/env"
+	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/messageprotocol/inner"
+	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/middleware"
 )
 
 const (
 	defaultMomPort               = 5672
 	defaultMaxInternalBatchBytes = 65536
+	defaultDataDir               = "/data"
+	defaultCheckpointInterval    = 64
+	defaultClientTTLSeconds      = 7200
+	defaultTombstoneTTLSeconds   = 3600
+	defaultAMQPCloseTimeoutSecs  = 5
+	defaultMaintenanceIntervalS  = 30
 )
 
 type WorkerConfig struct {
@@ -28,6 +37,14 @@ type WorkerConfig struct {
 	MomHost               string
 	MomPort               int
 	MaxInternalBatchBytes int
+	StageType             uint8
+	DataDir               string
+	CheckpointDir         string
+	CheckpointInterval    int
+	ClientTTL             time.Duration
+	TombstoneTTL          time.Duration
+	AMQPCloseTimeout      time.Duration
+	MaintenanceInterval   time.Duration
 
 	// Heartbeat (Sentinel liveness).
 	HeartbeatEnabled  bool
@@ -54,6 +71,45 @@ func Load() (WorkerConfig, error) {
 	}
 	if replicaID < 0 || replicaID >= nReplicas {
 		return WorkerConfig{}, fmt.Errorf("REPLICA_ID=%d out of range for N_REPLICAS=%d", replicaID, nReplicas)
+	}
+
+	stageTypeName, err := env.RequiredString("STAGE_TYPE")
+	if err != nil {
+		return WorkerConfig{}, err
+	}
+	stageType, err := inner.StageTypeFromName(stageTypeName)
+	if err != nil {
+		return WorkerConfig{}, err
+	}
+
+	dataDir := env.StringWithDefault("DATA_DIR", defaultDataDir)
+	checkpointDir := filepath.Join(dataDir, fmt.Sprintf("%d_%d", stageType, replicaID))
+
+	checkpointInterval, err := env.IntWithDefault("CHECKPOINT_INTERVAL", defaultCheckpointInterval, true)
+	if err != nil {
+		return WorkerConfig{}, err
+	}
+	if checkpointInterval > middleware.PrefetchCount {
+		return WorkerConfig{}, fmt.Errorf(
+			"CHECKPOINT_INTERVAL (%d) must be <= PREFETCH_COUNT (%d)",
+			checkpointInterval, middleware.PrefetchCount)
+	}
+
+	clientTTLSecs, err := env.IntWithDefault("CLIENT_TTL_SECONDS", defaultClientTTLSeconds, true)
+	if err != nil {
+		return WorkerConfig{}, err
+	}
+	tombstoneTTLSecs, err := env.IntWithDefault("TOMBSTONE_TTL_SECONDS", defaultTombstoneTTLSeconds, true)
+	if err != nil {
+		return WorkerConfig{}, err
+	}
+	amqpCloseTimeoutSecs, err := env.IntWithDefault("AMQP_CLOSE_TIMEOUT_SECONDS", defaultAMQPCloseTimeoutSecs, true)
+	if err != nil {
+		return WorkerConfig{}, err
+	}
+	maintenanceIntervalSecs, err := env.IntWithDefault("MAINTENANCE_INTERVAL_SECONDS", defaultMaintenanceIntervalS, true)
+	if err != nil {
+		return WorkerConfig{}, err
 	}
 
 	inputConfigs, err := ParseInputs()
@@ -124,6 +180,15 @@ func Load() (WorkerConfig, error) {
 		MomPort:               momPort,
 		MaxInternalBatchBytes: maxInternalBatchBytes,
 
+		StageType:           stageType,
+		DataDir:             dataDir,
+		CheckpointDir:       checkpointDir,
+		CheckpointInterval:  checkpointInterval,
+		ClientTTL:           time.Duration(clientTTLSecs) * time.Second,
+		TombstoneTTL:        time.Duration(tombstoneTTLSecs) * time.Second,
+		AMQPCloseTimeout:    time.Duration(amqpCloseTimeoutSecs) * time.Second,
+		MaintenanceInterval: time.Duration(maintenanceIntervalSecs) * time.Second,
+
 		HeartbeatEnabled:  heartbeatEnabled,
 		ContainerName:     containerName,
 		SentinelUDPAddrs:  sentinelUDP,
@@ -131,4 +196,3 @@ func Load() (WorkerConfig, error) {
 		HeartbeatJitter:   time.Duration(hbJitterMs) * time.Millisecond,
 	}, nil
 }
-
