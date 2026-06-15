@@ -125,6 +125,45 @@ func strategyUsesRing(strategy string) bool {
 	return ok
 }
 
+var stageTypeByStrategy = map[string]string{
+	"filter_period1":                    "FilterPeriod1",
+	"filter_wire_ach":                   "FilterWireACH",
+	"filter_currency_usd_p1":            "FilterCurrencyUsdP1",
+	"filter_period2":                    "FilterPeriod2",
+	"filter_currency_usd_p2":            "FilterCurrencyUsdP2",
+	"filter_currency_usd_other_periods": "FilterCurrencyUsdOther",
+	"joiner_usd":                        "JoinerUSD",
+	"filter_amount_lt_50":               "FilterAmountLt50",
+	"sharder_q1":                        "SharderQ1",
+	"sharder_q4":                        "SharderQ4",
+	"suspicious_account_filter":         "SuspiciousFilter",
+	"path_finder_q4":                    "PathFinder",
+	"counter_q4":                        "CounterQ4",
+	"max_q2":                            "MaxQ2",
+	"bank_aggregator":                   "BankAggregator",
+	"aggregator_q2":                     "AggregatorQ2",
+	"sum_q3":                            "SumQ3",
+	"aggregator_q3":                     "AggregatorQ3",
+	"filter_q3":                         "FilterQ3",
+	"micro_transaction_counter":         "MicroTransactionCounter",
+	"aggregator_q5":                     "AggregatorQ5",
+	"final_joiner":                      "FinalJoiner",
+}
+
+func stageTypeFor(strategy string) string {
+	stageType, ok := stageTypeByStrategy[strategy]
+	if !ok {
+		panic(fmt.Sprintf("compose-gen: no STAGE_TYPE mapping for strategy %q (add it to stageTypeByStrategy)", strategy))
+	}
+	return stageType
+}
+
+const workerDataDir = "/data"
+
+func workerDataVolume(serviceName string) string {
+	return "data_" + serviceName
+}
+
 // sharedNetworkName is the explicit Docker network that links the server and
 // client compose projects when running in split mode.
 const sharedNetworkName = "tp_grupal_network"
@@ -649,7 +688,21 @@ func (s *spec) renderServer(w io.Writer) error {
 	}
 	writeRabbit(w)
 	writeNetwork(w, false)
+	writeWorkerVolumes(w, workerNames)
 	return nil
+}
+
+// writeWorkerVolumes declares the top-level named volumes used for per-worker
+// checkpoint persistence. One per worker replica (data_<serviceName>); the names
+// match the mounts emitted by writeWorker.
+func writeWorkerVolumes(w io.Writer, workerNames []string) {
+	if len(workerNames) == 0 {
+		return
+	}
+	fmt.Fprintln(w, "volumes:")
+	for _, name := range workerNames {
+		fmt.Fprintf(w, "  %s:\n", workerDataVolume(name))
+	}
 }
 
 // writeSentinels emits the Sentinel cluster. Each replica gets the
@@ -779,8 +832,10 @@ func writeWorker(w io.Writer, ws workerSpec, replica int, logLevel string, gatew
 	fmt.Fprintln(w, "      - .env")
 	fmt.Fprintln(w, "    environment:")
 	fmt.Fprintf(w, "      - STRATEGY=%s\n", ws.Strategy)
+	fmt.Fprintf(w, "      - STAGE_TYPE=%s\n", stageTypeFor(ws.Strategy))
 	fmt.Fprintf(w, "      - REPLICA_ID=%d\n", replica)
 	fmt.Fprintf(w, "      - N_REPLICAS=%d\n", ws.Replicas)
+	fmt.Fprintf(w, "      - DATA_DIR=%s\n", workerDataDir)
 	if len(ws.Inputs) == 1 {
 		input := strings.ReplaceAll(ws.Inputs[0], "{REPLICA_ID}", strconv.Itoa(replica))
 		fmt.Fprintf(w, "      - INPUT=%s\n", input)
@@ -818,11 +873,10 @@ func writeWorker(w io.Writer, ws workerSpec, replica int, logLevel string, gatew
 			fmt.Fprintf(w, "      - %s=%s\n", k, ws.Env[k])
 		}
 	}
-	if len(ws.Volumes) > 0 {
-		fmt.Fprintln(w, "    volumes:")
-		for _, v := range ws.Volumes {
-			fmt.Fprintf(w, "      - %s\n", v)
-		}
+	fmt.Fprintln(w, "    volumes:")
+	fmt.Fprintf(w, "      - %s:%s\n", workerDataVolume(name), workerDataDir)
+	for _, v := range ws.Volumes {
+		fmt.Fprintf(w, "      - %s\n", v)
 	}
 }
 
