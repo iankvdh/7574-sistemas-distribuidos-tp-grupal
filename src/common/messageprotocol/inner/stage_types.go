@@ -1,5 +1,7 @@
 package inner
 
+import "fmt"
+
 const (
 	StageGateway                 uint8 = 1
 	StageFilterCurrencyUsdP1     uint8 = 2
@@ -26,3 +28,38 @@ const (
 	StageFinalJoiner             uint8 = 23
 	StageFetcher                 uint8 = 24
 )
+
+var stageTypeByName = map[string]uint8{
+	"Gateway":                 StageGateway,
+	"FilterCurrencyUsdP1":     StageFilterCurrencyUsdP1,
+	"FilterCurrencyUsdP2":     StageFilterCurrencyUsdP2,
+	"FilterCurrencyUsdOther":  StageFilterCurrencyUsdOther,
+	"FilterAmountLt50":        StageFilterAmountLt50,
+	"FilterWireACH":           StageFilterWireACH,
+	"FilterPeriod1":           StageFilterPeriod1,
+	"FilterPeriod2":           StageFilterPeriod2,
+	"FilterQ3":                StageFilterQ3,
+	"SharderQ1":               StageSharderQ1,
+	"SharderQ4":               StageSharderQ4,
+	"JoinerUSD":               StageJoinerUSD,
+	"MaxQ2":                   StageMaxQ2,
+	"BankAggregator":          StageBankAggregator,
+	"SumQ3":                   StageSumQ3,
+	"AggregatorQ2":            StageAggregatorQ2,
+	"AggregatorQ3":            StageAggregatorQ3,
+	"AggregatorQ5":            StageAggregatorQ5,
+	"MicroTransactionCounter": StageMicroTransactionCounter,
+	"SuspiciousFilter":        StageSuspiciousFilter,
+	"PathFinder":              StagePathFinder,
+	"CounterQ4":               StageCounterQ4,
+	"FinalJoiner":             StageFinalJoiner,
+	"Fetcher":                 StageFetcher,
+}
+
+func StageTypeFromName(name string) (uint8, error) {
+	v, ok := stageTypeByName[name]
+	if !ok {
+		return 0, fmt.Errorf("unknown STAGE_TYPE %q", name)
+	}
+	return v, nil
+}

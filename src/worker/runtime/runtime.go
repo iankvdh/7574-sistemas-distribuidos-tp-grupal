@@ -7,9 +7,14 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"syscall"
+	"time"
 
+	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/checkpoint"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/eof"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/hashing"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/heartbeat"
@@ -19,6 +24,9 @@ import (
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/builder"
 )
+
+const checkpointDirPermissions = 0o755
+const checkpointNamePrefix = "client_"
 
 type Worker struct {
 	cfg                 config.WorkerConfig
@@ -31,17 +39,28 @@ type Worker struct {
 	ctx                 context.Context
 	cancel              context.CancelFunc
 	waitingGroup        sync.WaitGroup
-	strategyMu          sync.Mutex
-	upstreamEOFMu       sync.Mutex
+	stateMu             sync.Mutex
 
 	// Stores last upstream EOF message for each client (and the input it came
 	// from), to allow re-enqueuing to the right input if the strategy requests
-	// it. Cleared on successful publish of EOFs.
+	// it. Cleared on successful EOF publish and on cleanupClientState.
 	upstreamEOFs   map[inner.ClientID]cachedEOF
 	inputWG        sync.WaitGroup
 	inputStartMu   sync.Mutex
 	startedInputs  []bool
 	deferredInputs map[int]bool
+	draining       bool
+	pendingAcks    map[inner.ClientID][]deliveryRef
+	totalPending   int
+	lastSeen       map[inner.ClientID]time.Time
+	tombstones     map[inner.ClientID]time.Time
+	lastRecvSeqID  map[inner.SeqKey]uint64
+	outSeqID       map[inner.ClientID]uint64
+}
+
+type deliveryRef struct {
+	ack  func()
+	nack func()
 }
 
 type cachedEOF struct {
@@ -133,6 +152,11 @@ func New(cfg config.WorkerConfig) (*Worker, error) {
 		}
 	}
 
+	if err := os.MkdirAll(cfg.CheckpointDir, checkpointDirPermissions); err != nil {
+		closeAll(inputs, ringIn, ringOut, outputTargets)
+		return nil, fmt.Errorf("create checkpoint dir %q: %w", cfg.CheckpointDir, err)
+	}
+
 	runCtx, cancel := context.WithCancel(context.Background())
 	buffers := initOutputTargetBuffers(outputTargets)
 	w := &Worker{
@@ -148,7 +172,15 @@ func New(cfg config.WorkerConfig) (*Worker, error) {
 		upstreamEOFs:        map[inner.ClientID]cachedEOF{},
 		startedInputs:       make([]bool, len(inputs)),
 		deferredInputs:      deferred,
+
+		pendingAcks:   map[inner.ClientID][]deliveryRef{},
+		lastSeen:      map[inner.ClientID]time.Time{},
+		tombstones:    map[inner.ClientID]time.Time{},
+		lastRecvSeqID: map[inner.SeqKey]uint64{},
+		outSeqID:      map[inner.ClientID]uint64{},
 	}
+
+	w.loadCheckpoints()
 	return w, nil
 }
 
@@ -196,6 +228,9 @@ func (w *Worker) Run() error {
 	w.waitingGroup.Add(1)
 	go w.handleSignals()
 
+	w.waitingGroup.Add(1)
+	go w.runMaintenanceLoop()
+
 	inputNames := make([]string, 0, len(w.cfg.InputConfigs))
 	for _, ic := range w.cfg.InputConfigs {
 		inputNames = append(inputNames, ic.Name)
@@ -203,12 +238,14 @@ func (w *Worker) Run() error {
 	slog.Info(
 		"Worker started",
 		"strategy", w.cfg.StrategyName,
+		"stage_type", w.cfg.StageType,
 		"replica_id", w.cfg.ReplicaID,
 		"n_replicas", w.cfg.NReplicas,
 		"inputs", inputNames,
 		"outputs", len(w.outputs),
 		"ring_in", w.cfg.RingQueueIn,
 		"ring_out", w.cfg.RingQueueOut,
+		"checkpoint_dir", w.cfg.CheckpointDir,
 	)
 
 	if w.ringIn != nil {
@@ -301,14 +338,15 @@ func (w *Worker) flushPublishers() error {
 	return nil
 }
 
-func (w *Worker) flushOrCrash() {
-	if err := w.flushPublishers(); err != nil {
-		slog.Error("Publisher flush failed, crashing for redelivery", "err", err)
-		os.Exit(1)
-	}
-}
-
 func (w *Worker) handleInputMessage(inputIndex int, msg middleware.Message, ack func(), nack func()) {
+	w.stateMu.Lock()
+	defer w.stateMu.Unlock()
+
+	if w.draining {
+		nack()
+		return
+	}
+
 	parsed, err := inner.NewFromSerializedData([]byte(msg.Body))
 	if err != nil {
 		slog.Error("Malformed message in input queue", "input_index", inputIndex, "err", err)
@@ -316,72 +354,173 @@ func (w *Worker) handleInputMessage(inputIndex int, msg middleware.Message, ack 
 		return
 	}
 
+	header := inner.HeaderOf(parsed)
+	clientID := header.ClientID
+	if _, dead := w.tombstones[clientID]; dead {
+		ack()
+		return
+	}
+	if w.isDuplicate(clientID, header) {
+		ack()
+		return
+	}
+	w.lastSeen[clientID] = time.Now()
+
 	switch typed := parsed.(type) {
 	case *inner.EOFMessage:
-		envelope := &inner.Envelope{
-			GatewayID:       typed.GatewayID,
-			ClientID:        typed.ClientID,
-			Total:           typed.Total,
-			QueryID:         typed.QueryID,
-			InputIndex:      inputIndex,
-			SenderStageType: typed.SenderStageType,
-			SenderReplicaID: typed.SenderReplicaID,
-		}
-		w.cacheUpstreamEOF(envelope.ClientID, inputIndex, msg)
-		w.strategyMu.Lock()
-		outcome, err := w.strategy.OnUpstreamEOF(envelope)
-		if err != nil {
-			w.strategyMu.Unlock()
-			slog.Error("Strategy OnUpstreamEOF failed", "client_id", envelope.ClientID, "err", err)
-			nack()
-			return
-		}
-		if err := w.applyEOFOutcome(envelope, outcome); err != nil {
-			w.strategyMu.Unlock()
-			slog.Error("Applying EOF outcome failed", "client_id", envelope.ClientID, "err", err)
-			nack()
-			return
-		}
-		w.flushOrCrash()
-		w.strategyMu.Unlock()
-		ack()
+		w.handleUpstreamEOF(typed, msg, inputIndex, header, ack, nack)
 	case *inner.BatchMessage:
-		w.strategyMu.Lock()
-		if err := w.processBatch(typed, []byte(msg.Body), inputIndex); err != nil {
-			w.strategyMu.Unlock()
-			slog.Error("Strategy ProcessMessage failed", "client_id", typed.ClientID, "err", err)
-			nack()
-			return
-		}
-		w.flushOrCrash()
-		w.strategyMu.Unlock()
-		ack()
+		w.handleBatch(typed, []byte(msg.Body), inputIndex, header, ack, nack)
 	default:
 		slog.Error("Unexpected message type in input queue", "input_index", inputIndex, "type", parsed.Type())
 		ack()
 	}
 }
 
-func (w *Worker) processBatch(batch *inner.BatchMessage, rawBatch []byte, inputIndex int) error {
+func (w *Worker) handleRingMessage(msg middleware.Message, ack func(), nack func()) {
+	w.stateMu.Lock()
+	defer w.stateMu.Unlock()
+
+	if w.draining {
+		nack()
+		return
+	}
+
+	parsed, err := inner.NewFromSerializedData([]byte(msg.Body))
+	if err != nil {
+		slog.Error("Malformed message in ring queue (poison, discarding)", "err", err)
+		ack()
+		return
+	}
+	typed, ok := parsed.(*inner.RingTokenMessage)
+	if !ok {
+		slog.Warn("Unexpected message type on ring queue", "type", parsed.Type())
+		ack()
+		return
+	}
+
+	header := inner.HeaderOf(parsed)
+	clientID := header.ClientID
+	if _, dead := w.tombstones[clientID]; dead {
+		ack()
+		return
+	}
+	if w.isDuplicate(clientID, header) {
+		ack()
+		return
+	}
+	w.lastSeen[clientID] = time.Now()
+
+	w.handleRingToken(typed, header, ack, nack)
+}
+
+func (w *Worker) isDuplicate(clientID inner.ClientID, header inner.Header) bool {
+	if header.SeqID == 0 {
+		return false
+	}
+	return header.SeqID <= w.lastRecvSeqID[seqKeyOf(clientID, header)]
+}
+
+func (w *Worker) handleBatch(batch *inner.BatchMessage, raw []byte, inputIndex int, header inner.Header, ack, nack func()) {
+	completed, err := w.processBatch(batch, raw, inputIndex)
+	if err != nil {
+		slog.Error("processBatch failed, exiting for redelivery", "client_id", batch.ClientID, "err", err)
+		os.Exit(1)
+	}
+	w.lastRecvSeqID[seqKeyOf(header.ClientID, header)] = header.SeqID
+	if completed {
+		w.completeClient(header.ClientID, deliveryRef{ack: ack, nack: nack})
+		return
+	}
+	w.enqueuePending(header.ClientID, deliveryRef{ack: ack, nack: nack})
+	if len(w.pendingAcks[header.ClientID]) >= w.cfg.CheckpointInterval {
+		w.checkpointAndAck(header.ClientID)
+	} else if w.totalPending >= middleware.PrefetchCount {
+		w.flushAllPending()
+	}
+}
+
+func (w *Worker) handleUpstreamEOF(typed *inner.EOFMessage, msg middleware.Message, inputIndex int, header inner.Header, ack, nack func()) {
+	envelope := &inner.Envelope{
+		GatewayID:       typed.GatewayID,
+		ClientID:        typed.ClientID,
+		Total:           typed.Total,
+		QueryID:         typed.QueryID,
+		InputIndex:      inputIndex,
+		SenderStageType: typed.SenderStageType,
+		SenderReplicaID: typed.SenderReplicaID,
+	}
+	w.cacheUpstreamEOF(envelope.ClientID, inputIndex, msg)
+	outcome, err := w.strategy.OnUpstreamEOF(envelope)
+	if err != nil {
+		slog.Error("Strategy OnUpstreamEOF failed, exiting for redelivery", "client_id", envelope.ClientID, "err", err)
+		os.Exit(1)
+	}
+	if err := w.applyEOFOutcome(envelope, outcome); err != nil {
+		slog.Error("Applying EOF outcome failed, exiting for redelivery", "client_id", envelope.ClientID, "err", err)
+		os.Exit(1)
+	}
+	w.lastRecvSeqID[seqKeyOf(header.ClientID, header)] = header.SeqID
+	if outcome.ClientCompleted {
+		w.completeClient(envelope.ClientID, deliveryRef{ack: ack, nack: nack})
+		return
+	}
+	w.enqueuePending(envelope.ClientID, deliveryRef{ack: ack, nack: nack})
+	w.checkpointAndAck(envelope.ClientID)
+}
+
+func (w *Worker) handleRingToken(typed *inner.RingTokenMessage, header inner.Header, ack, nack func()) {
+	token := tokenFromMessage(typed)
+	outcome, err := w.strategy.OnRingToken(token)
+	if err != nil {
+		slog.Error("Strategy OnRingToken failed, exiting for redelivery", "client_id", token.ClientID, "err", err)
+		os.Exit(1)
+	}
+	resultEnv := &inner.Envelope{GatewayID: header.GatewayID, ClientID: token.ClientID}
+	if err := w.applyEOFOutcome(resultEnv, outcome); err != nil {
+		slog.Error("Applying ring outcome failed, exiting for redelivery", "client_id", token.ClientID, "err", err)
+		os.Exit(1)
+	}
+	w.lastRecvSeqID[seqKeyOf(token.ClientID, header)] = header.SeqID
+	if outcome.ClientCompleted {
+		w.completeClient(token.ClientID, deliveryRef{ack: ack, nack: nack})
+		return
+	}
+	w.enqueuePending(token.ClientID, deliveryRef{ack: ack, nack: nack})
+	w.checkpointAndAck(token.ClientID)
+}
+
+func tokenFromMessage(m *inner.RingTokenMessage) *eof.Token {
+	return &eof.Token{
+		ClientID:      m.ClientID,
+		InitiatorID:   int(m.InitiatorID),
+		AggMatched:    m.AggMatched,
+		AggNotMatched: m.AggNotMatched,
+		Phase:         eof.TokenPhase(m.Phase),
+	}
+}
+
+func (w *Worker) processBatch(batch *inner.BatchMessage, rawBatch []byte, inputIndex int) (bool, error) {
 	if rawStrat, ok := w.strategy.(strategy.RawBatchStrategy); ok {
 		if err := rawStrat.ValidateRawBatch(batch, rawBatch, inputIndex); err != nil {
 			if errors.Is(err, strategy.ErrInvalidData) {
 				slog.Warn("RawBatchStrategy: invalid batch, discarding", "client_id", batch.ClientID, "err", err)
-				return nil
+				return false, nil
 			}
-			return err
+			return false, err
 		}
 		outputs, _, handled, err := rawStrat.ProcessRawBatch(batch, rawBatch, inputIndex)
 		if err != nil {
-			return err
+			return false, err
 		}
 		if err := w.appendOutputMessages(batch.GatewayID, outputs); err != nil {
-			return err
+			return false, err
 		}
 		if handled {
-			return nil
+			return false, nil
 		}
 	}
+	clientCompleted := false
 	for _, item := range batch.Items {
 		envelope := &inner.Envelope{
 			Kind:            batch.ItemKind,
@@ -393,80 +532,44 @@ func (w *Worker) processBatch(batch *inner.BatchMessage, rawBatch []byte, inputI
 			SenderStageType: batch.SenderStageType,
 			SenderReplicaID: batch.SenderReplicaID,
 		}
-		if err := w.processSingleItem(envelope); err != nil {
-			return err
+		itemCompleted, err := w.processSingleItem(envelope)
+		if err != nil {
+			return false, err
+		}
+		if itemCompleted {
+			clientCompleted = true
 		}
 	}
-	return nil
+	return clientCompleted, nil
 }
 
-func (w *Worker) processSingleItem(env *inner.Envelope) error {
+func (w *Worker) processSingleItem(env *inner.Envelope) (bool, error) {
 	if err := w.strategy.Validate(env); err != nil {
 		if errors.Is(err, strategy.ErrInvalidData) {
 			slog.Warn("Strategy.Validate: invalid data, discarding", "client_id", env.ClientID, "err", err)
-			return nil
+			return false, nil
 		}
-		return err
+		return false, err
 	}
 	outputMessages, _, err := w.strategy.ProcessMessage(env)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if err := w.appendOutputMessages(env.GatewayID, outputMessages); err != nil {
-		return err
+		return false, err
 	}
 	emitter, ok := w.strategy.(strategy.ReadyEOFEmitter)
 	if !ok {
-		return nil
+		return false, nil
 	}
 	outcome, ready := emitter.ReadyEOFs(env)
 	if !ready {
-		return nil
+		return false, nil
 	}
-	return w.applyEOFOutcome(env, outcome)
-}
-
-func (w *Worker) handleRingMessage(msg middleware.Message, ack func(), nack func()) {
-	parsed, err := inner.NewFromSerializedData([]byte(msg.Body))
-	if err != nil {
-		slog.Error("Malformed message in ring queue", "err", err)
-		ack()
-		return
+	if err := w.applyEOFOutcome(env, outcome); err != nil {
+		return false, err
 	}
-	ringMessage, ok := parsed.(*inner.RingTokenMessage)
-	if !ok {
-		slog.Warn("Unexpected message type on ring queue", "type", parsed.Type())
-		ack()
-		return
-	}
-
-	token := &eof.Token{
-		ClientID:      ringMessage.ClientID,
-		InitiatorID:   int(ringMessage.InitiatorID),
-		AggMatched:    ringMessage.AggMatched,
-		AggNotMatched: ringMessage.AggNotMatched,
-		Phase:         eof.TokenPhase(ringMessage.Phase),
-	}
-
-	w.strategyMu.Lock()
-	outcome, err := w.strategy.OnRingToken(token)
-	if err != nil {
-		w.strategyMu.Unlock()
-		slog.Error("Strategy OnRingToken failed", "client_id", token.ClientID, "err", err)
-		nack()
-		return
-	}
-
-	resultEnvelope := &inner.Envelope{GatewayID: ringMessage.GatewayID, ClientID: token.ClientID}
-	if err := w.applyEOFOutcome(resultEnvelope, outcome); err != nil {
-		w.strategyMu.Unlock()
-		slog.Error("Applying ring outcome failed", "client_id", token.ClientID, "err", err)
-		nack()
-		return
-	}
-	w.flushOrCrash()
-	w.strategyMu.Unlock()
-	ack()
+	return outcome.ClientCompleted, nil
 }
 
 func (w *Worker) applyEOFOutcome(env *inner.Envelope, outcome strategy.EOFOutcome) error {
@@ -487,7 +590,7 @@ func (w *Worker) applyAction(env *inner.Envelope, outcome strategy.EOFOutcome) e
 	case eof.ActionNone:
 		return nil
 	case eof.ActionForwardToken:
-		if err := w.flushClient(env.ClientID); err != nil {
+		if err := w.flushClientBuffers(env.ClientID); err != nil {
 			return err
 		}
 		return w.forwardToken(env, outcome.Action.Token)
@@ -501,7 +604,7 @@ func (w *Worker) applyAction(env *inner.Envelope, outcome strategy.EOFOutcome) e
 		if err := w.emitOutcomeOutputs(env.GatewayID, outcome); err != nil {
 			return err
 		}
-		if err := w.flushClient(env.ClientID); err != nil {
+		if err := w.flushClientBuffers(env.ClientID); err != nil {
 			return err
 		}
 		w.clearUpstreamEOF(env.ClientID)
@@ -524,7 +627,7 @@ func (w *Worker) forwardToken(env *inner.Envelope, token *eof.Token) error {
 		return errors.New("strategy asked to forward a nil ring token")
 	}
 	ringMessage := &inner.RingTokenMessage{
-		Header:        inner.Header{GatewayID: env.GatewayID, ClientID: token.ClientID},
+		Header:        w.outHeader(env.GatewayID, token.ClientID),
 		InitiatorID:   int32(token.InitiatorID),
 		AggMatched:    token.AggMatched,
 		AggNotMatched: token.AggNotMatched,
@@ -625,10 +728,6 @@ func (w *Worker) flushBatch(idx, shard int, key batchKey) error {
 	return nil
 }
 
-// serializePending builds the on-wire Batch for a pending batch. Internal targets
-// keep their item_kind so the downstream worker interprets each payload; final_queue
-// targets use ResultRow (the gateway's final consumer reads each payload as a CSV
-// row). Both shapes are the same BatchMessage type.
 func (w *Worker) serializePending(target OutputTarget, pending *pendingBatch) (*middleware.Message, error) {
 	itemKind := pending.itemKind
 	if target.Kind == config.KindFinalQueue {
@@ -639,7 +738,7 @@ func (w *Worker) serializePending(target OutputTarget, pending *pendingBatch) (*
 		items = append(items, inner.BatchItem{QueryID: pending.queryID, Payload: payload})
 	}
 	return serialize(&inner.BatchMessage{
-		Header:   inner.Header{GatewayID: pending.gatewayID, ClientID: pending.clientID},
+		Header:   w.outHeader(pending.gatewayID, pending.clientID),
 		ItemKind: itemKind,
 		Items:    items,
 	})
@@ -652,7 +751,7 @@ func sendOnTarget(mw middleware.Middleware, msg middleware.Message, routingKey s
 	return mw.Send(msg)
 }
 
-func (w *Worker) flushClient(clientID inner.ClientID) error {
+func (w *Worker) flushClientBuffers(clientID inner.ClientID) error {
 	for idx, buf := range w.outputTargetBuffers {
 		for shard := range buf.perShard {
 			keys := make([]batchKey, 0, len(buf.perShard[shard]))
@@ -671,22 +770,6 @@ func (w *Worker) flushClient(clientID inner.ClientID) error {
 	return nil
 }
 
-func (w *Worker) flushAll() {
-	for idx, buf := range w.outputTargetBuffers {
-		for shard := range buf.perShard {
-			keys := make([]batchKey, 0, len(buf.perShard[shard]))
-			for k := range buf.perShard[shard] {
-				keys = append(keys, k)
-			}
-			for _, k := range keys {
-				if err := w.flushBatch(idx, shard, k); err != nil {
-					slog.Error("Flush on shutdown failed", "client_id", k.clientID, "output", idx, "shard", shard, "err", err)
-				}
-			}
-		}
-	}
-}
-
 func (w *Worker) shardFor(target OutputTarget, clientID inner.ClientID) int {
 	if target.Kind == config.KindShardedQueues {
 		return hashing.Shard(string(clientID), target.ShardCount)
@@ -695,7 +778,7 @@ func (w *Worker) shardFor(target OutputTarget, clientID inner.ClientID) int {
 }
 
 func (w *Worker) publishEOFs(env *inner.Envelope, emits []eof.EOFEmit) error {
-	if err := w.flushClient(env.ClientID); err != nil {
+	if err := w.flushClientBuffers(env.ClientID); err != nil {
 		return err
 	}
 	for _, e := range emits {
@@ -718,29 +801,23 @@ func (w *Worker) publishEOFs(env *inner.Envelope, emits []eof.EOFEmit) error {
 	return nil
 }
 
-// serializeEOF picks the on-wire EOF shape based on the target kind. Internal
-// pipeline targets get an EOFMessage (downstream workers count them); final_queue
-// targets get a Batch with a single ResultRow item carrying "EOF" (the gateway's
-// final consumer interprets that item as "this query is done for this client").
 func (w *Worker) serializeEOF(target OutputTarget, env *inner.Envelope, e eof.EOFEmit) (*middleware.Message, error) {
 	if target.Kind == config.KindFinalQueue {
 		return serialize(&inner.BatchMessage{
-			Header:   inner.Header{GatewayID: env.GatewayID, ClientID: env.ClientID},
+			Header:   w.outHeader(env.GatewayID, env.ClientID),
 			ItemKind: inner.ResultRow,
 			Items:    []inner.BatchItem{{QueryID: e.QueryID, Payload: []byte("EOF")}},
 		})
 	}
 	return serialize(&inner.EOFMessage{
-		Header:  inner.Header{GatewayID: env.GatewayID, ClientID: env.ClientID},
+		Header:  w.outHeader(env.GatewayID, env.ClientID),
 		QueryID: e.QueryID,
 		Total:   e.Total,
 	})
 }
 
 func (w *Worker) reenqueueUpstreamEOF(clientID inner.ClientID) error {
-	w.upstreamEOFMu.Lock()
 	cached, ok := w.upstreamEOFs[clientID]
-	w.upstreamEOFMu.Unlock()
 	if !ok {
 		return errors.New("no cached upstream EOF to re-enqueue")
 	}
@@ -752,15 +829,251 @@ func (w *Worker) reenqueueUpstreamEOF(clientID inner.ClientID) error {
 }
 
 func (w *Worker) cacheUpstreamEOF(clientID inner.ClientID, inputIndex int, msg middleware.Message) {
-	w.upstreamEOFMu.Lock()
 	w.upstreamEOFs[clientID] = cachedEOF{inputIndex: inputIndex, msg: msg}
-	w.upstreamEOFMu.Unlock()
 }
 
 func (w *Worker) clearUpstreamEOF(clientID inner.ClientID) {
-	w.upstreamEOFMu.Lock()
 	delete(w.upstreamEOFs, clientID)
-	w.upstreamEOFMu.Unlock()
+}
+
+func (w *Worker) outHeader(gatewayID inner.GatewayID, clientID inner.ClientID) inner.Header {
+	return inner.Header{
+		GatewayID:       gatewayID,
+		ClientID:        clientID,
+		SeqID:           w.nextSeqID(clientID),
+		SenderStageType: w.cfg.StageType,
+		SenderReplicaID: uint16(w.cfg.ReplicaID),
+	}
+}
+
+func (w *Worker) nextSeqID(clientID inner.ClientID) uint64 {
+	w.outSeqID[clientID]++
+	return w.outSeqID[clientID]
+}
+
+func (w *Worker) enqueuePending(clientID inner.ClientID, ref deliveryRef) {
+	w.pendingAcks[clientID] = append(w.pendingAcks[clientID], ref)
+	w.totalPending++
+}
+
+func (w *Worker) flushAllPending() {
+	for clientID := range w.pendingAcks {
+		w.checkpointAndAck(clientID)
+	}
+}
+
+func (w *Worker) checkpointAndAck(clientID inner.ClientID) {
+	if len(w.pendingAcks[clientID]) == 0 {
+		return
+	}
+	if err := w.flushClientBuffers(clientID); err != nil {
+		slog.Error("flushClientBuffers failed, exiting for redelivery", "client_id", clientID, "err", err)
+		os.Exit(1)
+	}
+	if err := w.flushPublishers(); err != nil {
+		slog.Error("FlushPublisher failed, exiting for redelivery", "client_id", clientID, "err", err)
+		os.Exit(1)
+	}
+	cp := w.buildClientCheckpoint(clientID)
+	if err := checkpoint.WriteClientCheckpoint(w.cfg.CheckpointDir, cp); err != nil {
+		slog.Error("WriteClientCheckpoint failed, exiting before ACK", "client_id", clientID, "err", err)
+		os.Exit(1)
+	}
+	w.ackAllPending(clientID)
+}
+
+func (w *Worker) ackAllPending(clientID inner.ClientID) {
+	refs := w.pendingAcks[clientID]
+	for _, ref := range refs {
+		ref.ack()
+	}
+	w.totalPending -= len(refs)
+	delete(w.pendingAcks, clientID)
+}
+
+func (w *Worker) completeClient(clientID inner.ClientID, finalRef deliveryRef) {
+	if err := w.flushClientBuffers(clientID); err != nil {
+		slog.Error("flushClientBuffers failed on complete, exiting", "client_id", clientID, "err", err)
+		os.Exit(1)
+	}
+	if err := w.flushPublishers(); err != nil {
+		slog.Error("FlushPublisher failed on complete, exiting", "client_id", clientID, "err", err)
+		os.Exit(1)
+	}
+	clientCheckpoint := w.buildClientCheckpoint(clientID)
+	if err := checkpoint.WriteClientCheckpoint(w.cfg.CheckpointDir, clientCheckpoint); err != nil {
+		slog.Error("WriteClientCheckpoint failed on complete, exiting before ACK", "client_id", clientID, "err", err)
+		os.Exit(1)
+	}
+	w.tombstones[clientID] = time.Now()
+	w.flushMetaCheckpoint()
+	w.ackAllPending(clientID)
+	finalRef.ack()
+	w.cleanupClientState(clientID)
+	_ = os.Remove(checkpoint.ClientCheckpointPath(w.cfg.CheckpointDir, clientID))
+}
+
+func (w *Worker) abortClient(clientID inner.ClientID) {
+	w.tombstones[clientID] = time.Now()
+	w.flushMetaCheckpoint()
+	w.ackAllPending(clientID)
+	w.cleanupClientState(clientID)
+	_ = os.Remove(checkpoint.ClientCheckpointPath(w.cfg.CheckpointDir, clientID))
+}
+
+func (w *Worker) cleanupClientState(clientID inner.ClientID) {
+	if recoverableClientState, ok := w.strategy.(strategy.RecoverableStrategy); ok {
+		recoverableClientState.CleanupClient(clientID)
+	}
+	for sequenceKey := range w.lastRecvSeqID {
+		if sequenceKey.ClientID == clientID {
+			delete(w.lastRecvSeqID, sequenceKey)
+		}
+	}
+	delete(w.outSeqID, clientID)
+	delete(w.lastSeen, clientID)
+	delete(w.upstreamEOFs, clientID)
+}
+
+func (w *Worker) flushMetaCheckpoint() {
+	metaCheckpoint := &checkpoint.MetaCheckpoint{Tombstones: make(map[string]int64, len(w.tombstones))}
+	for clientID, deathTimestamp := range w.tombstones {
+		metaCheckpoint.Tombstones[string(clientID)] = deathTimestamp.Unix()
+	}
+	if err := checkpoint.WriteMetaCheckpoint(w.cfg.CheckpointDir, metaCheckpoint); err != nil {
+		slog.Warn("WriteMetaCheckpoint failed", "err", err)
+	}
+}
+
+func (w *Worker) runMaintenanceLoop() {
+	defer w.waitingGroup.Done()
+	ticker := time.NewTicker(w.cfg.MaintenanceInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-w.ctx.Done():
+			return
+		case <-ticker.C:
+			w.stateMu.Lock()
+			if !w.draining {
+				w.runMaintenance()
+			}
+			w.stateMu.Unlock()
+		}
+	}
+}
+
+func (w *Worker) runMaintenance() {
+	now := time.Now()
+	for clientID, timestamp := range w.lastSeen {
+		if now.Sub(timestamp) > w.cfg.ClientTTL {
+			slog.Warn("CLIENT_TTL expired, aborting client", "client_id", clientID, "idle", now.Sub(timestamp))
+			w.abortClient(clientID)
+		}
+	}
+	changed := false
+	for clientID, deathTimestamp := range w.tombstones {
+		if now.Sub(deathTimestamp) > w.cfg.TombstoneTTL {
+			delete(w.tombstones, clientID)
+			changed = true
+		}
+	}
+	if changed {
+		w.flushMetaCheckpoint()
+	}
+}
+
+func (w *Worker) loadCheckpoints() {
+	metaCheckpoint, err := checkpoint.ReadMetaCheckpoint(w.cfg.CheckpointDir)
+	if err != nil {
+		slog.Warn("ReadMetaCheckpoint failed", "err", err)
+	} else {
+		for clientId, deathTimestamp := range metaCheckpoint.Tombstones {
+			w.tombstones[inner.ClientID(clientId)] = time.Unix(deathTimestamp, 0)
+		}
+	}
+
+	checkpoints, _ := os.ReadDir(w.cfg.CheckpointDir)
+	for _, e := range checkpoints {
+		name := e.Name()
+
+		if !strings.HasPrefix(name, checkpointNamePrefix) || !strings.HasSuffix(name, ".json") {
+			continue
+		}
+		checkpointPath := filepath.Join(w.cfg.CheckpointDir, name)
+		clientCheckpoint, err := checkpoint.ReadClientCheckpoint(checkpointPath)
+		if err != nil {
+			slog.Warn("skip corrupt checkpoint", "file", name, "err", err)
+			continue
+		}
+		clientID := inner.ClientID(clientCheckpoint.ClientID)
+		if _, dead := w.tombstones[clientID]; dead {
+			_ = os.Remove(checkpointPath)
+			continue
+		}
+		for upstreamKey, sequenceId := range clientCheckpoint.LastRecvSeqID {
+			sequenceKey, err := parseSeqKey(clientID, upstreamKey)
+			if err != nil {
+				slog.Warn("bad seq key in checkpoint", "file", name, "key", upstreamKey, "err", err)
+				continue
+			}
+			w.lastRecvSeqID[sequenceKey] = sequenceId
+		}
+		w.outSeqID[clientID] = clientCheckpoint.OutSeqID
+		if recoverableStrategy, ok := w.strategy.(strategy.RecoverableStrategy); ok {
+			if err := recoverableStrategy.UnmarshalClientState(clientID, clientCheckpoint.StrategyState); err != nil {
+				slog.Warn("UnmarshalClientState failed", "client_id", clientID, "err", err)
+			}
+		}
+		w.lastSeen[clientID] = time.Now()
+	}
+}
+
+func (w *Worker) buildClientCheckpoint(clientID inner.ClientID) *checkpoint.ClientCheckpoint {
+	clientCheckpoint := &checkpoint.ClientCheckpoint{
+		ClientID:      string(clientID),
+		OutSeqID:      w.outSeqID[clientID],
+		LastRecvSeqID: w.serializeSeqMap(clientID),
+	}
+	if recoverableStrategy, ok := w.strategy.(strategy.RecoverableStrategy); ok {
+		data, err := recoverableStrategy.MarshalClientState(clientID)
+		if err != nil {
+			slog.Error("MarshalClientState failed, exiting before checkpoint", "client_id", clientID, "err", err)
+			os.Exit(1)
+		}
+		clientCheckpoint.StrategyState = data
+	}
+	return clientCheckpoint
+}
+
+func seqKeyOf(clientID inner.ClientID, h inner.Header) inner.SeqKey {
+	return inner.SeqKey{ClientID: clientID, StageType: h.SenderStageType, ReplicaID: h.SenderReplicaID}
+}
+
+func (w *Worker) serializeSeqMap(clientID inner.ClientID) map[string]uint64 {
+	out := map[string]uint64{}
+	for k, v := range w.lastRecvSeqID {
+		if k.ClientID == clientID {
+			out[fmt.Sprintf("%d:%d", k.StageType, k.ReplicaID)] = v
+		}
+	}
+	return out
+}
+
+func parseSeqKey(clientID inner.ClientID, s string) (inner.SeqKey, error) {
+	parts := strings.SplitN(s, ":", 2)
+	if len(parts) != 2 {
+		return inner.SeqKey{}, fmt.Errorf("malformed seq key %q", s)
+	}
+	st, err := strconv.ParseUint(parts[0], 10, 8)
+	if err != nil {
+		return inner.SeqKey{}, fmt.Errorf("malformed stage type in seq key %q: %w", s, err)
+	}
+	rid, err := strconv.ParseUint(parts[1], 10, 16)
+	if err != nil {
+		return inner.SeqKey{}, fmt.Errorf("malformed replica id in seq key %q: %w", s, err)
+	}
+	return inner.SeqKey{ClientID: clientID, StageType: uint8(st), ReplicaID: uint16(rid)}, nil
 }
 
 func (w *Worker) handleSignals() {
@@ -782,25 +1095,39 @@ func (w *Worker) shutdownWatcher() {
 	defer w.waitingGroup.Done()
 	<-w.ctx.Done()
 
-	w.strategyMu.Lock()
-	w.flushAll()
-	w.strategyMu.Unlock()
+	w.stateMu.Lock()
+	w.draining = true
+	for clientID := range w.pendingAcks {
+		w.checkpointAndAck(clientID)
+	}
+	w.flushMetaCheckpoint()
+	w.stateMu.Unlock()
 
-	for _, mw := range w.inputs {
-		_ = mw.StopConsuming()
-		_ = mw.Close()
-	}
-	if w.ringIn != nil {
-		_ = w.ringIn.StopConsuming()
-		_ = w.ringIn.Close()
-	}
-	if w.ringOut != nil {
-		_ = w.ringOut.Close()
-	}
-	for _, target := range w.outputs {
-		for _, mw := range target.Middlewares {
+	done := make(chan struct{})
+	go func() {
+		for _, mw := range w.inputs {
+			_ = mw.StopConsuming()
 			_ = mw.Close()
 		}
+		if w.ringIn != nil {
+			_ = w.ringIn.StopConsuming()
+			_ = w.ringIn.Close()
+		}
+		if w.ringOut != nil {
+			_ = w.ringOut.Close()
+		}
+		for _, target := range w.outputs {
+			for _, mw := range target.Middlewares {
+				_ = mw.Close()
+			}
+		}
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(w.cfg.AMQPCloseTimeout):
+		slog.Warn("AMQP close timed out, forcing exit")
+		os.Exit(0)
 	}
 }
 

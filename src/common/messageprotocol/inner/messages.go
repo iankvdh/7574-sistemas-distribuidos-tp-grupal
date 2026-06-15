@@ -150,20 +150,3 @@ func parseRingToken(header Header, body []byte) (*RingTokenMessage, error) {
 		Phase:         body[20],
 	}, nil
 }
-
-type ClientAbortedMessage struct {
-	Header
-}
-
-func (c *ClientAbortedMessage) Type() MessageType { return ClientAborted }
-
-func (c *ClientAbortedMessage) Serialize() ([]byte, error) {
-	return writeHeader(ClientAborted, c.Header)
-}
-
-func parseClientAborted(header Header, body []byte) (*ClientAbortedMessage, error) {
-	if len(body) != 0 {
-		return nil, ErrMalformedEnvelope
-	}
-	return &ClientAbortedMessage{Header: header}, nil
-}

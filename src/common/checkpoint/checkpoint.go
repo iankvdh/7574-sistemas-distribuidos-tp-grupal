@@ -94,11 +94,11 @@ func ReadClientCheckpoint(path string) (*ClientCheckpoint, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read checkpoint %s: %w", path, err)
 	}
-	var cp ClientCheckpoint
-	if err := json.Unmarshal(data, &cp); err != nil {
+	var clientCheckpoint ClientCheckpoint
+	if err := json.Unmarshal(data, &clientCheckpoint); err != nil {
 		return nil, fmt.Errorf("unmarshal checkpoint %s: %w", path, err)
 	}
-	return &cp, nil
+	return &clientCheckpoint, nil
 }
 
 func ReadMetaCheckpoint(dir string) (*MetaCheckpoint, error) {
