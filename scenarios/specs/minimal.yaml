@@ -15,7 +15,7 @@ workers:
   - name: filter_period1
     strategy: filter_period1
     replicas: 1
-    input: queue:all_transactions
+    input: bound_queue:all_transactions_{REPLICA_ID}:all_transactions:{REPLICA_ID}
     match_count: 2
     outputs:
       - queue:period1_for_wire_ach
@@ -131,7 +131,7 @@ workers:
   - name: bank_aggregator
     strategy: bank_aggregator
     replicas: 1
-    input: queue:all_accounts
+    input: bound_queue:all_accounts_{REPLICA_ID}:all_accounts:{REPLICA_ID}
     outputs:
       - direct_exchange:q2_agg_input
 

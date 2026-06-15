@@ -662,9 +662,11 @@ func (s *spec) renderServer(w io.Writer) error {
 	if sentinels <= 0 {
 		sentinels = defaultSentinelReplicas
 	}
+	nTxShards := shardCountForExchange(s.Workers, "all_transactions")
+	nAcctShards := shardCountForExchange(s.Workers, "all_accounts")
 	var gatewayNames []string
 	for i := 1; i <= s.Gateways; i++ {
-		writeGateway(w, i, logLevel, s.ExpectedQueryEOFs, sentinels)
+		writeGateway(w, i, logLevel, s.ExpectedQueryEOFs, sentinels, nTxShards, nAcctShards)
 		gatewayNames = append(gatewayNames, gatewayName(i))
 	}
 	injectDerivedEnvs(s.Workers, s.Fetchers)
@@ -797,7 +799,27 @@ func writeClientSplit(w io.Writer, label string, gateways int, transactions, acc
 
 func gatewayName(id int) string { return fmt.Sprintf("gateway_%d", id) }
 
-func writeGateway(w io.Writer, id int, logLevel string, expectedQueryEOFs, sentinels int) {
+// shardCountForExchange returns the replica count of the worker group that
+// consumes the given direct exchange via a bound_queue input. The gateway uses it
+// as the number of shards (routing keys) for that stream. Defaults to 1 when no
+// consumer is found (single shard).
+func shardCountForExchange(workers []workerSpec, exchange string) int {
+	for _, ws := range workers {
+		for _, in := range ws.Inputs {
+			// input format: bound_queue:QUEUE:EXCHANGE:ROUTING_KEY
+			parts := strings.Split(in, ":")
+			if len(parts) >= 3 && parts[0] == "bound_queue" && parts[2] == exchange {
+				if ws.Replicas > 0 {
+					return ws.Replicas
+				}
+				return 1
+			}
+		}
+	}
+	return 1
+}
+
+func writeGateway(w io.Writer, id int, logLevel string, expectedQueryEOFs, sentinels, nTxShards, nAcctShards int) {
 	name := gatewayName(id)
 	fmt.Fprintf(w, "  %s:\n", name)
 	fmt.Fprintln(w, "    build: { context: ./src/, dockerfile: gateway/Dockerfile }")
@@ -806,8 +828,10 @@ func writeGateway(w io.Writer, id int, logLevel string, expectedQueryEOFs, senti
 	fmt.Fprintln(w, "    env_file:")
 	fmt.Fprintln(w, "      - .env")
 	fmt.Fprintln(w, "    environment:")
-	fmt.Fprintln(w, "      - ALL_TRANSACTIONS_QUEUE=all_transactions")
-	fmt.Fprintln(w, "      - ALL_ACCOUNTS_QUEUE=all_accounts")
+	fmt.Fprintln(w, "      - ALL_TRANSACTIONS_EXCHANGE=all_transactions")
+	fmt.Fprintln(w, "      - ALL_ACCOUNTS_EXCHANGE=all_accounts")
+	fmt.Fprintf(w, "      - N_TX_SHARDS=%d\n", nTxShards)
+	fmt.Fprintf(w, "      - N_ACCOUNT_SHARDS=%d\n", nAcctShards)
 	fmt.Fprintln(w, "      - FINAL_QUEUE=final")
 	fmt.Fprintf(w, "      - GATEWAY_ID=%d\n", id)
 	fmt.Fprintln(w, "      - SERVER_HOST=0.0.0.0")
