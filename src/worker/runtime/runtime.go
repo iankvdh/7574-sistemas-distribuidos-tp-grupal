@@ -502,15 +502,12 @@ func tokenFromMessage(m *inner.RingTokenMessage) *eof.Token {
 
 func (w *Worker) processBatch(batch *inner.BatchMessage, rawBatch []byte, inputIndex int) (bool, error) {
 	if rawStrat, ok := w.strategy.(strategy.RawBatchStrategy); ok {
-		if err := rawStrat.ValidateRawBatch(batch, rawBatch, inputIndex); err != nil {
+		outputs, _, handled, err := rawStrat.ProcessRawBatch(batch, rawBatch, inputIndex)
+		if err != nil {
 			if errors.Is(err, strategy.ErrInvalidData) {
 				slog.Warn("RawBatchStrategy: invalid batch, discarding", "client_id", batch.ClientID, "err", err)
 				return false, nil
 			}
-			return false, err
-		}
-		outputs, _, handled, err := rawStrat.ProcessRawBatch(batch, rawBatch, inputIndex)
-		if err != nil {
 			return false, err
 		}
 		if err := w.appendOutputMessages(batch.GatewayID, outputs); err != nil {
@@ -1027,6 +1024,13 @@ func (w *Worker) loadCheckpoints() {
 		}
 		w.lastSeen[clientID] = time.Now()
 	}
+	if booster, ok := w.strategy.(strategy.SeqIDRecoverer); ok {
+		for sk, maxSeq := range booster.BoostSeqIDs() {
+			if maxSeq > w.lastRecvSeqID[sk] {
+				w.lastRecvSeqID[sk] = maxSeq
+			}
+		}
+	}
 }
 
 func (w *Worker) buildClientCheckpoint(clientID inner.ClientID) *checkpoint.ClientCheckpoint {
@@ -1101,6 +1105,9 @@ func (w *Worker) shutdownWatcher() {
 		w.checkpointAndAck(clientID)
 	}
 	w.flushMetaCheckpoint()
+	if flusher, ok := w.strategy.(strategy.BufferFlusher); ok {
+		flusher.CloseAllBuffers()
+	}
 	w.stateMu.Unlock()
 
 	done := make(chan struct{})
