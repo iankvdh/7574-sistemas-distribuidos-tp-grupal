@@ -1,6 +1,7 @@
 package finaljoiner
 
 import (
+	"encoding/json"
 	"fmt"
 	"strconv"
 
@@ -9,6 +10,10 @@ import (
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/messageprotocol/inner"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy"
 )
+
+type finalJoinerCheckpoint struct {
+	JACs map[string]eof.JACStateSnapshot `json:"jacs"`
+}
 
 var supportedQueries = []uint8{1, 2, 3, 4, 5}
 
@@ -91,6 +96,36 @@ func (j *FinalJoiner) OnUpstreamEOF(envelope *inner.Envelope) (strategy.EOFOutco
 
 func (j *FinalJoiner) OnRingToken(_ *eof.Token) (strategy.EOFOutcome, error) {
 	return strategy.EOFOutcome{Action: eof.Action{Kind: eof.ActionNone}}, nil
+}
+
+func (j *FinalJoiner) MarshalClientState(clientID inner.ClientID) ([]byte, error) {
+	checkPoint := finalJoinerCheckpoint{
+		JACs: make(map[string]eof.JACStateSnapshot, len(j.coordinators)),
+	}
+	for qid, coord := range j.coordinators {
+		checkPoint.JACs[fmt.Sprintf("q%d", qid)] = coord.GetClientJACState(clientID)
+	}
+	return json.Marshal(checkPoint)
+}
+
+func (j *FinalJoiner) UnmarshalClientState(clientID inner.ClientID, data []byte) error {
+	var checkPoint finalJoinerCheckpoint
+	if err := json.Unmarshal(data, &checkPoint); err != nil {
+		return err
+	}
+	for qid, coord := range j.coordinators {
+		key := fmt.Sprintf("q%d", qid)
+		if snap, ok := checkPoint.JACs[key]; ok {
+			coord.RestoreClientJACState(clientID, snap)
+		}
+	}
+	return nil
+}
+
+func (j *FinalJoiner) CleanupClient(clientID inner.ClientID) {
+	for _, coord := range j.coordinators {
+		coord.CleanupClient(clientID)
+	}
 }
 
 // outputIndexFor maps the originating gateway (1-based) to an output index

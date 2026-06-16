@@ -1,6 +1,7 @@
 package joiner
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
@@ -9,6 +10,12 @@ import (
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/messageprotocol/inner"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy"
 )
+
+type joinerCheckpoint struct {
+	ReceivedFrom map[string]uint32 `json:"received_from"`
+	Received     uint64            `json:"received"`
+	AllEOFsSeen  bool              `json:"all_eofs_seen"`
+}
 
 const defaultExpectedEOFs = 3 // period1, period2, other_periods
 
@@ -109,8 +116,40 @@ func (j *EOFJoiner) emitOutcome(clientID inner.ClientID) strategy.EOFOutcome {
 	for i := 0; i < j.cfg.OutputCount; i++ {
 		emits[i] = eof.EOFEmit{OutputIndex: i, Total: uint32(total)}
 	}
+	return strategy.EOFOutcome{
+		Action:          eof.Action{Kind: eof.ActionEmitEOFs},
+		EOFs:            emits,
+		ClientCompleted: true,
+	}
+}
+
+func (j *EOFJoiner) MarshalClientState(clientID inner.ClientID) ([]byte, error) {
+	state := j.state[clientID]
+	if state == nil {
+		return json.Marshal(joinerCheckpoint{ReceivedFrom: map[string]uint32{}})
+	}
+	return json.Marshal(joinerCheckpoint{
+		ReceivedFrom: state.receivedFrom,
+		Received:     state.received,
+		AllEOFsSeen:  state.allEOFsSeen,
+	})
+}
+
+func (j *EOFJoiner) UnmarshalClientState(clientID inner.ClientID, data []byte) error {
+	var checkPoint joinerCheckpoint
+	if err := json.Unmarshal(data, &checkPoint); err != nil {
+		return err
+	}
+	j.state[clientID] = &joinerState{
+		receivedFrom: checkPoint.ReceivedFrom,
+		received:     checkPoint.Received,
+		allEOFsSeen:  checkPoint.AllEOFsSeen,
+	}
+	return nil
+}
+
+func (j *EOFJoiner) CleanupClient(clientID inner.ClientID) {
 	delete(j.state, clientID)
-	return strategy.EOFOutcome{Action: eof.Action{Kind: eof.ActionEmitEOFs}, EOFs: emits}
 }
 
 func (j *EOFJoiner) stateFor(clientID inner.ClientID) *joinerState {
