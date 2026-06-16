@@ -1,9 +1,11 @@
 package suspicious_filter
 
 import (
+	"encoding/json"
 	"fmt"
 	"runtime"
 	"strconv"
+	"strings"
 
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/env"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/eof"
@@ -31,6 +33,18 @@ type accountState struct {
 
 type clientState struct {
 	accounts map[accountKey]*accountState
+}
+
+type accountStateJSON struct {
+	OutAccounts   []string `json:"out_accounts,omitempty"`
+	InAccounts    []string `json:"in_accounts,omitempty"`
+	OutSuspicious bool     `json:"out_suspicious"`
+	InSuspicious  bool     `json:"in_suspicious"`
+}
+
+type suspFilterCheckpoint struct {
+	Accounts map[string]*accountStateJSON `json:"accounts"`
+	JAC      eof.JACStateSnapshot         `json:"jac"`
 }
 
 type SuspiciousFilter struct {
@@ -197,16 +211,83 @@ func (s *SuspiciousFilter) OnUpstreamEOF(envelope *inner.Envelope) (strategy.EOF
 	if action.Kind != eof.ActionEmitEOFs {
 		return strategy.EOFOutcome{Action: action}, nil
 	}
-	delete(s.state, envelope.ClientID)
-	runtime.GC()
 	return strategy.EOFOutcome{
-		Action: eof.Action{Kind: eof.ActionEmitEOFs},
-		EOFs:   s.buildEOFEmits(),
+		Action:          eof.Action{Kind: eof.ActionEmitEOFs},
+		EOFs:            s.buildEOFEmits(),
+		ClientCompleted: true,
 	}, nil
 }
 
 func (s *SuspiciousFilter) OnRingToken(_ *eof.Token) (strategy.EOFOutcome, error) {
 	return strategy.EOFOutcome{Action: eof.Action{Kind: eof.ActionNone}}, nil
+}
+
+func (s *SuspiciousFilter) MarshalClientState(clientID inner.ClientID) ([]byte, error) {
+	state := s.state[clientID]
+	checkPoint := suspFilterCheckpoint{
+		JAC: s.coordinator.GetClientJACState(clientID),
+	}
+	if state != nil {
+		checkPoint.Accounts = make(map[string]*accountStateJSON, len(state.accounts))
+		for k, accSt := range state.accounts {
+			aj := &accountStateJSON{
+				OutSuspicious: accSt.outSuspicious,
+				InSuspicious:  accSt.inSuspicious,
+			}
+			for acc := range accSt.outAccounts {
+				aj.OutAccounts = append(aj.OutAccounts, accountKeyString(acc.Bank, acc.Account))
+			}
+			for acc := range accSt.inAccounts {
+				aj.InAccounts = append(aj.InAccounts, accountKeyString(acc.Bank, acc.Account))
+			}
+			checkPoint.Accounts[accountKeyString(k.Bank, k.Account)] = aj
+		}
+	}
+	return json.Marshal(checkPoint)
+}
+
+func (s *SuspiciousFilter) UnmarshalClientState(clientID inner.ClientID, data []byte) error {
+	var checkPoint suspFilterCheckpoint
+	if err := json.Unmarshal(data, &checkPoint); err != nil {
+		return err
+	}
+	state := s.stateFor(clientID)
+	state.accounts = make(map[accountKey]*accountState, len(checkPoint.Accounts))
+	for ks, aj := range checkPoint.Accounts {
+		k, err := decodeAccountKey(ks)
+		if err != nil {
+			return fmt.Errorf("decode account key %q: %w", ks, err)
+		}
+		accSt := &accountState{
+			outSuspicious: aj.OutSuspicious,
+			inSuspicious:  aj.InSuspicious,
+			outAccounts:   make(map[accountKey]struct{}, len(aj.OutAccounts)),
+			inAccounts:    make(map[accountKey]struct{}, len(aj.InAccounts)),
+		}
+		for _, raw := range aj.OutAccounts {
+			acc, err := decodeAccountKey(raw)
+			if err != nil {
+				return fmt.Errorf("decode out account %q: %w", raw, err)
+			}
+			accSt.outAccounts[acc] = struct{}{}
+		}
+		for _, raw := range aj.InAccounts {
+			acc, err := decodeAccountKey(raw)
+			if err != nil {
+				return fmt.Errorf("decode in account %q: %w", raw, err)
+			}
+			accSt.inAccounts[acc] = struct{}{}
+		}
+		state.accounts[k] = accSt
+	}
+	s.coordinator.RestoreClientJACState(clientID, checkPoint.JAC)
+	return nil
+}
+
+func (s *SuspiciousFilter) CleanupClient(clientID inner.ClientID) {
+	delete(s.state, clientID)
+	s.coordinator.CleanupClient(clientID)
+	runtime.GC()
 }
 
 func (s *SuspiciousFilter) buildEOFEmits() []eof.EOFEmit {
@@ -221,12 +302,12 @@ func (s *SuspiciousFilter) buildEOFEmits() []eof.EOFEmit {
 }
 
 func (s *SuspiciousFilter) stateFor(clientID inner.ClientID) *clientState {
-	st, ok := s.state[clientID]
+	state, ok := s.state[clientID]
 	if !ok {
-		st = &clientState{accounts: map[accountKey]*accountState{}}
-		s.state[clientID] = st
+		state = &clientState{accounts: map[accountKey]*accountState{}}
+		s.state[clientID] = state
 	}
-	return st
+	return state
 }
 
 func (c *clientState) accountFor(k accountKey) *accountState {
@@ -243,4 +324,16 @@ func (c *clientState) accountFor(k accountKey) *accountState {
 
 func accountKeyString(bank uint32, account string) string {
 	return fmt.Sprintf("%d|%s", bank, account)
+}
+
+func decodeAccountKey(s string) (accountKey, error) {
+	idx := strings.IndexByte(s, '|')
+	if idx < 0 {
+		return accountKey{}, fmt.Errorf("missing separator in %q", s)
+	}
+	bank, err := strconv.ParseUint(s[:idx], 10, 32)
+	if err != nil {
+		return accountKey{}, fmt.Errorf("bad bank in %q: %w", s, err)
+	}
+	return accountKey{Bank: uint32(bank), Account: s[idx+1:]}, nil
 }

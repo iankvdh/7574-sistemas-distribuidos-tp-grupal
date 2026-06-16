@@ -1,8 +1,10 @@
 package pathfinder
 
 import (
+	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/env"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/eof"
@@ -25,6 +27,16 @@ type accountState struct {
 
 type clientState struct {
 	accounts map[accountKey]*accountState
+}
+
+type accountStateJSON struct {
+	InSet  []string `json:"in"`
+	OutSet []string `json:"out"`
+}
+
+type pathFinderCheckpoint struct {
+	Accounts map[string]*accountStateJSON `json:"accounts"`
+	JAC      eof.JACStateSnapshot         `json:"jac"`
 }
 
 type PathFinder struct {
@@ -76,12 +88,12 @@ func (p *PathFinder) ProcessMessage(envelope *inner.Envelope) ([]strategy.Output
 
 	source := accountKey{Bank: stx.FromBank, Account: stx.FromAccount}
 	dest := accountKey{Bank: stx.ToBank, Account: stx.ToAccount}
-	st := p.stateFor(envelope.ClientID)
+	state := p.stateFor(envelope.ClientID)
 
 	if stx.ShardedBySource {
 		// source = M (intermediate), dest = B. Add B to M.outSet.
 		// For each A already in M.inSet emit (A, M, B).
-		accSt := st.accountFor(source)
+		accSt := state.accountFor(source)
 		if _, exists := accSt.outSet[dest]; exists {
 			return nil, strategy.LocalCounts{Processed: 1}, nil
 		}
@@ -98,7 +110,7 @@ func (p *PathFinder) ProcessMessage(envelope *inner.Envelope) ([]strategy.Output
 
 	// dest = M (intermediate), source = A. Add A to M.inSet.
 	// For each B already in M.outSet emit (A, M, B).
-	accSt := st.accountFor(dest)
+	accSt := state.accountFor(dest)
 	if _, exists := accSt.inSet[source]; exists {
 		return nil, strategy.LocalCounts{Processed: 1}, nil
 	}
@@ -141,15 +153,80 @@ func (p *PathFinder) OnUpstreamEOF(envelope *inner.Envelope) (strategy.EOFOutcom
 	if action.Kind != eof.ActionEmitEOFs {
 		return strategy.EOFOutcome{Action: action}, nil
 	}
-	delete(p.state, envelope.ClientID)
 	return strategy.EOFOutcome{
-		Action: eof.Action{Kind: eof.ActionEmitEOFs},
-		EOFs:   p.buildEOFEmits(),
+		Action:          eof.Action{Kind: eof.ActionEmitEOFs},
+		EOFs:            p.buildEOFEmits(),
+		ClientCompleted: true,
 	}, nil
 }
 
 func (p *PathFinder) OnRingToken(_ *eof.Token) (strategy.EOFOutcome, error) {
 	return strategy.EOFOutcome{Action: eof.Action{Kind: eof.ActionNone}}, nil
+}
+
+func (p *PathFinder) MarshalClientState(clientID inner.ClientID) ([]byte, error) {
+	state := p.state[clientID]
+	checkPoint := pathFinderCheckpoint{
+		JAC: p.coordinator.GetClientJACState(clientID),
+	}
+	if state != nil {
+		checkPoint.Accounts = make(map[string]*accountStateJSON, len(state.accounts))
+		for k, accSt := range state.accounts {
+			aj := &accountStateJSON{
+				InSet:  make([]string, 0, len(accSt.inSet)),
+				OutSet: make([]string, 0, len(accSt.outSet)),
+			}
+			for acc := range accSt.inSet {
+				aj.InSet = append(aj.InSet, encodeAccountKey(acc))
+			}
+			for acc := range accSt.outSet {
+				aj.OutSet = append(aj.OutSet, encodeAccountKey(acc))
+			}
+			checkPoint.Accounts[encodeAccountKey(k)] = aj
+		}
+	}
+	return json.Marshal(checkPoint)
+}
+
+func (p *PathFinder) UnmarshalClientState(clientID inner.ClientID, data []byte) error {
+	var checkPoint pathFinderCheckpoint
+	if err := json.Unmarshal(data, &checkPoint); err != nil {
+		return err
+	}
+	state := p.stateFor(clientID)
+	state.accounts = make(map[accountKey]*accountState, len(checkPoint.Accounts))
+	for ks, aj := range checkPoint.Accounts {
+		k, err := decodeAccountKey(ks)
+		if err != nil {
+			return fmt.Errorf("decode account key %q: %w", ks, err)
+		}
+		accSt := &accountState{
+			inSet:  make(map[accountKey]struct{}, len(aj.InSet)),
+			outSet: make(map[accountKey]struct{}, len(aj.OutSet)),
+		}
+		for _, raw := range aj.InSet {
+			acc, err := decodeAccountKey(raw)
+			if err != nil {
+				return fmt.Errorf("decode in key %q: %w", raw, err)
+			}
+			accSt.inSet[acc] = struct{}{}
+		}
+		for _, raw := range aj.OutSet {
+			acc, err := decodeAccountKey(raw)
+			if err != nil {
+				return fmt.Errorf("decode out key %q: %w", raw, err)
+			}
+			accSt.outSet[acc] = struct{}{}
+		}
+		state.accounts[k] = accSt
+	}
+	p.coordinator.RestoreClientJACState(clientID, checkPoint.JAC)
+	return nil
+}
+
+func (p *PathFinder) CleanupClient(clientID inner.ClientID) {
+	delete(p.state, clientID)
+	p.coordinator.CleanupClient(clientID)
 }
 
 func (p *PathFinder) buildEOFEmits() []eof.EOFEmit {
@@ -164,12 +241,12 @@ func (p *PathFinder) buildEOFEmits() []eof.EOFEmit {
 }
 
 func (p *PathFinder) stateFor(clientID inner.ClientID) *clientState {
-	st, ok := p.state[clientID]
+	state, ok := p.state[clientID]
 	if !ok {
-		st = &clientState{accounts: map[accountKey]*accountState{}}
-		p.state[clientID] = st
+		state = &clientState{accounts: map[accountKey]*accountState{}}
+		p.state[clientID] = state
 	}
-	return st
+	return state
 }
 
 func (s *clientState) accountFor(k accountKey) *accountState {
@@ -182,6 +259,22 @@ func (s *clientState) accountFor(k accountKey) *accountState {
 		s.accounts[k] = a
 	}
 	return a
+}
+
+func encodeAccountKey(k accountKey) string {
+	return fmt.Sprintf("%d|%s", k.Bank, k.Account)
+}
+
+func decodeAccountKey(s string) (accountKey, error) {
+	idx := strings.IndexByte(s, '|')
+	if idx < 0 {
+		return accountKey{}, fmt.Errorf("missing separator in %q", s)
+	}
+	bank, err := strconv.ParseUint(s[:idx], 10, 32)
+	if err != nil {
+		return accountKey{}, fmt.Errorf("bad bank in %q: %w", s, err)
+	}
+	return accountKey{Bank: uint32(bank), Account: s[idx+1:]}, nil
 }
 
 func pairKey(srcBank uint32, srcAcc string, dstBank uint32, dstAcc string) string {
