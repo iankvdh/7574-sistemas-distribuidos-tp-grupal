@@ -1,6 +1,7 @@
 package micro_transaction_counter
 
 import (
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -13,6 +14,12 @@ import (
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/transaction"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy"
 )
+
+type microTxCheckpoint struct {
+	Count uint64                `json:"count"`
+	Seen  uint64                `json:"seen"`
+	Ring  eof.RingStateSnapshot `json:"ring"`
+}
 
 const (
 	queryID             uint8 = 5
@@ -174,9 +181,37 @@ func (m *MicroTransactionCounter) outcomeFor(clientID inner.ClientID, action eof
 			RoutingKey:  rk,
 			QueryID:     queryID,
 		}}
-		delete(m.state, clientID)
+		outcome.ClientCompleted = true
 	}
 	return outcome
+}
+
+func (m *MicroTransactionCounter) MarshalClientState(clientID inner.ClientID) ([]byte, error) {
+	state := m.state[clientID]
+	checkPoint := microTxCheckpoint{}
+	if state != nil {
+		checkPoint.Count = state.count
+		checkPoint.Seen = state.seen
+	}
+	checkPoint.Ring, _ = m.txRing.GetClientRingState(clientID)
+	return json.Marshal(checkPoint)
+}
+
+func (m *MicroTransactionCounter) UnmarshalClientState(clientID inner.ClientID, data []byte) error {
+	var checkPoint microTxCheckpoint
+	if err := json.Unmarshal(data, &checkPoint); err != nil {
+		return err
+	}
+	state := m.stateFor(clientID)
+	state.count = checkPoint.Count
+	state.seen = checkPoint.Seen
+	m.txRing.RestoreClientRingState(clientID, checkPoint.Ring)
+	return nil
+}
+
+func (m *MicroTransactionCounter) CleanupClient(clientID inner.ClientID) {
+	delete(m.state, clientID)
+	m.txRing.CleanupClient(clientID)
 }
 
 func (m *MicroTransactionCounter) processTxPayload(clientID inner.ClientID, payload []byte) (bool, error) {
