@@ -1,8 +1,10 @@
 package counter
 
 import (
+	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/env"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/eof"
@@ -31,6 +33,16 @@ type pairState struct {
 
 type clientState struct {
 	pairs map[pairKey]*pairState
+}
+
+type pairStateJSON struct {
+	Intermediaries []string `json:"intermediaries"`
+	Emitted        bool     `json:"emitted"`
+}
+
+type counterCheckpoint struct {
+	Pairs map[string]*pairStateJSON `json:"pairs"`
+	JAC   eof.JACStateSnapshot      `json:"jac"`
 }
 
 type Counter struct {
@@ -85,8 +97,8 @@ func (c *Counter) ProcessMessage(envelope *inner.Envelope) ([]strategy.OutputMes
 	dest := accountKey{Bank: path.DestBank, Account: path.DestAccount}
 
 	key := pairKey{Source: source, Dest: dest}
-	st := c.stateFor(envelope.ClientID)
-	ps := st.pairFor(key)
+	state := c.stateFor(envelope.ClientID)
+	ps := state.pairFor(key)
 
 	if ps.emitted {
 		return nil, strategy.LocalCounts{Processed: 1}, nil
@@ -129,9 +141,9 @@ func (c *Counter) OnUpstreamEOF(envelope *inner.Envelope) (strategy.EOFOutcome, 
 	if action.Kind != eof.ActionEmitEOFs {
 		return strategy.EOFOutcome{Action: action}, nil
 	}
-	delete(c.state, envelope.ClientID)
 	return strategy.EOFOutcome{
-		Action: eof.Action{Kind: eof.ActionEmitEOFs},
+		Action:          eof.Action{Kind: eof.ActionEmitEOFs},
+		ClientCompleted: true,
 		EOFs: []eof.EOFEmit{{
 			OutputIndex: 0,
 			RoutingKey:  c.routingKeyFor(envelope.ClientID),
@@ -144,17 +156,72 @@ func (c *Counter) OnRingToken(_ *eof.Token) (strategy.EOFOutcome, error) {
 	return strategy.EOFOutcome{Action: eof.Action{Kind: eof.ActionNone}}, nil
 }
 
+func (c *Counter) MarshalClientState(clientID inner.ClientID) ([]byte, error) {
+	state := c.state[clientID]
+	checkPoint := counterCheckpoint{
+		JAC: c.coordinator.GetClientJACState(clientID),
+	}
+	if state != nil {
+		checkPoint.Pairs = make(map[string]*pairStateJSON, len(state.pairs))
+		for k, ps := range state.pairs {
+			pj := &pairStateJSON{
+				Emitted:        ps.emitted,
+				Intermediaries: make([]string, 0, len(ps.intermediaries)),
+			}
+			for acc := range ps.intermediaries {
+				pj.Intermediaries = append(pj.Intermediaries, encodeAccountKey(acc))
+			}
+			checkPoint.Pairs[encodePairKey(k)] = pj
+		}
+	}
+	return json.Marshal(checkPoint)
+}
+
+func (c *Counter) UnmarshalClientState(clientID inner.ClientID, data []byte) error {
+	var checkPoint counterCheckpoint
+	if err := json.Unmarshal(data, &checkPoint); err != nil {
+		return err
+	}
+	state := c.stateFor(clientID)
+	state.pairs = make(map[pairKey]*pairState, len(checkPoint.Pairs))
+	for ks, pj := range checkPoint.Pairs {
+		k, err := decodePairKey(ks)
+		if err != nil {
+			return fmt.Errorf("decode pair key %q: %w", ks, err)
+		}
+		ps := &pairState{
+			emitted:        pj.Emitted,
+			intermediaries: make(map[accountKey]struct{}, len(pj.Intermediaries)),
+		}
+		for _, raw := range pj.Intermediaries {
+			acc, err := decodeAccountKey(raw)
+			if err != nil {
+				return fmt.Errorf("decode intermediary %q: %w", raw, err)
+			}
+			ps.intermediaries[acc] = struct{}{}
+		}
+		state.pairs[k] = ps
+	}
+	c.coordinator.RestoreClientJACState(clientID, checkPoint.JAC)
+	return nil
+}
+
+func (c *Counter) CleanupClient(clientID inner.ClientID) {
+	delete(c.state, clientID)
+	c.coordinator.CleanupClient(clientID)
+}
+
 func (c *Counter) routingKeyFor(clientID inner.ClientID) string {
 	return strconv.Itoa(hashing.Shard(string(clientID), c.nFinalJoiners))
 }
 
 func (c *Counter) stateFor(clientID inner.ClientID) *clientState {
-	st, ok := c.state[clientID]
+	state, ok := c.state[clientID]
 	if !ok {
-		st = &clientState{pairs: map[pairKey]*pairState{}}
-		c.state[clientID] = st
+		state = &clientState{pairs: map[pairKey]*pairState{}}
+		c.state[clientID] = state
 	}
-	return st
+	return state
 }
 
 func (s *clientState) pairFor(key pairKey) *pairState {
@@ -164,4 +231,40 @@ func (s *clientState) pairFor(key pairKey) *pairState {
 		s.pairs[key] = ps
 	}
 	return ps
+}
+
+func encodeAccountKey(k accountKey) string {
+	return fmt.Sprintf("%d|%s", k.Bank, k.Account)
+}
+
+func decodeAccountKey(s string) (accountKey, error) {
+	idx := strings.IndexByte(s, '|')
+	if idx < 0 {
+		return accountKey{}, fmt.Errorf("missing separator in %q", s)
+	}
+	bank, err := strconv.ParseUint(s[:idx], 10, 32)
+	if err != nil {
+		return accountKey{}, fmt.Errorf("bad bank in %q: %w", s, err)
+	}
+	return accountKey{Bank: uint32(bank), Account: s[idx+1:]}, nil
+}
+
+func encodePairKey(k pairKey) string {
+	return fmt.Sprintf("%s→%s", encodeAccountKey(k.Source), encodeAccountKey(k.Dest))
+}
+
+func decodePairKey(s string) (pairKey, error) {
+	idx := strings.Index(s, "→")
+	if idx < 0 {
+		return pairKey{}, fmt.Errorf("missing arrow separator in %q", s)
+	}
+	src, err := decodeAccountKey(s[:idx])
+	if err != nil {
+		return pairKey{}, fmt.Errorf("decode source in pair %q: %w", s, err)
+	}
+	dst, err := decodeAccountKey(s[idx+len("→"):])
+	if err != nil {
+		return pairKey{}, fmt.Errorf("decode dest in pair %q: %w", s, err)
+	}
+	return pairKey{Source: src, Dest: dst}, nil
 }
