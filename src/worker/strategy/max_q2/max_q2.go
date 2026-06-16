@@ -3,7 +3,7 @@ package max_q2
 import (
 	"encoding/json"
 	"fmt"
-	"sort"
+	"slices"
 	"strconv"
 
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/env"
@@ -107,7 +107,7 @@ func (m *MaxQ2) outcomeFor(clientID inner.ClientID, action eof.Action) strategy.
 		for k := range st.maxes {
 			bankIDs = append(bankIDs, k)
 		}
-		sort.Slice(bankIDs, func(i, j int) bool { return bankIDs[i] < bankIDs[j] })
+		slices.Sort(bankIDs)
 
 		outputs := make([]strategy.OutputMessage, 0, len(st.maxes))
 		for _, bankID := range bankIDs {
@@ -141,12 +141,12 @@ func (m *MaxQ2) outcomeFor(clientID inner.ClientID, action eof.Action) strategy.
 }
 
 func (m *MaxQ2) MarshalClientState(clientID inner.ClientID) ([]byte, error) {
-	clientState := m.state[clientID]
+	state := m.state[clientID]
 	checkPoint := maxQ2Checkpoint{}
-	if clientState != nil {
-		checkPoint.Processed = clientState.processed
-		checkPoint.Maxes = make(map[string]*partialMax, len(clientState.maxes))
-		for k, v := range clientState.maxes {
+	if state != nil {
+		checkPoint.Processed = state.processed
+		checkPoint.Maxes = make(map[string]*partialMax, len(state.maxes))
+		for k, v := range state.maxes {
 			checkPoint.Maxes[strconv.FormatUint(uint64(k), 10)] = v
 		}
 	}
@@ -159,15 +159,15 @@ func (m *MaxQ2) UnmarshalClientState(clientID inner.ClientID, data []byte) error
 	if err := json.Unmarshal(data, &checkPoint); err != nil {
 		return err
 	}
-	clientState := m.stateFor(clientID)
-	clientState.processed = checkPoint.Processed
-	clientState.maxes = make(map[uint32]*partialMax, len(checkPoint.Maxes))
+	state := m.stateFor(clientID)
+	state.processed = checkPoint.Processed
+	state.maxes = make(map[uint32]*partialMax, len(checkPoint.Maxes))
 	for k, v := range checkPoint.Maxes {
 		bankID, err := strconv.ParseUint(k, 10, 32)
 		if err != nil {
 			return fmt.Errorf("bad bank id key %q: %w", k, err)
 		}
-		clientState.maxes[uint32(bankID)] = v
+		state.maxes[uint32(bankID)] = v
 	}
 	m.ringCoordinator.RestoreClientRingState(clientID, checkPoint.Ring)
 	return nil
@@ -183,10 +183,10 @@ func (m *MaxQ2) routingKeyFor(clientID inner.ClientID, bankID uint32) string {
 }
 
 func (m *MaxQ2) stateFor(clientID inner.ClientID) *clientState {
-	st, ok := m.state[clientID]
+	state, ok := m.state[clientID]
 	if !ok {
-		st = &clientState{maxes: map[uint32]*partialMax{}}
-		m.state[clientID] = st
+		state = &clientState{maxes: map[uint32]*partialMax{}}
+		m.state[clientID] = state
 	}
-	return st
+	return state
 }

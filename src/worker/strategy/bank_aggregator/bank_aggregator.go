@@ -1,7 +1,9 @@
 package bank_aggregator
 
 import (
+	"encoding/json"
 	"fmt"
+	"slices"
 	"strconv"
 
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/env"
@@ -11,6 +13,12 @@ import (
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/messageprotocol/inner"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy"
 )
+
+type bankAggCheckpoint struct {
+	Processed uint64                `json:"processed"`
+	BankNames map[string]string     `json:"banks"`
+	Ring      eof.RingStateSnapshot `json:"ring"`
+}
 
 const queryID uint8 = 2
 
@@ -88,9 +96,16 @@ func (b *BankAggregator) outcomeFor(clientID inner.ClientID, action eof.Action) 
 	switch action.Kind {
 	case eof.ActionEmitEOFs, eof.ActionEmitEOFsAndForwardToken:
 		st := b.stateFor(clientID)
+
+		bankIDs := make([]uint32, 0, len(st.bankNames))
+		for k := range st.bankNames {
+			bankIDs = append(bankIDs, k)
+		}
+		slices.Sort(bankIDs)
+
 		outputs := make([]strategy.OutputMessage, 0, len(st.bankNames))
-		for bankID, name := range st.bankNames {
-			body, err := inner.SerializeQ2BankName(&inner.Q2BankName{BankID: bankID, BankName: name})
+		for _, bankID := range bankIDs {
+			body, err := inner.SerializeQ2BankName(&inner.Q2BankName{BankID: bankID, BankName: st.bankNames[bankID]})
 			if err != nil {
 				continue
 			}
@@ -109,9 +124,47 @@ func (b *BankAggregator) outcomeFor(clientID inner.ClientID, action eof.Action) 
 			emits[i] = eof.EOFEmit{OutputIndex: 0, RoutingKey: b.rkCache[i], QueryID: queryID}
 		}
 		outcome.EOFs = emits
-		delete(b.state, clientID)
+		outcome.ClientCompleted = true
 	}
 	return outcome
+}
+
+func (b *BankAggregator) MarshalClientState(clientID inner.ClientID) ([]byte, error) {
+	state := b.state[clientID]
+	checkPoint := bankAggCheckpoint{}
+	if state != nil {
+		checkPoint.Processed = state.processed
+		checkPoint.BankNames = make(map[string]string, len(state.bankNames))
+		for k, v := range state.bankNames {
+			checkPoint.BankNames[strconv.FormatUint(uint64(k), 10)] = v
+		}
+	}
+	checkPoint.Ring, _ = b.ringCoordinator.GetClientRingState(clientID)
+	return json.Marshal(checkPoint)
+}
+
+func (b *BankAggregator) UnmarshalClientState(clientID inner.ClientID, data []byte) error {
+	var checkPoint bankAggCheckpoint
+	if err := json.Unmarshal(data, &checkPoint); err != nil {
+		return err
+	}
+	state := b.stateFor(clientID)
+	state.processed = checkPoint.Processed
+	state.bankNames = make(map[uint32]string, len(checkPoint.BankNames))
+	for k, v := range checkPoint.BankNames {
+		bankID, err := strconv.ParseUint(k, 10, 32)
+		if err != nil {
+			return fmt.Errorf("bad bank id key %q: %w", k, err)
+		}
+		state.bankNames[uint32(bankID)] = v
+	}
+	b.ringCoordinator.RestoreClientRingState(clientID, checkPoint.Ring)
+	return nil
+}
+
+func (b *BankAggregator) CleanupClient(clientID inner.ClientID) {
+	delete(b.state, clientID)
+	b.ringCoordinator.CleanupClient(clientID)
 }
 
 func (b *BankAggregator) routingKeyFor(clientID inner.ClientID, bankID uint32) string {
@@ -119,10 +172,10 @@ func (b *BankAggregator) routingKeyFor(clientID inner.ClientID, bankID uint32) s
 }
 
 func (b *BankAggregator) stateFor(clientID inner.ClientID) *clientState {
-	st, ok := b.state[clientID]
+	state, ok := b.state[clientID]
 	if !ok {
-		st = &clientState{bankNames: map[uint32]string{}}
-		b.state[clientID] = st
+		state = &clientState{bankNames: map[uint32]string{}}
+		b.state[clientID] = state
 	}
-	return st
+	return state
 }
