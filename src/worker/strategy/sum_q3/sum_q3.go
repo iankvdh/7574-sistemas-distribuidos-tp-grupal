@@ -1,7 +1,9 @@
 package sum_q3
 
 import (
+	"encoding/json"
 	"fmt"
+	"slices"
 	"strconv"
 
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/env"
@@ -15,13 +17,19 @@ import (
 const queryID uint8 = 3
 
 type partialAvg struct {
-	sum   float64
-	count uint64
+	Sum   float64
+	Count uint64
 }
 
 type clientState struct {
 	processed uint64
 	partials  map[string]*partialAvg
+}
+
+type sumQ3Checkpoint struct {
+	Processed uint64                 `json:"processed"`
+	Partials  map[string]*partialAvg `json:"partials"`
+	Ring      eof.RingStateSnapshot  `json:"ring"`
 }
 
 type SumQ3 struct {
@@ -75,8 +83,8 @@ func (a *SumQ3) ProcessMessage(envelope *inner.Envelope) ([]strategy.OutputMessa
 		pa = &partialAvg{}
 		st.partials[tx.PaymentFormat] = pa
 	}
-	pa.sum += tx.AmountPaid
-	pa.count++
+	pa.Sum += tx.AmountPaid
+	pa.Count++
 	return nil, strategy.LocalCounts{Processed: 1, Matched: 1}, nil
 }
 
@@ -101,12 +109,20 @@ func (a *SumQ3) outcomeFor(clientID inner.ClientID, action eof.Action) strategy.
 	case eof.ActionEmitEOFs, eof.ActionEmitEOFsAndForwardToken:
 		st := a.stateFor(clientID)
 		rk := a.routingKeyFor(clientID)
+
+		formats := make([]string, 0, len(st.partials))
+		for k := range st.partials {
+			formats = append(formats, k)
+		}
+		slices.Sort(formats)
+
 		outputs := make([]strategy.OutputMessage, 0, len(st.partials))
-		for format, pa := range st.partials {
+		for _, format := range formats {
+			pa := st.partials[format]
 			body, err := inner.SerializeQ3PartialAvg(&inner.Q3PartialAvg{
 				PaymentFormat: format,
-				Sum:           pa.sum,
-				Count:         pa.count,
+				Sum:           pa.Sum,
+				Count:         pa.Count,
 			})
 			if err != nil {
 				continue
@@ -126,9 +142,39 @@ func (a *SumQ3) outcomeFor(clientID inner.ClientID, action eof.Action) strategy.
 			RoutingKey:  rk,
 			QueryID:     queryID,
 		}}
-		delete(a.state, clientID)
+		outcome.ClientCompleted = true
 	}
 	return outcome
+}
+
+func (a *SumQ3) MarshalClientState(clientID inner.ClientID) ([]byte, error) {
+	state := a.state[clientID]
+	checkPoint := sumQ3Checkpoint{}
+	if state != nil {
+		checkPoint.Processed = state.processed
+		checkPoint.Partials = state.partials
+	}
+	checkPoint.Ring, _ = a.ringCoordinator.GetClientRingState(clientID)
+	return json.Marshal(checkPoint)
+}
+
+func (a *SumQ3) UnmarshalClientState(clientID inner.ClientID, data []byte) error {
+	var checkPoint sumQ3Checkpoint
+	if err := json.Unmarshal(data, &checkPoint); err != nil {
+		return err
+	}
+	st := a.stateFor(clientID)
+	st.processed = checkPoint.Processed
+	if checkPoint.Partials != nil {
+		st.partials = checkPoint.Partials
+	}
+	a.ringCoordinator.RestoreClientRingState(clientID, checkPoint.Ring)
+	return nil
+}
+
+func (a *SumQ3) CleanupClient(clientID inner.ClientID) {
+	delete(a.state, clientID)
+	a.ringCoordinator.CleanupClient(clientID)
 }
 
 func (a *SumQ3) routingKeyFor(clientID inner.ClientID) string {
