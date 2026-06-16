@@ -76,8 +76,15 @@ type RecoverableStrategy interface {
 
 type RawBatchStrategy interface {
 	Strategy
-	ValidateRawBatch(batch *inner.BatchMessage, rawBatch []byte, inputIndex int) error
 	ProcessRawBatch(batch *inner.BatchMessage, rawBatch []byte, inputIndex int) (
 		outputs []OutputMessage, counts LocalCounts, handled bool, err error,
 	)
+}
+
+type SeqIDRecoverer interface {
+	BoostSeqIDs() map[inner.SeqKey]uint64
+}
+
+type BufferFlusher interface {
+	CloseAllBuffers()
 }
