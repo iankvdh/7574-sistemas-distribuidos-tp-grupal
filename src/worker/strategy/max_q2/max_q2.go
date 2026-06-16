@@ -1,7 +1,9 @@
 package max_q2
 
 import (
+	"encoding/json"
 	"fmt"
+	"sort"
 	"strconv"
 
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/env"
@@ -15,13 +17,19 @@ import (
 const queryID uint8 = 2
 
 type partialMax struct {
-	fromAccount string
-	amount      float64
+	FromAccount string
+	Amount      float64
 }
 
 type clientState struct {
 	processed uint64
 	maxes     map[uint32]*partialMax
+}
+
+type maxQ2Checkpoint struct {
+	Processed uint64                 `json:"processed"`
+	Maxes     map[string]*partialMax `json:"maxes"`
+	Ring      eof.RingStateSnapshot  `json:"ring"`
 }
 
 type MaxQ2 struct {
@@ -71,8 +79,8 @@ func (m *MaxQ2) ProcessMessage(envelope *inner.Envelope) ([]strategy.OutputMessa
 	st.processed++
 
 	current, ok := st.maxes[tx.FromBank]
-	if !ok || tx.AmountPaid > current.amount {
-		st.maxes[tx.FromBank] = &partialMax{fromAccount: tx.FromAccount, amount: tx.AmountPaid}
+	if !ok || tx.AmountPaid > current.Amount {
+		st.maxes[tx.FromBank] = &partialMax{FromAccount: tx.FromAccount, Amount: tx.AmountPaid}
 	}
 	return nil, strategy.LocalCounts{Processed: 1, Matched: 1}, nil
 }
@@ -94,12 +102,20 @@ func (m *MaxQ2) outcomeFor(clientID inner.ClientID, action eof.Action) strategy.
 	switch action.Kind {
 	case eof.ActionEmitEOFs, eof.ActionEmitEOFsAndForwardToken:
 		st := m.stateFor(clientID)
+
+		bankIDs := make([]uint32, 0, len(st.maxes))
+		for k := range st.maxes {
+			bankIDs = append(bankIDs, k)
+		}
+		sort.Slice(bankIDs, func(i, j int) bool { return bankIDs[i] < bankIDs[j] })
+
 		outputs := make([]strategy.OutputMessage, 0, len(st.maxes))
-		for bankID, pm := range st.maxes {
+		for _, bankID := range bankIDs {
+			pm := st.maxes[bankID]
 			body, err := inner.SerializeQ2PartialMax(&inner.Q2PartialMax{
 				BankID:      bankID,
-				FromAccount: pm.fromAccount,
-				MaxAmount:   pm.amount,
+				FromAccount: pm.FromAccount,
+				MaxAmount:   pm.Amount,
 			})
 			if err != nil {
 				continue
@@ -119,9 +135,47 @@ func (m *MaxQ2) outcomeFor(clientID inner.ClientID, action eof.Action) strategy.
 			emits[i] = eof.EOFEmit{OutputIndex: 0, RoutingKey: m.rkCache[i], QueryID: queryID}
 		}
 		outcome.EOFs = emits
-		delete(m.state, clientID)
+		outcome.ClientCompleted = true
 	}
 	return outcome
+}
+
+func (m *MaxQ2) MarshalClientState(clientID inner.ClientID) ([]byte, error) {
+	clientState := m.state[clientID]
+	checkPoint := maxQ2Checkpoint{}
+	if clientState != nil {
+		checkPoint.Processed = clientState.processed
+		checkPoint.Maxes = make(map[string]*partialMax, len(clientState.maxes))
+		for k, v := range clientState.maxes {
+			checkPoint.Maxes[strconv.FormatUint(uint64(k), 10)] = v
+		}
+	}
+	checkPoint.Ring, _ = m.ringCoordinator.GetClientRingState(clientID)
+	return json.Marshal(checkPoint)
+}
+
+func (m *MaxQ2) UnmarshalClientState(clientID inner.ClientID, data []byte) error {
+	var checkPoint maxQ2Checkpoint
+	if err := json.Unmarshal(data, &checkPoint); err != nil {
+		return err
+	}
+	clientState := m.stateFor(clientID)
+	clientState.processed = checkPoint.Processed
+	clientState.maxes = make(map[uint32]*partialMax, len(checkPoint.Maxes))
+	for k, v := range checkPoint.Maxes {
+		bankID, err := strconv.ParseUint(k, 10, 32)
+		if err != nil {
+			return fmt.Errorf("bad bank id key %q: %w", k, err)
+		}
+		clientState.maxes[uint32(bankID)] = v
+	}
+	m.ringCoordinator.RestoreClientRingState(clientID, checkPoint.Ring)
+	return nil
+}
+
+func (m *MaxQ2) CleanupClient(clientID inner.ClientID) {
+	delete(m.state, clientID)
+	m.ringCoordinator.CleanupClient(clientID)
 }
 
 func (m *MaxQ2) routingKeyFor(clientID inner.ClientID, bankID uint32) string {
