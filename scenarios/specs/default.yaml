@@ -18,50 +18,50 @@ workers:
     input: bound_queue:all_transactions_{REPLICA_ID}:all_transactions:{REPLICA_ID}
     match_count: 2
     outputs:
-      - queue:period1_for_wire_ach
-      - queue:period1_for_currency_usd_p1
-      - queue:non_period1_transactions
+      - round_robin_queues:period1_for_wire_ach:3
+      - round_robin_queues:period1_for_currency_usd_p1:3
+      - round_robin_queues:non_period1_transactions:3
 
   - name: filter_wire_ach
     strategy: filter_wire_ach
     replicas: 3
-    input: queue:period1_for_wire_ach
+    input: queue:period1_for_wire_ach_{REPLICA_ID}
     match_count: 1
     outputs:
-      - queue:period1_wire_ach
+      - sharded_queues:period1_wire_ach:3
 
   - name: filter_currency_usd_p1
     strategy: filter_currency_usd_p1
     replicas: 3
-    input: queue:period1_for_currency_usd_p1
+    input: queue:period1_for_currency_usd_p1_{REPLICA_ID}
     match_count: 3
     outputs:
-      - queue:period1_usd_transactions
+      - round_robin_queues:period1_usd_transactions:3
       - sharded_queues:joiner_usd_input:3
-      - queue:q3_p1_usd
+      - sharded_queues:q3_p1_usd:3
 
   - name: filter_period2
     strategy: filter_period2
     replicas: 3
-    input: queue:non_period1_transactions
+    input: queue:non_period1_transactions_{REPLICA_ID}
     match_count: 1
     outputs:
-      - queue:period2_transactions
-      - queue:other_dates_transactions
+      - round_robin_queues:period2_transactions:3
+      - round_robin_queues:other_dates_transactions:3
 
   - name: filter_currency_usd_p2
     strategy: filter_currency_usd_p2
     replicas: 3
-    input: queue:period2_transactions
+    input: queue:period2_transactions_{REPLICA_ID}
     match_count: 2
     outputs:
       - sharded_queues:joiner_usd_input:3
-      - queue:q3_p2_for_filter
+      - sharded_queues:q3_p2_for_filter:1
 
   - name: filter_currency_usd_other_periods
     strategy: filter_currency_usd_other_periods
     replicas: 3
-    input: queue:other_dates_transactions
+    input: queue:other_dates_transactions_{REPLICA_ID}
     match_count: 1
     outputs:
       - sharded_queues:joiner_usd_input:3
@@ -71,28 +71,28 @@ workers:
     replicas: 3
     input: queue:joiner_usd_input_{REPLICA_ID}
     outputs:
-      - queue:usd_for_amount_lt_50
-      - queue:q2_input
+      - round_robin_queues:usd_for_amount_lt_50:3
+      - sharded_queues:q2_input:3
 
   - name: filter_amount_lt_50
     strategy: filter_amount_lt_50
     replicas: 3
-    input: queue:usd_for_amount_lt_50
+    input: queue:usd_for_amount_lt_50_{REPLICA_ID}
     match_count: 1
     outputs:
-      - queue:q1_input
+      - round_robin_queues:q1_input:3
 
   - name: sharder_q1
     strategy: sharder_q1
     replicas: 3
-    input: queue:q1_input
+    input: queue:q1_input_{REPLICA_ID}
     outputs:
       - direct_exchange:results
 
   - name: sharder_q4
     strategy: sharder_q4
     replicas: 3
-    input: queue:period1_usd_transactions
+    input: queue:period1_usd_transactions_{REPLICA_ID}
     outputs:
       - direct_exchange:q4_account_shards
 
@@ -124,7 +124,7 @@ workers:
   - name: max_q2
     strategy: max_q2
     replicas: 3
-    input: queue:q2_input
+    input: queue:q2_input_{REPLICA_ID}
     outputs:
       - direct_exchange:q2_agg_input
 
@@ -145,7 +145,7 @@ workers:
   - name: sum_q3
     strategy: sum_q3
     replicas: 3
-    input: queue:q3_p1_usd
+    input: queue:q3_p1_usd_{REPLICA_ID}
     outputs:
       - direct_exchange:q3_avg_global_input
 
@@ -160,7 +160,7 @@ workers:
     strategy: filter_q3
     replicas: 1
     inputs:
-      - queue:q3_p2_for_filter
+      - queue:q3_p2_for_filter_{REPLICA_ID}
       - direct_exchange:q3_averages:{REPLICA_ID}
     outputs:
       - direct_exchange:results
@@ -173,7 +173,7 @@ workers:
     replicas: 3
     inputs:
       - queue:conversions_{REPLICA_ID}
-      - queue:period1_wire_ach
+      - queue:period1_wire_ach_{REPLICA_ID}
     outputs:
       - direct_exchange:partial_counts_q5
     env:
