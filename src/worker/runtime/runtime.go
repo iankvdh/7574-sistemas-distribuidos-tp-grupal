@@ -54,8 +54,9 @@ type Worker struct {
 	totalPending   int
 	lastSeen       map[inner.ClientID]time.Time
 	tombstones     map[inner.ClientID]time.Time
-	lastRecvSeqID  map[inner.SeqKey]uint64
-	outSeqID       map[inner.ClientID]uint64
+	lastRecvSeqID    map[inner.SeqKey]uint64
+	outSeqID         map[inner.ClientID]uint64
+	roundRobinCtrs   map[inner.ClientID]map[int]uint64 // clientID → outputIdx → round-robin counter
 }
 
 type deliveryRef struct {
@@ -173,11 +174,12 @@ func New(cfg config.WorkerConfig) (*Worker, error) {
 		startedInputs:       make([]bool, len(inputs)),
 		deferredInputs:      deferred,
 
-		pendingAcks:   map[inner.ClientID][]deliveryRef{},
-		lastSeen:      map[inner.ClientID]time.Time{},
-		tombstones:    map[inner.ClientID]time.Time{},
-		lastRecvSeqID: map[inner.SeqKey]uint64{},
-		outSeqID:      map[inner.ClientID]uint64{},
+		pendingAcks:    map[inner.ClientID][]deliveryRef{},
+		lastSeen:       map[inner.ClientID]time.Time{},
+		tombstones:     map[inner.ClientID]time.Time{},
+		lastRecvSeqID:  map[inner.SeqKey]uint64{},
+		outSeqID:       map[inner.ClientID]uint64{},
+		roundRobinCtrs: map[inner.ClientID]map[int]uint64{},
 	}
 
 	w.loadCheckpoints()
@@ -206,7 +208,7 @@ func initOutputTargetBuffers(outputTargets []OutputTarget) []*outputTargetBuffer
 	buffers := make([]*outputTargetBuffer, len(outputTargets))
 	for i, target := range outputTargets {
 		shards := 1
-		if target.Kind == config.KindShardedQueues {
+		if target.Kind == config.KindShardedQueues || target.Kind == config.KindRoundRobinQueues {
 			shards = target.ShardCount
 		}
 		perShard := make([]map[batchKey]*pendingBatch, shards)
@@ -677,7 +679,7 @@ func (w *Worker) appendOutputMessages(gatewayID inner.GatewayID, outputMessages 
 
 func (w *Worker) appendToShard(idx int, gatewayID inner.GatewayID, om strategy.OutputMessage) error {
 	buf := w.outputTargetBuffers[idx]
-	shard := w.shardFor(buf.target, om.ClientID)
+	shard := w.dataShard(idx, buf.target, om.ClientID)
 	itemKind := om.BatchItemKind
 	if itemKind == 0 {
 		itemKind = inner.TransactionMessage
@@ -768,10 +770,28 @@ func (w *Worker) flushClientBuffers(clientID inner.ClientID) error {
 }
 
 func (w *Worker) shardFor(target OutputTarget, clientID inner.ClientID) int {
-	if target.Kind == config.KindShardedQueues {
+	if target.Kind == config.KindShardedQueues || target.Kind == config.KindRoundRobinQueues {
 		return hashing.Shard(string(clientID), target.ShardCount)
 	}
 	return 0
+}
+
+func (w *Worker) dataShard(idx int, target OutputTarget, clientID inner.ClientID) int {
+	switch target.Kind {
+	case config.KindShardedQueues:
+		return hashing.Shard(string(clientID), target.ShardCount)
+	case config.KindRoundRobinQueues:
+		ctrs := w.roundRobinCtrs[clientID]
+		if ctrs == nil {
+			ctrs = map[int]uint64{}
+			w.roundRobinCtrs[clientID] = ctrs
+		}
+		shard := int(ctrs[idx] % uint64(target.ShardCount))
+		ctrs[idx]++
+		return shard
+	default:
+		return 0
+	}
 }
 
 func (w *Worker) publishEOFs(env *inner.Envelope, emits []eof.EOFEmit) error {
@@ -928,6 +948,7 @@ func (w *Worker) cleanupClientState(clientID inner.ClientID) {
 		}
 	}
 	delete(w.outSeqID, clientID)
+	delete(w.roundRobinCtrs, clientID)
 	delete(w.lastSeen, clientID)
 	delete(w.upstreamEOFs, clientID)
 }
@@ -1017,6 +1038,15 @@ func (w *Worker) loadCheckpoints() {
 			w.lastRecvSeqID[sequenceKey] = sequenceId
 		}
 		w.outSeqID[clientID] = clientCheckpoint.OutSeqID
+		if len(clientCheckpoint.RoundRobin) > 0 {
+			ctrs := make(map[int]uint64, len(clientCheckpoint.RoundRobin))
+			for k, v := range clientCheckpoint.RoundRobin {
+				if idx, err := strconv.Atoi(k); err == nil {
+					ctrs[idx] = v
+				}
+			}
+			w.roundRobinCtrs[clientID] = ctrs
+		}
 		if recoverableStrategy, ok := w.strategy.(strategy.RecoverableStrategy); ok {
 			if err := recoverableStrategy.UnmarshalClientState(clientID, clientCheckpoint.StrategyState); err != nil {
 				slog.Warn("UnmarshalClientState failed", "client_id", clientID, "err", err)
@@ -1038,6 +1068,13 @@ func (w *Worker) buildClientCheckpoint(clientID inner.ClientID) *checkpoint.Clie
 		ClientID:      string(clientID),
 		OutSeqID:      w.outSeqID[clientID],
 		LastRecvSeqID: w.serializeSeqMap(clientID),
+	}
+	if ctrs, ok := w.roundRobinCtrs[clientID]; ok && len(ctrs) > 0 {
+		rr := make(map[string]uint64, len(ctrs))
+		for outIdx, cnt := range ctrs {
+			rr[strconv.Itoa(outIdx)] = cnt
+		}
+		clientCheckpoint.RoundRobin = rr
 	}
 	if recoverableStrategy, ok := w.strategy.(strategy.RecoverableStrategy); ok {
 		data, err := recoverableStrategy.MarshalClientState(clientID)

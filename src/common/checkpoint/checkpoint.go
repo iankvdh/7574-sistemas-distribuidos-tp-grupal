@@ -35,6 +35,7 @@ type ClientCheckpoint struct {
 	LastRecvSeqID map[string]uint64    `json:"lr,omitempty"` // "stageType:replicaID" → last seen SeqID
 	OutSeqID      uint64               `json:"os"`
 	OutCounts     map[string]uint64    `json:"oc,omitempty"` // "outputIndex|routingKey" → messages published
+	RoundRobin    map[string]uint64    `json:"rr,omitempty"` // "outputIndex" → round-robin counter for KindRoundRobinQueues
 }
 
 type MetaCheckpoint struct {

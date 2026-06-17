@@ -33,10 +33,10 @@ func BuildOutputTargets(outputConfigs []config.OutputConfig, conn middleware.Con
 				return nil, fmt.Errorf("open output %q: %w", outputConfig.Name, err)
 			}
 			targets = append(targets, OutputTarget{Name: outputConfig.Name, Kind: outputConfig.Kind, Middlewares: []middleware.Middleware{mw}})
-		case config.KindShardedQueues:
+		case config.KindShardedQueues, config.KindRoundRobinQueues:
 			if outputConfig.ShardCount <= 0 {
 				closeOutputTargets(targets)
-				return nil, fmt.Errorf("output %q: sharded_queues requires ShardCount>0", outputConfig.Name)
+				return nil, fmt.Errorf("output %q: sharded/round_robin queues requires ShardCount>0", outputConfig.Name)
 			}
 			shards := make([]middleware.Middleware, 0, outputConfig.ShardCount)
 			for i := 0; i < outputConfig.ShardCount; i++ {
