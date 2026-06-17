@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"log/slog"
 	"math/rand"
@@ -16,7 +17,6 @@ import (
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/fetcher/config"
 )
 
-const frankfurterClientID inner.ClientID = "00000000-0000-0000-0000-000000000005"
 const userAgent = "fetcher_q5/1.0"
 
 type Fetcher struct {
@@ -147,13 +147,14 @@ func (f *Fetcher) publishToAllQueues(rates *inner.Q5Conversions) error {
 }
 
 func (f *Fetcher) publishOne(mw middleware.Middleware, gatewayID inner.GatewayID, payload []byte) error {
+	senderReplicaID := conversionSenderReplicaID(f.cfg.BaseCurrency, f.cfg.Period1Start, f.cfg.Period1End)
 	batch := &inner.BatchMessage{
 		Header: inner.Header{
 			GatewayID:       gatewayID,
-			ClientID:        frankfurterClientID,
+			ClientID:        inner.Q5ConversionsClientID,
 			SeqID:           1,
 			SenderStageType: inner.StageFetcher,
-			SenderReplicaID: 0,
+			SenderReplicaID: senderReplicaID,
 		},
 		ItemKind: inner.Q5ConversionsItem,
 		Items:    []inner.BatchItem{{QueryID: 5, Payload: payload}},
@@ -168,10 +169,10 @@ func (f *Fetcher) publishOne(mw middleware.Middleware, gatewayID inner.GatewayID
 	eofMsg := &inner.EOFMessage{
 		Header: inner.Header{
 			GatewayID:       gatewayID,
-			ClientID:        frankfurterClientID,
+			ClientID:        inner.Q5ConversionsClientID,
 			SeqID:           2,
 			SenderStageType: inner.StageFetcher,
-			SenderReplicaID: 0,
+			SenderReplicaID: senderReplicaID,
 		},
 		QueryID: 5,
 		Total:   1,
@@ -185,6 +186,16 @@ func (f *Fetcher) publishOne(mw middleware.Middleware, gatewayID inner.GatewayID
 	}
 
 	return mw.FlushPublisher()
+}
+
+func conversionSenderReplicaID(baseCurrency, periodStart, periodEnd string) uint16 {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(baseCurrency))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(periodStart))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(periodEnd))
+	return uint16(h.Sum32()%0xFFFF) + 1
 }
 
 func fromISODate(iso string) (uint32, error) {
