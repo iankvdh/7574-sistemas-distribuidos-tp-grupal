@@ -54,9 +54,9 @@ type Worker struct {
 	totalPending   int
 	lastSeen       map[inner.ClientID]time.Time
 	tombstones     map[inner.ClientID]time.Time
-	lastRecvSeqID    map[inner.SeqKey]uint64
-	outSeqID         map[inner.ClientID]uint64
-	roundRobinCtrs   map[inner.ClientID]map[int]uint64 // clientID → outputIdx → round-robin counter
+	lastRecvSeqID  map[inner.SeqKey]uint64
+	outSeqID       map[inner.ClientID]uint64
+	roundRobinCtrs map[inner.ClientID]map[int]uint64 // clientID → outputIdx → round-robin counter
 }
 
 type deliveryRef struct {
@@ -146,13 +146,6 @@ func New(cfg config.WorkerConfig) (*Worker, error) {
 		return nil, err
 	}
 
-	deferred := map[int]bool{}
-	if def_input_provider, ok := strat.(strategy.DeferredInputProvider); ok {
-		for _, idx := range def_input_provider.DeferredInputs() {
-			deferred[idx] = true
-		}
-	}
-
 	if err := os.MkdirAll(cfg.CheckpointDir, checkpointDirPermissions); err != nil {
 		closeAll(inputs, ringIn, ringOut, outputTargets)
 		return nil, fmt.Errorf("create checkpoint dir %q: %w", cfg.CheckpointDir, err)
@@ -172,7 +165,7 @@ func New(cfg config.WorkerConfig) (*Worker, error) {
 		cancel:              cancel,
 		upstreamEOFs:        map[inner.ClientID]cachedEOF{},
 		startedInputs:       make([]bool, len(inputs)),
-		deferredInputs:      deferred,
+		deferredInputs:      map[int]bool{},
 
 		pendingAcks:    map[inner.ClientID][]deliveryRef{},
 		lastSeen:       map[inner.ClientID]time.Time{},
@@ -183,7 +176,18 @@ func New(cfg config.WorkerConfig) (*Worker, error) {
 	}
 
 	w.loadCheckpoints()
+	w.deferredInputs = deferredInputsForStrategy(strat)
 	return w, nil
+}
+
+func deferredInputsForStrategy(strat strategy.Strategy) map[int]bool {
+	deferred := map[int]bool{}
+	if defInputProvider, ok := strat.(strategy.DeferredInputProvider); ok {
+		for _, idx := range defInputProvider.DeferredInputs() {
+			deferred[idx] = true
+		}
+	}
+	return deferred
 }
 
 func initStrategy(outputTargets []OutputTarget, cfg config.WorkerConfig, strat strategy.Strategy, inputs []middleware.Middleware, ringIn middleware.Middleware, ringOut middleware.Middleware) error {

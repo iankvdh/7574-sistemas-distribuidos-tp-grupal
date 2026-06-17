@@ -42,7 +42,7 @@ help:
 	@echo ""
 	@echo "--- Servidor ---"
 	@echo "  up-server [SPEC=default]                              Genera y levanta el servidor (foreground, Ctrl-C graceful stop)."
-	@echo "  down-server                                           Para y elimina los contenedores del servidor."
+	@echo "  down-server                                           Para el servidor y elimina contenedores + volúmenes."
 	@echo "  logs                                                  Muestra los logs del servidor."
 	@echo ""
 	@echo "--- Clientes ---"
@@ -76,7 +76,7 @@ up-server:
 down-server:
 	@$(compose-server) stop -t 30
 	@$(call show_exit_codes,$(COMPOSE_PROJECT_NAME_SERVER))
-	@$(compose-server) down
+	@$(compose-server) down -v
 .PHONY: down-server
 
 logs:
