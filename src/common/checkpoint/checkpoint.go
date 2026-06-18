@@ -72,14 +72,16 @@ type JACEntry struct {
 }
 
 type ClientCheckpoint struct {
-	Version       int                  `json:"v"`
-	ClientID      string               `json:"cid"`
-	StrategyState []byte               `json:"ss,omitempty"`
-	RingStates    map[string]RingEntry `json:"rs,omitempty"`
-	JACStates     map[string]JACEntry  `json:"js,omitempty"`
-	LastRecvSeqID map[string]uint64    `json:"lr,omitempty"` // "stageType:replicaID" → last seen SeqID
-	OutSeqID      uint64               `json:"os"`
-	OutCounts     map[string]uint64    `json:"oc,omitempty"` // "outputIndex|routingKey" → messages published
+	Version            int                  `json:"v"`
+	ClientID           string               `json:"cid"`
+	StrategyState      []byte               `json:"ss,omitempty"`
+	RingStates         map[string]RingEntry `json:"rs,omitempty"`
+	JACStates          map[string]JACEntry  `json:"js,omitempty"`
+	LastRecvSeqID      map[string]uint64    `json:"lr,omitempty"` // "stageType:replicaID" → last seen SeqID
+	OutSeqID           uint64               `json:"os"`
+	OutCounts          map[string]uint64    `json:"oc,omitempty"` // "outputIndex|routingKey" → messages published
+	PendingEOFBody     []byte               `json:"peof,omitempty"`
+	PendingEOFInputIdx int                  `json:"peofidx,omitempty"`
 }
 
 type MetaCheckpoint struct {
