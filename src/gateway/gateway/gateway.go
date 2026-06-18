@@ -426,11 +426,12 @@ func (gateway *Gateway) handleTransactionBatch(state *clientregistry.ClientState
 	if err != nil {
 		return err
 	}
-	// Only consume a shard slot when there is a message to publish (an empty batch
-	// must not advance the round-robin counter).
 	routingKey := ""
 	if msg != nil {
-		routingKey = handler.NextTxShard(gateway.nTxShards)
+		routingKey, err = messagehandler.TxShardForBatch(batch, gateway.nTxShards)
+		if err != nil {
+			return err
+		}
 	}
 	return gateway.sendShardedAndAck(state, msg, gateway.txExchange, routingKey)
 }
@@ -454,7 +455,10 @@ func (gateway *Gateway) handleAccountBatch(state *clientregistry.ClientState, ha
 	}
 	routingKey := ""
 	if msg != nil {
-		routingKey = handler.NextAcctShard(gateway.nAcctShards)
+		routingKey, err = messagehandler.AcctShardForBatch(batch, gateway.nAcctShards)
+		if err != nil {
+			return err
+		}
 	}
 	return gateway.sendShardedAndAck(state, msg, gateway.acctExchange, routingKey)
 }
