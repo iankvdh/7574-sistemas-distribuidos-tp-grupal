@@ -1124,6 +1124,12 @@ func (w *Worker) loadCheckpoints() bool {
 				slog.Warn("UnmarshalClientState failed", "client_id", clientID, "err", err)
 			}
 		}
+		if len(clientCheckpoint.PendingEOFBody) > 0 {
+			w.upstreamEOFs[clientID] = cachedEOF{
+				inputIndex: clientCheckpoint.PendingEOFInputIdx,
+				msg:        middleware.Message{Body: string(clientCheckpoint.PendingEOFBody)},
+			}
+		}
 		w.lastSeen[clientID] = time.Now()
 		foundAnyCheckpoint = true
 	}
@@ -1163,6 +1169,10 @@ func (w *Worker) buildClientCheckpoint(clientID inner.ClientID) *checkpoint.Clie
 			os.Exit(1)
 		}
 		clientCheckpoint.StrategyState = data
+	}
+	if cached, ok := w.upstreamEOFs[clientID]; ok {
+		clientCheckpoint.PendingEOFBody = []byte(cached.msg.Body)
+		clientCheckpoint.PendingEOFInputIdx = cached.inputIndex
 	}
 	return clientCheckpoint
 }
