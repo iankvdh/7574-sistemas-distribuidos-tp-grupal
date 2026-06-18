@@ -42,6 +42,7 @@ type clientState struct {
 	bufferFile          *os.File
 	bufferWriter        *bufio.Writer
 	bufferCount         uint64
+	bufferedSeen        uint64
 	maxBufferedSeqID    map[bufferSeqKey]uint64
 }
 
@@ -49,6 +50,7 @@ type filterQ3Checkpoint struct {
 	AveragesEOFReceived bool                  `json:"avgEOF"`
 	P2EOFReceived       bool                  `json:"p2EOF"`
 	P2Seen              uint64                `json:"p2Seen"`
+	BufferedSeen        *uint64               `json:"bufSeen,omitempty"`
 	Averages            map[string]float64    `json:"avg,omitempty"`
 	BufferPath          string                `json:"buf"`
 	P2Ring              eof.RingStateSnapshot `json:"p2Ring"`
@@ -111,15 +113,20 @@ func (f *FilterQ3) ProcessRawBatch(
 		return nil, counts, false, nil
 	}
 	state := f.stateFor(batch.ClientID)
-	state.p2Seen += uint64(len(batch.Items))
+	itemCount := uint64(len(batch.Items))
 
 	if state.averagesEOFReceived {
 		out, filterErr := f.filterBatchItems(batch, state)
+		if filterErr == nil {
+			state.p2Seen += itemCount
+		}
 		return out, counts, true, filterErr
 	}
 	if err := f.appendToBuffer(state, rawBatch); err != nil {
 		return nil, counts, false, fmt.Errorf("buffer P2 batch: %w", err)
 	}
+	state.p2Seen += itemCount
+	state.bufferedSeen += itemCount
 	return nil, counts, true, nil
 }
 
@@ -296,20 +303,21 @@ func (f *FilterQ3) closeBufferForRead(st *clientState) error {
 	return nil
 }
 
-func (f *FilterQ3) recoverBufferState(state *clientState) {
+func (f *FilterQ3) recoverBufferState(state *clientState) uint64 {
 	state.maxBufferedSeqID = map[bufferSeqKey]uint64{}
 	file, err := os.OpenFile(state.bufferPath, os.O_RDWR, 0o644)
 	if os.IsNotExist(err) {
-		return
+		return 0
 	}
 	if err != nil {
 		slog.Warn("filter_q3 recoverBufferState: open failed", "path", state.bufferPath, "err", err)
-		return
+		return 0
 	}
 	defer file.Close()
 
 	headerSz := uint32(inner.HeaderWireSize())
 	var validOffset int64
+	var recoveredItems uint64
 	reader := bufio.NewReader(file)
 
 	for {
@@ -326,30 +334,35 @@ func (f *FilterQ3) recoverBufferState(state *clientState) {
 			_ = file.Truncate(validOffset)
 			break
 		}
-		rawHeader := make([]byte, headerSz)
-		if _, err := io.ReadFull(reader, rawHeader); err != nil {
+		raw := make([]byte, payloadLen)
+		if _, err := io.ReadFull(reader, raw); err != nil {
 			_ = file.Truncate(validOffset)
 			break
 		}
-		msgType, h, err := inner.PeekHeader(rawHeader)
+		msgType, h, err := inner.PeekHeader(raw)
 		if err != nil || msgType != inner.Batch {
 			_ = file.Truncate(validOffset)
 			break
 		}
-		rest := int64(payloadLen - headerSz)
-		if rest > 0 {
-			if _, err := io.CopyN(io.Discard, reader, rest); err != nil {
-				_ = file.Truncate(validOffset)
-				break
-			}
+		parsed, err := inner.NewFromSerializedData(raw)
+		if err != nil {
+			_ = file.Truncate(validOffset)
+			break
+		}
+		batch, ok := parsed.(*inner.BatchMessage)
+		if !ok {
+			_ = file.Truncate(validOffset)
+			break
 		}
 		bKey := bufferSeqKey{StageType: h.SenderStageType, ReplicaID: h.SenderReplicaID}
 		if h.SeqID > state.maxBufferedSeqID[bKey] {
 			state.maxBufferedSeqID[bKey] = h.SeqID
 		}
 		state.bufferCount++
+		recoveredItems += uint64(len(batch.Items))
 		validOffset += 4 + int64(payloadLen)
 	}
+	return recoveredItems
 }
 
 func (f *FilterQ3) drainIterator(clientID inner.ClientID, st *clientState) (iter.Seq[strategy.OutputMessage], error) {
@@ -433,10 +446,12 @@ func (f *FilterQ3) drainIterator(clientID inner.ClientID, st *clientState) (iter
 func (f *FilterQ3) MarshalClientState(clientID inner.ClientID) ([]byte, error) {
 	state := f.stateFor(clientID)
 	ringSnap, _ := f.p2Ring.GetClientRingState(clientID)
+	bufferedSeen := state.bufferedSeen
 	checkPoint := filterQ3Checkpoint{
 		AveragesEOFReceived: state.averagesEOFReceived,
 		P2EOFReceived:       state.p2EOFReceived,
 		P2Seen:              state.p2Seen,
+		BufferedSeen:        &bufferedSeen,
 		Averages:            state.averages,
 		BufferPath:          state.bufferPath,
 		P2Ring:              ringSnap,
@@ -454,6 +469,11 @@ func (f *FilterQ3) UnmarshalClientState(clientID inner.ClientID, data []byte) er
 	state.averagesEOFReceived = checkPoint.AveragesEOFReceived
 	state.p2EOFReceived = checkPoint.P2EOFReceived
 	state.p2Seen = checkPoint.P2Seen
+	checkpointedBufferedSeen := uint64(0)
+	if checkPoint.BufferedSeen != nil {
+		checkpointedBufferedSeen = *checkPoint.BufferedSeen
+		state.bufferedSeen = checkpointedBufferedSeen
+	}
 	if checkPoint.Averages != nil {
 		state.averages = checkPoint.Averages
 	}
@@ -462,7 +482,17 @@ func (f *FilterQ3) UnmarshalClientState(clientID inner.ClientID, data []byte) er
 	}
 	f.p2Ring.RestoreClientRingState(clientID, checkPoint.P2Ring)
 	f.avgCoord.RestoreClientJACState(clientID, checkPoint.AvgCoord)
-	f.recoverBufferState(state)
+	recoveredBufferedSeen := f.recoverBufferState(state)
+	if checkPoint.BufferedSeen != nil {
+		if recoveredBufferedSeen > checkpointedBufferedSeen {
+			state.p2Seen += recoveredBufferedSeen - checkpointedBufferedSeen
+		}
+	} else if recoveredBufferedSeen > state.p2Seen {
+		// Legacy checkpoints did not persist how much of p2Seen came from the
+		// buffer, so use the buffer as a lower bound without double-counting.
+		state.p2Seen = recoveredBufferedSeen
+	}
+	state.bufferedSeen = recoveredBufferedSeen
 	return nil
 }
 
