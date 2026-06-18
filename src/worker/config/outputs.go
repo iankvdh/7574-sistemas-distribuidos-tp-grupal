@@ -28,9 +28,9 @@ const (
 	// `final_<gatewayID>`.
 	KindFinalQueue
 	// KindBoundQueue is a named, non-exclusive, non-auto-delete queue bound to a
-	// direct exchange with a fixed routing key. Unlike KindDirectExchange (which
-	// consumes via an anonymous auto-delete queue), it survives a consumer crash
-	// so un-acked messages are redelivered on recovery. Input-only.
+	// direct exchange with a fixed routing key. It survives a consumer crash so
+	// messages published while the consumer is down are delivered on recovery.
+	// Input-only.
 	KindBoundQueue
 )
 
