@@ -20,7 +20,8 @@ const (
 	defaultClientTTLSeconds      = 7200
 	defaultTombstoneTTLSeconds   = 3600
 	defaultAMQPCloseTimeoutSecs  = 5
-	defaultMaintenanceIntervalS  = 30
+	defaultMaintenanceIntervalS  = 1
+	defaultMaxPendingAckAgeS     = 10
 )
 
 type WorkerConfig struct {
@@ -45,6 +46,7 @@ type WorkerConfig struct {
 	TombstoneTTL          time.Duration
 	AMQPCloseTimeout      time.Duration
 	MaintenanceInterval   time.Duration
+	MaxPendingAckAge      time.Duration
 
 	// Heartbeat (Sentinel liveness).
 	HeartbeatEnabled  bool
@@ -108,6 +110,10 @@ func Load() (WorkerConfig, error) {
 		return WorkerConfig{}, err
 	}
 	maintenanceIntervalSecs, err := env.IntWithDefault("MAINTENANCE_INTERVAL_SECONDS", defaultMaintenanceIntervalS, true)
+	if err != nil {
+		return WorkerConfig{}, err
+	}
+	maxPendingAckAgeSecs, err := env.IntWithDefault("MAX_PENDING_ACK_AGE_SECONDS", defaultMaxPendingAckAgeS, true)
 	if err != nil {
 		return WorkerConfig{}, err
 	}
@@ -188,6 +194,7 @@ func Load() (WorkerConfig, error) {
 		TombstoneTTL:        time.Duration(tombstoneTTLSecs) * time.Second,
 		AMQPCloseTimeout:    time.Duration(amqpCloseTimeoutSecs) * time.Second,
 		MaintenanceInterval: time.Duration(maintenanceIntervalSecs) * time.Second,
+		MaxPendingAckAge:    time.Duration(maxPendingAckAgeSecs) * time.Second,
 
 		HeartbeatEnabled:  heartbeatEnabled,
 		ContainerName:     containerName,
