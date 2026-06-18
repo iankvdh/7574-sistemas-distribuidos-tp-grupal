@@ -51,6 +51,7 @@ type Worker struct {
 	deferredInputs map[int]bool
 	draining       bool
 	pendingAcks    map[inner.ClientID][]deliveryRef
+	firstPendingAt map[inner.ClientID]time.Time
 	totalPending   int
 	lastSeen       map[inner.ClientID]time.Time
 	tombstones     map[inner.ClientID]time.Time
@@ -168,6 +169,7 @@ func New(cfg config.WorkerConfig) (*Worker, error) {
 		deferredInputs:      map[int]bool{},
 
 		pendingAcks:    map[inner.ClientID][]deliveryRef{},
+		firstPendingAt: map[inner.ClientID]time.Time{},
 		lastSeen:       map[inner.ClientID]time.Time{},
 		tombstones:     map[inner.ClientID]time.Time{},
 		lastRecvSeqID:  map[inner.SeqKey]uint64{},
@@ -873,6 +875,9 @@ func (w *Worker) nextSeqID(clientID inner.ClientID) uint64 {
 }
 
 func (w *Worker) enqueuePending(clientID inner.ClientID, ref deliveryRef) {
+	if _, ok := w.firstPendingAt[clientID]; !ok {
+		w.firstPendingAt[clientID] = time.Now()
+	}
 	w.pendingAcks[clientID] = append(w.pendingAcks[clientID], ref)
 	w.totalPending++
 }
@@ -910,6 +915,7 @@ func (w *Worker) ackAllPending(clientID inner.ClientID) {
 	}
 	w.totalPending -= len(refs)
 	delete(w.pendingAcks, clientID)
+	delete(w.firstPendingAt, clientID)
 }
 
 func (w *Worker) completeClient(clientID inner.ClientID, finalRef deliveryRef) {
@@ -955,6 +961,7 @@ func (w *Worker) cleanupClientState(clientID inner.ClientID) {
 	delete(w.roundRobinCtrs, clientID)
 	delete(w.lastSeen, clientID)
 	delete(w.upstreamEOFs, clientID)
+	delete(w.firstPendingAt, clientID)
 }
 
 func (w *Worker) flushMetaCheckpoint() {
@@ -987,6 +994,11 @@ func (w *Worker) runMaintenanceLoop() {
 
 func (w *Worker) runMaintenance() {
 	now := time.Now()
+	for clientID, timestamp := range w.firstPendingAt {
+		if now.Sub(timestamp) > w.cfg.MaxPendingAckAge {
+			w.checkpointAndAck(clientID)
+		}
+	}
 	for clientID, timestamp := range w.lastSeen {
 		if now.Sub(timestamp) > w.cfg.ClientTTL {
 			slog.Warn("CLIENT_TTL expired, aborting client", "client_id", clientID, "idle", now.Sub(timestamp))
