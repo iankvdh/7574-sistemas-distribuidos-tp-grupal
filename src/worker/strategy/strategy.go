@@ -74,6 +74,11 @@ type RecoverableStrategy interface {
 	CleanupClient(clientID inner.ClientID)
 }
 
+type GlobalStateProvider interface {
+	MarshalGlobalState() ([]byte, error)
+	UnmarshalGlobalState(data []byte) error
+}
+
 type RawBatchStrategy interface {
 	Strategy
 	ProcessRawBatch(batch *inner.BatchMessage, rawBatch []byte, inputIndex int) (

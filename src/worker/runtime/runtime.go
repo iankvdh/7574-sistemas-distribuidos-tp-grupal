@@ -175,8 +175,11 @@ func New(cfg config.WorkerConfig) (*Worker, error) {
 		outSeqID:       map[inner.ClientID]uint64{},
 	}
 
-	w.loadCheckpoints()
+	foundCheckpoints := w.loadCheckpoints()
 	w.deferredInputs = deferredInputsForStrategy(strat)
+	if foundCheckpoints {
+		w.deferredInputs = map[int]bool{}
+	}
 	return w, nil
 }
 
@@ -951,6 +954,7 @@ func (w *Worker) checkpointAndAck(clientID inner.ClientID) {
 		slog.Error("WriteClientCheckpoint failed, exiting before ACK", "client_id", clientID, "err", err)
 		os.Exit(1)
 	}
+	w.writeGlobalState()
 	w.ackAllPending(clientID)
 }
 
@@ -962,6 +966,20 @@ func (w *Worker) ackAllPending(clientID inner.ClientID) {
 	w.totalPending -= len(refs)
 	delete(w.pendingAcks, clientID)
 	delete(w.firstPendingAt, clientID)
+}
+
+func (w *Worker) writeGlobalState() {
+	if gsp, ok := w.strategy.(strategy.GlobalStateProvider); ok {
+		data, err := gsp.MarshalGlobalState()
+		if err != nil {
+			slog.Error("MarshalGlobalState failed, exiting before ACK", "err", err)
+			os.Exit(1)
+		}
+		if err := checkpoint.WriteGlobalState(w.cfg.CheckpointDir, data); err != nil {
+			slog.Error("WriteGlobalState failed, exiting before ACK", "err", err)
+			os.Exit(1)
+		}
+	}
 }
 
 func (w *Worker) completeClient(clientID inner.ClientID, finalRef deliveryRef) {
@@ -978,6 +996,7 @@ func (w *Worker) completeClient(clientID inner.ClientID, finalRef deliveryRef) {
 		slog.Error("WriteClientCheckpoint failed on complete, exiting before ACK", "client_id", clientID, "err", err)
 		os.Exit(1)
 	}
+	w.writeGlobalState()
 	w.tombstones[clientID] = time.Now()
 	w.flushMetaCheckpoint()
 	w.ackAllPending(clientID)
@@ -1062,7 +1081,7 @@ func (w *Worker) runMaintenance() {
 	}
 }
 
-func (w *Worker) loadCheckpoints() {
+func (w *Worker) loadCheckpoints() bool {
 	metaCheckpoint, err := checkpoint.ReadMetaCheckpoint(w.cfg.CheckpointDir)
 	if err != nil {
 		slog.Warn("ReadMetaCheckpoint failed", "err", err)
@@ -1072,6 +1091,7 @@ func (w *Worker) loadCheckpoints() {
 		}
 	}
 
+	foundAnyCheckpoint := false
 	checkpoints, _ := os.ReadDir(w.cfg.CheckpointDir)
 	for _, e := range checkpoints {
 		name := e.Name()
@@ -1105,6 +1125,7 @@ func (w *Worker) loadCheckpoints() {
 			}
 		}
 		w.lastSeen[clientID] = time.Now()
+		foundAnyCheckpoint = true
 	}
 	if booster, ok := w.strategy.(strategy.SeqIDRecoverer); ok {
 		for sk, maxSeq := range booster.BoostSeqIDs() {
@@ -1113,6 +1134,20 @@ func (w *Worker) loadCheckpoints() {
 			}
 		}
 	}
+
+	// Restore worker-level global state (e.g., exchange-rate tables).
+	if gsp, ok := w.strategy.(strategy.GlobalStateProvider); ok {
+		data, err := checkpoint.ReadGlobalState(w.cfg.CheckpointDir)
+		if err != nil {
+			slog.Warn("ReadGlobalState failed", "err", err)
+		} else if data != nil {
+			if err := gsp.UnmarshalGlobalState(data); err != nil {
+				slog.Warn("UnmarshalGlobalState failed", "err", err)
+			}
+		}
+	}
+
+	return foundAnyCheckpoint
 }
 
 func (w *Worker) buildClientCheckpoint(clientID inner.ClientID) *checkpoint.ClientCheckpoint {

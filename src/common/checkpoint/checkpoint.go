@@ -12,6 +12,51 @@ import (
 const checkpointFileMode = 0o644
 const checkpointFileFlags = os.O_CREATE | os.O_TRUNC | os.O_WRONLY
 
+func atomicWriteFile(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	tmp := path + ".tmp"
+	f, err := os.OpenFile(tmp, checkpointFileFlags, checkpointFileMode)
+	if err != nil {
+		return fmt.Errorf("open tmp %s: %w", tmp, err)
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return fmt.Errorf("write %s: %w", tmp, err)
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return fmt.Errorf("fsync content %s: %w", tmp, err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("close %s: %w", tmp, err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return fmt.Errorf("rename %s: %w", tmp, err)
+	}
+	dirFD, err := os.Open(dir)
+	if err != nil {
+		return fmt.Errorf("open dir for fsync: %w", err)
+	}
+	defer dirFD.Close()
+	return dirFD.Sync()
+}
+
+func GlobalStatePath(dir string) string {
+	return filepath.Join(dir, "global_state.json")
+}
+
+func WriteGlobalState(dir string, data []byte) error {
+	return atomicWriteFile(GlobalStatePath(dir), data)
+}
+
+func ReadGlobalState(dir string) ([]byte, error) {
+	data, err := os.ReadFile(GlobalStatePath(dir))
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	return data, err
+}
+
 type RingEntry struct {
 	IsInitiator     bool   `json:"i"`
 	UpstreamTotal   uint32 `json:"t"`
@@ -55,38 +100,7 @@ func WriteClientCheckpoint(dir string, cp *ClientCheckpoint) error {
 	if err != nil {
 		return fmt.Errorf("marshal checkpoint for %s: %w", cp.ClientID, err)
 	}
-
-	path := ClientCheckpointPath(dir, inner.ClientID(cp.ClientID))
-	tmp := path + ".tmp"
-
-	f, err := os.OpenFile(tmp, checkpointFileFlags, checkpointFileMode)
-	if err != nil {
-		return fmt.Errorf("open tmp checkpoint: %w", err)
-	}
-	if _, err := f.Write(data); err != nil {
-		f.Close()
-		return fmt.Errorf("write checkpoint: %w", err)
-	}
-	if err := f.Sync(); err != nil {
-		f.Close()
-		return fmt.Errorf("fsync checkpoint content: %w", err)
-	}
-	if err := f.Close(); err != nil {
-		return fmt.Errorf("close checkpoint: %w", err)
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		return fmt.Errorf("rename checkpoint: %w", err)
-	}
-	// fsync the directory to durably persist the rename.
-	dirFD, err := os.Open(dir)
-	if err != nil {
-		return fmt.Errorf("open dir for fsync: %w", err)
-	}
-	defer dirFD.Close()
-	if err := dirFD.Sync(); err != nil {
-		return fmt.Errorf("fsync dir: %w", err)
-	}
-	return nil
+	return atomicWriteFile(ClientCheckpointPath(dir, inner.ClientID(cp.ClientID)), data)
 }
 
 func ReadClientCheckpoint(path string) (*ClientCheckpoint, error) {
@@ -126,31 +140,5 @@ func WriteMetaCheckpoint(dir string, meta *MetaCheckpoint) error {
 	if err != nil {
 		return fmt.Errorf("marshal meta: %w", err)
 	}
-	path := filepath.Join(dir, metaFileName)
-	tmp := path + ".tmp"
-
-	f, err := os.OpenFile(tmp, checkpointFileFlags, checkpointFileMode)
-	if err != nil {
-		return fmt.Errorf("open tmp meta: %w", err)
-	}
-	if _, err := f.Write(data); err != nil {
-		f.Close()
-		return fmt.Errorf("write meta: %w", err)
-	}
-	if err := f.Sync(); err != nil {
-		f.Close()
-		return fmt.Errorf("fsync meta content: %w", err)
-	}
-	if err := f.Close(); err != nil {
-		return fmt.Errorf("close meta: %w", err)
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		return fmt.Errorf("rename meta: %w", err)
-	}
-	dirFD, err := os.Open(dir)
-	if err != nil {
-		return fmt.Errorf("open dir for meta fsync: %w", err)
-	}
-	defer dirFD.Close()
-	return dirFD.Sync()
+	return atomicWriteFile(filepath.Join(dir, metaFileName), data)
 }

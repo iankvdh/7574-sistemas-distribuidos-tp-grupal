@@ -226,6 +226,23 @@ func (m *MicroTransactionCounter) UnmarshalClientState(clientID inner.ClientID, 
 	return nil
 }
 
+type globalRatesState struct {
+	Rates map[uint32]map[string]float64 `json:"rates"`
+}
+
+func (m *MicroTransactionCounter) MarshalGlobalState() ([]byte, error) {
+	return json.Marshal(globalRatesState{Rates: m.rates})
+}
+
+func (m *MicroTransactionCounter) UnmarshalGlobalState(data []byte) error {
+	var gs globalRatesState
+	if err := json.Unmarshal(data, &gs); err != nil {
+		return err
+	}
+	m.rates = gs.Rates
+	return nil
+}
+
 func (m *MicroTransactionCounter) CleanupClient(clientID inner.ClientID) {
 	delete(m.state, clientID)
 	m.txRing.CleanupClient(clientID)
