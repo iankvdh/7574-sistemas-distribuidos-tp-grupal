@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -766,6 +768,18 @@ func (w *Worker) flushClientBuffers(clientID inner.ClientID) error {
 					keys = append(keys, k)
 				}
 			}
+			// Orden determinístico: el SeqID se asigna en este orden, y un replay
+			// tras crash debe reproducir exactamente la misma asignación para que
+			// el dedup high-water-mark downstream reconozca los duplicados.
+			slices.SortFunc(keys, func(a, b batchKey) int {
+				if a.itemKind != b.itemKind {
+					return cmp.Compare(a.itemKind, b.itemKind)
+				}
+				if a.queryID != b.queryID {
+					return cmp.Compare(a.queryID, b.queryID)
+				}
+				return cmp.Compare(a.routingKey, b.routingKey)
+			})
 			for _, k := range keys {
 				if err := w.flushBatch(idx, shard, k); err != nil {
 					return err

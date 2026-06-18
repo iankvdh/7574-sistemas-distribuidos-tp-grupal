@@ -1,9 +1,11 @@
 package suspicious_filter
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -154,8 +156,20 @@ func (s *SuspiciousFilter) processSide(
 
 	// Umbral alcanzado: marcar suspicious y emitir todas las ShardedTx
 	// acumuladas (incluyendo la que disparó el llenado) con el flag invertido.
-	outputs := make([]strategy.OutputMessage, 0, s.threshold)
+	// Orden determinístico de la emisión: un replay tras crash debe reproducir
+	// el mismo orden para que los SeqID downstream coincidan (dedup high-water).
+	accs := make([]accountKey, 0, len(set))
 	for acc := range set {
+		accs = append(accs, acc)
+	}
+	slices.SortFunc(accs, func(a, b accountKey) int {
+		if a.Bank != b.Bank {
+			return cmp.Compare(a.Bank, b.Bank)
+		}
+		return cmp.Compare(a.Account, b.Account)
+	})
+	outputs := make([]strategy.OutputMessage, 0, s.threshold)
+	for _, acc := range accs {
 		var emitSource, emitDest accountKey
 		if shardedBySource {
 			emitSource, emitDest = source, acc
