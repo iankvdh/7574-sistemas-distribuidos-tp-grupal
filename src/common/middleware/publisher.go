@@ -5,6 +5,7 @@ import (
 	"log"
 	"log/slog"
 	"math"
+	"sync"
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -19,6 +20,7 @@ const (
 )
 
 type publisher struct {
+	mu      sync.Mutex
 	conn    *amqp.Connection
 	channel *amqp.Channel
 
@@ -84,8 +86,15 @@ func flushHighWaterFor(maxOutstanding int, ratio float64) int {
 }
 
 func (p *publisher) Publish(exchange, routingKey string, body []byte) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	return p.publishLocked(exchange, routingKey, body)
+}
+
+func (p *publisher) publishLocked(exchange, routingKey string, body []byte) error {
 	if p.pendingConfirms >= p.flushHighWater {
-		if err := p.FlushPublisher(); err != nil {
+		if err := p.flushPublisherLocked(); err != nil {
 			return err
 		}
 	}
@@ -106,6 +115,13 @@ func (p *publisher) Publish(exchange, routingKey string, body []byte) error {
 }
 
 func (p *publisher) FlushPublisher() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	return p.flushPublisherLocked()
+}
+
+func (p *publisher) flushPublisherLocked() error {
 	for i := 0; i < p.pendingConfirms; i++ {
 		conf, ok := <-p.confirms
 		if !ok {
