@@ -1,8 +1,10 @@
 package pathfinder
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -99,7 +101,7 @@ func (p *PathFinder) ProcessMessage(envelope *inner.Envelope) ([]strategy.Output
 		}
 		accSt.outSet[dest] = struct{}{}
 		var outputs []strategy.OutputMessage
-		for inAcc := range accSt.inSet {
+		for _, inAcc := range sortedAccounts(accSt.inSet) {
 			if inAcc == dest {
 				continue
 			}
@@ -116,13 +118,30 @@ func (p *PathFinder) ProcessMessage(envelope *inner.Envelope) ([]strategy.Output
 	}
 	accSt.inSet[source] = struct{}{}
 	var outputs []strategy.OutputMessage
-	for outAcc := range accSt.outSet {
+	for _, outAcc := range sortedAccounts(accSt.outSet) {
 		if source == outAcc {
 			continue
 		}
 		outputs = p.appendTriple(outputs, envelope.ClientID, source, dest, outAcc)
 	}
 	return outputs, strategy.LocalCounts{Processed: 1}, nil
+}
+
+// sortedAccounts devuelve las claves del set en orden determinístico. La emisión
+// debe ser reproducible: un replay tras crash tiene que asignar los mismos SeqID
+// que la primera vez para que el dedup high-water-mark downstream funcione.
+func sortedAccounts(set map[accountKey]struct{}) []accountKey {
+	accs := make([]accountKey, 0, len(set))
+	for acc := range set {
+		accs = append(accs, acc)
+	}
+	slices.SortFunc(accs, func(a, b accountKey) int {
+		if a.Bank != b.Bank {
+			return cmp.Compare(a.Bank, b.Bank)
+		}
+		return cmp.Compare(a.Account, b.Account)
+	})
+	return accs
 }
 
 func (p *PathFinder) appendTriple(outputs []strategy.OutputMessage, clientID inner.ClientID, src, mid, dst accountKey) []strategy.OutputMessage {
