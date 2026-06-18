@@ -5,6 +5,7 @@
 package filter
 
 import (
+	"encoding/json"
 	"fmt"
 	"log/slog"
 
@@ -32,6 +33,12 @@ type Filter struct {
 type filterState struct {
 	matched    uint64
 	notMatched uint64
+}
+
+type filterCheckpoint struct {
+	Matched    uint64                `json:"matched"`
+	NotMatched uint64                `json:"notMatched"`
+	Ring       eof.RingStateSnapshot `json:"ring"`
 }
 
 func New(name string, predicate Predicate) *Filter {
@@ -120,7 +127,7 @@ func (f *Filter) OnUpstreamEOF(env *inner.Envelope) (strategy.EOFOutcome, error)
 	outcome := strategy.EOFOutcome{Action: action}
 	if action.Kind == eof.ActionEmitEOFs && result != nil {
 		outcome.EOFs = f.buildEOFEmits(result.AggMatched, result.AggNotMatched)
-		delete(f.state, env.ClientID)
+		outcome.ClientCompleted = true
 	}
 	return outcome, nil
 }
@@ -131,9 +138,37 @@ func (f *Filter) OnRingToken(token *eof.Token) (strategy.EOFOutcome, error) {
 	outcome := strategy.EOFOutcome{Action: action}
 	if action.Kind == eof.ActionEmitEOFs && result != nil {
 		outcome.EOFs = f.buildEOFEmits(result.AggMatched, result.AggNotMatched)
-		delete(f.state, token.ClientID)
+		outcome.ClientCompleted = true
 	}
 	return outcome, nil
+}
+
+func (f *Filter) MarshalClientState(clientID inner.ClientID) ([]byte, error) {
+	state := f.state[clientID]
+	checkPoint := filterCheckpoint{}
+	if state != nil {
+		checkPoint.Matched = state.matched
+		checkPoint.NotMatched = state.notMatched
+	}
+	checkPoint.Ring, _ = f.coordinator.GetClientRingState(clientID)
+	return json.Marshal(checkPoint)
+}
+
+func (f *Filter) UnmarshalClientState(clientID inner.ClientID, data []byte) error {
+	var checkPoint filterCheckpoint
+	if err := json.Unmarshal(data, &checkPoint); err != nil {
+		return err
+	}
+	state := f.stateFor(clientID)
+	state.matched = checkPoint.Matched
+	state.notMatched = checkPoint.NotMatched
+	f.coordinator.RestoreClientRingState(clientID, checkPoint.Ring)
+	return nil
+}
+
+func (f *Filter) CleanupClient(clientID inner.ClientID) {
+	delete(f.state, clientID)
+	f.coordinator.CleanupClient(clientID)
 }
 
 func (f *Filter) buildEOFEmits(aggMatched, aggNotMatched uint64) []eof.EOFEmit {

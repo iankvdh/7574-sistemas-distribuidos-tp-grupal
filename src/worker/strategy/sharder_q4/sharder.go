@@ -1,6 +1,7 @@
 package sharder_q4
 
 import (
+	"encoding/json"
 	"fmt"
 	"strconv"
 
@@ -25,6 +26,11 @@ type Sharder struct {
 
 type clientState struct {
 	processed uint64
+}
+
+type sharderCheckpoint struct {
+	Processed uint64                `json:"processed"`
+	Ring      eof.RingStateSnapshot `json:"ring"`
 }
 
 func New() *Sharder {
@@ -130,7 +136,7 @@ func (s *Sharder) outcomeFor(clientID inner.ClientID, action eof.Action) strateg
 	switch action.Kind {
 	case eof.ActionEmitEOFs, eof.ActionEmitEOFsAndForwardToken:
 		outcome.EOFs = s.buildEOFEmits()
-		delete(s.state, clientID)
+		outcome.ClientCompleted = true
 	}
 	return outcome
 }
@@ -144,6 +150,32 @@ func (s *Sharder) buildEOFEmits() []eof.EOFEmit {
 		})
 	}
 	return emits
+}
+
+func (s *Sharder) MarshalClientState(clientID inner.ClientID) ([]byte, error) {
+	state := s.state[clientID]
+	checkPoint := sharderCheckpoint{}
+	if state != nil {
+		checkPoint.Processed = state.processed
+	}
+	checkPoint.Ring, _ = s.coordinator.GetClientRingState(clientID)
+	return json.Marshal(checkPoint)
+}
+
+func (s *Sharder) UnmarshalClientState(clientID inner.ClientID, data []byte) error {
+	var checkPoint sharderCheckpoint
+	if err := json.Unmarshal(data, &checkPoint); err != nil {
+		return err
+	}
+	state := s.stateFor(clientID)
+	state.processed = checkPoint.Processed
+	s.coordinator.RestoreClientRingState(clientID, checkPoint.Ring)
+	return nil
+}
+
+func (s *Sharder) CleanupClient(clientID inner.ClientID) {
+	delete(s.state, clientID)
+	s.coordinator.CleanupClient(clientID)
 }
 
 func (s *Sharder) stateFor(clientID inner.ClientID) *clientState {
