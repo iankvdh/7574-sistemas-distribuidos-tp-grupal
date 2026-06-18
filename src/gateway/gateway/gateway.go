@@ -30,8 +30,8 @@ const (
 
 type Gateway struct {
 	registry              *clientregistry.ClientRegistry
-	txExchange            middleware.Middleware
-	acctExchange          middleware.Middleware
+	txPublishers          *gatewayExchangePool
+	acctPublishers        *gatewayExchangePool
 	nTxShards             int
 	nAcctShards           int
 	finalQueue            middleware.Middleware
@@ -56,25 +56,25 @@ func NewGateway(config gatewayconfig.GatewayConfig) (*Gateway, error) {
 		return nil, err
 	}
 
-	txExchange, err := middleware.CreateExchangeMiddleware(config.AllTransactionsExchange, shardKeys(config.NTxShards), connSettings)
+	txPublishers, err := newGatewayExchangePool(config.AllTransactionsExchange, shardKeys(config.NTxShards), connSettings, config.PublisherPoolSize)
 	if err != nil {
 		return nil, err
 	}
 
-	acctExchange, err := middleware.CreateExchangeMiddleware(config.AllAccountsExchange, shardKeys(config.NAccountShards), connSettings)
+	acctPublishers, err := newGatewayExchangePool(config.AllAccountsExchange, shardKeys(config.NAccountShards), connSettings, config.PublisherPoolSize)
 	if err != nil {
-		_ = txExchange.Close()
+		_ = txPublishers.Close()
 		return nil, err
 	}
 
 	if err := declareShardQueues(config.AllTransactionsExchange, config.NTxShards, connSettings); err != nil {
-		_ = txExchange.Close()
-		_ = acctExchange.Close()
+		_ = txPublishers.Close()
+		_ = acctPublishers.Close()
 		return nil, err
 	}
 	if err := declareShardQueues(config.AllAccountsExchange, config.NAccountShards, connSettings); err != nil {
-		_ = txExchange.Close()
-		_ = acctExchange.Close()
+		_ = txPublishers.Close()
+		_ = acctPublishers.Close()
 		return nil, err
 	}
 
@@ -83,15 +83,15 @@ func NewGateway(config gatewayconfig.GatewayConfig) (*Gateway, error) {
 	finalQueueName := fmt.Sprintf("%s_%d", config.FinalQueue, gatewayID)
 	finalQueue, err := middleware.CreateQueueMiddleware(finalQueueName, connSettings)
 	if err != nil {
-		_ = txExchange.Close()
-		_ = acctExchange.Close()
+		_ = txPublishers.Close()
+		_ = acctPublishers.Close()
 		return nil, err
 	}
 
 	listener, err := net.Listen("tcp", config.ServerHost+":"+config.ServerPort)
 	if err != nil {
-		_ = txExchange.Close()
-		_ = acctExchange.Close()
+		_ = txPublishers.Close()
+		_ = acctPublishers.Close()
 		_ = finalQueue.Close()
 		return nil, err
 	}
@@ -99,8 +99,8 @@ func NewGateway(config gatewayconfig.GatewayConfig) (*Gateway, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	gateway := &Gateway{
 		registry:              clientregistry.NewClientRegistry(),
-		txExchange:            txExchange,
-		acctExchange:          acctExchange,
+		txPublishers:          txPublishers,
+		acctPublishers:        acctPublishers,
 		nTxShards:             config.NTxShards,
 		nAcctShards:           config.NAccountShards,
 		finalQueue:            finalQueue,
@@ -433,7 +433,7 @@ func (gateway *Gateway) handleTransactionBatch(state *clientregistry.ClientState
 			return err
 		}
 	}
-	return gateway.sendShardedAndAck(state, msg, gateway.txExchange, routingKey)
+	return gateway.sendShardedAndAck(state, msg, gateway.txPublishers.ForClient(handler.ClientID()), routingKey)
 }
 
 func (gateway *Gateway) handleEndOfTransactions(state *clientregistry.ClientState, handler *messagehandler.MessageHandler) error {
@@ -441,7 +441,7 @@ func (gateway *Gateway) handleEndOfTransactions(state *clientregistry.ClientStat
 	if err != nil {
 		return err
 	}
-	return gateway.sendShardedAndAck(state, msg, gateway.txExchange, "0")
+	return gateway.sendShardedAndAck(state, msg, gateway.txPublishers.ForClient(handler.ClientID()), "0")
 }
 
 func (gateway *Gateway) handleAccountBatch(state *clientregistry.ClientState, handler *messagehandler.MessageHandler) error {
@@ -460,7 +460,7 @@ func (gateway *Gateway) handleAccountBatch(state *clientregistry.ClientState, ha
 			return err
 		}
 	}
-	return gateway.sendShardedAndAck(state, msg, gateway.acctExchange, routingKey)
+	return gateway.sendShardedAndAck(state, msg, gateway.acctPublishers.ForClient(handler.ClientID()), routingKey)
 }
 
 func (gateway *Gateway) handleEndOfAccounts(state *clientregistry.ClientState, handler *messagehandler.MessageHandler) error {
@@ -468,7 +468,7 @@ func (gateway *Gateway) handleEndOfAccounts(state *clientregistry.ClientState, h
 	if err != nil {
 		return err
 	}
-	return gateway.sendShardedAndAck(state, msg, gateway.acctExchange, "0")
+	return gateway.sendShardedAndAck(state, msg, gateway.acctPublishers.ForClient(handler.ClientID()), "0")
 }
 
 func (gateway *Gateway) shutdownWatcher() {
@@ -480,6 +480,6 @@ func (gateway *Gateway) shutdownWatcher() {
 
 	_ = gateway.finalQueue.StopConsuming()
 	_ = gateway.finalQueue.Close()
-	_ = gateway.txExchange.Close()
-	_ = gateway.acctExchange.Close()
+	_ = gateway.txPublishers.Close()
+	_ = gateway.acctPublishers.Close()
 }

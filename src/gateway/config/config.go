@@ -15,6 +15,7 @@ const (
 	defaultMaxExternalBatchBytes   = 8192
 	defaultExpectedQueryEOFs       = 5
 	defaultShardCount              = 1
+	defaultPublisherPoolSize       = 8
 )
 
 type GatewayConfig struct {
@@ -30,6 +31,7 @@ type GatewayConfig struct {
 	ServerPort              string
 	MomHost                 string
 	MomPort                 int
+	PublisherPoolSize       int
 
 	HeartbeatEnabled  bool
 	ContainerName     string
@@ -83,6 +85,10 @@ func Load() (GatewayConfig, error) {
 	if err != nil {
 		return GatewayConfig{}, err
 	}
+	publisherPoolSize, err := env.IntWithDefault("GATEWAY_PUBLISHER_POOL_SIZE", defaultPublisherPoolSize, true)
+	if err != nil {
+		return GatewayConfig{}, err
+	}
 
 	heartbeatEnabled := strings.EqualFold(env.StringWithDefault("HEARTBEAT_ENABLED", "true"), "true")
 	containerName := env.StringWithDefault("CONTAINER_NAME", "")
@@ -109,6 +115,7 @@ func Load() (GatewayConfig, error) {
 		ServerPort:              serverPort,
 		MomHost:                 momHost,
 		MomPort:                 momPort,
+		PublisherPoolSize:       publisherPoolSize,
 
 		HeartbeatEnabled:  heartbeatEnabled,
 		ContainerName:     containerName,

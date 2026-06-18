@@ -25,8 +25,10 @@
 //	    env:                             optional arbitrary env vars (EXPECTED_EOFS, WINDOW_SIZE, ...)
 //	      KEY: value
 //	chaos_monkey:            optional; when present, emits a chaos_monkey service
+//	  exclude:               optional containers protected from kills (rabbitmq is always excluded)
+//	    - container_name
 //	  env:                   optional tuning vars (KILL_INTERVAL_SECONDS, ...)
-//	    KEY: value           TARGETS/EXCLUDE are computed automatically
+//	    KEY: value           TARGETS is computed automatically
 //
 // All worker and gateway services automatically load .env (repo root) so that
 // shared variables (MOM_HOST, MOM_PORT, PERIOD1_START, …) are defined once.
@@ -62,11 +64,11 @@ type fetcherSpec struct {
 	Env  map[string]string
 }
 
-// chaosSpec declares the Chaos Monkey service. Its TARGETS/EXCLUDE lists are
-// computed automatically by compose-gen (like EXPECTED_CONTAINERS); the spec
-// only carries the optional tuning env vars (KILL_INTERVAL_SECONDS, ...).
+// chaosSpec declares the Chaos Monkey service. TARGETS is computed
+// automatically; the spec only carries optional excludes/tuning knobs.
 type chaosSpec struct {
-	Env map[string]string
+	Exclude []string
+	Env     map[string]string
 }
 
 type spec struct {
@@ -390,11 +392,20 @@ func parseSpec(src string) (*spec, error) {
 		case section == "chaos_monkey" && indent == 2:
 			currentList = ""
 			key, value := splitKV(trimmed)
-			if value == "" && key == "env" {
+			if value == "" && (key == "env" || key == "exclude") {
 				currentList = key
+			} else if key == "exclude" {
+				s.ChaosMonkey.Exclude = appendCSVValues(s.ChaosMonkey.Exclude, value)
 			}
 		case section == "chaos_monkey" && indent >= 4:
 			if s.ChaosMonkey == nil {
+				continue
+			}
+			if currentList == "exclude" && strings.HasPrefix(trimmed, "- ") {
+				value := strings.TrimSpace(strings.TrimPrefix(trimmed, "- "))
+				if value != "" {
+					s.ChaosMonkey.Exclude = append(s.ChaosMonkey.Exclude, value)
+				}
 				continue
 			}
 			if currentList == "env" {
@@ -445,6 +456,16 @@ func splitKV(line string) (string, string) {
 		}
 	}
 	return key, value
+}
+
+func appendCSVValues(values []string, raw string) []string {
+	for _, part := range strings.Split(raw, ",") {
+		value := strings.TrimSpace(part)
+		if value != "" {
+			values = append(values, value)
+		}
+	}
+	return values
 }
 
 // stripInlineComment drops YAML-style trailing comments (" # ..." or "\t# ...")
@@ -680,13 +701,22 @@ func (s *spec) renderServer(w io.Writer) error {
 	for _, fs := range s.Fetchers {
 		writeFetcher(w, fs, logLevel)
 	}
-	// Both workers and gateways emit heartbeats and are restarted by the
-	// Sentinel, so both are monitored (EXPECTED_CONTAINERS) and both are valid
-	// Chaos Monkey targets.
+	var sentinelNames []string
+	for i := 0; i < sentinels; i++ {
+		sentinelNames = append(sentinelNames, sentinelName(i))
+	}
+	var fetcherNames []string
+	for _, fs := range s.Fetchers {
+		fetcherNames = append(fetcherNames, fs.Name)
+	}
+	// Sentinels monitor workers and gateways via heartbeats. Chaos Monkey
+	// targets all server-side containers with stable names except rabbitmq,
+	// unless the scenario adds more entries to chaos_monkey.exclude.
 	monitored := append(append([]string{}, workerNames...), gatewayNames...)
+	chaosTargets := append(append(append([]string{}, monitored...), sentinelNames...), fetcherNames...)
 	writeSentinels(w, monitored, logLevel, sentinels)
 	if s.ChaosMonkey != nil {
-		writeChaosMonkey(w, s.ChaosMonkey, monitored, sentinels, s.Fetchers, logLevel)
+		writeChaosMonkey(w, s.ChaosMonkey, chaosTargets, logLevel)
 	}
 	writeRabbit(w)
 	writeNetwork(w, false)
@@ -907,6 +937,7 @@ func writeWorker(w io.Writer, ws workerSpec, replica int, logLevel string, gatew
 func writeFetcher(w io.Writer, fs fetcherSpec, logLevel string) {
 	fmt.Fprintf(w, "  %s:\n", fs.Name)
 	fmt.Fprintln(w, "    build: { context: ./src/, dockerfile: fetcher/Dockerfile }")
+	fmt.Fprintf(w, "    container_name: %s\n", fs.Name)
 	fmt.Fprintln(w, "    depends_on: { rabbitmq: { condition: service_healthy } }")
 	fmt.Fprintln(w, "    env_file:")
 	fmt.Fprintln(w, "      - .env")
@@ -924,26 +955,21 @@ func writeFetcher(w io.Writer, fs fetcherSpec, logLevel string) {
 	}
 }
 
-// writeChaosMonkey emits the Chaos Monkey service. TARGETS and EXCLUDE are
-// computed automatically: TARGETS lists every monitored container (workers +
-// gateways), EXCLUDE protects rabbitmq, the sentinels and the one-shot fetchers.
+// writeChaosMonkey emits the Chaos Monkey service. TARGETS lists every
+// killable server-side container with a stable name. EXCLUDE always protects
+// rabbitmq and also includes any containers listed by the scenario.
 // It mounts the docker socket and kills victims via the docker CLI (like the
 // Sentinel's restarter), so the image bundles docker-cli. Tuning env vars come
 // from the spec (or fall back to defaults).
-func writeChaosMonkey(w io.Writer, cs *chaosSpec, monitored []string, sentinels int, fetchers []fetcherSpec, logLevel string) {
+func writeChaosMonkey(w io.Writer, cs *chaosSpec, targets []string, logLevel string) {
 	exclude := []string{"rabbitmq"}
-	for i := 0; i < sentinels; i++ {
-		exclude = append(exclude, sentinelName(i))
-	}
-	for _, fs := range fetchers {
-		exclude = append(exclude, fs.Name)
-	}
+	exclude = appendUnique(exclude, cs.Exclude...)
 
 	fmt.Fprintln(w, "  chaos_monkey:")
 	fmt.Fprintln(w, "    build: { context: ./src/, dockerfile: chaos_monkey/Dockerfile }")
 	fmt.Fprintln(w, "    container_name: chaos_monkey")
 	fmt.Fprintln(w, "    environment:")
-	fmt.Fprintf(w, "      - TARGETS=%s\n", strings.Join(monitored, ","))
+	fmt.Fprintf(w, "      - TARGETS=%s\n", strings.Join(targets, ","))
 	fmt.Fprintf(w, "      - EXCLUDE=%s\n", strings.Join(exclude, ","))
 	fmt.Fprintf(w, "      - LOG_LEVEL=%s\n", logLevel)
 	// Deterministic order for the extra tuning env vars (KILL_INTERVAL_SECONDS,
@@ -960,6 +986,21 @@ func writeChaosMonkey(w io.Writer, cs *chaosSpec, monitored []string, sentinels 
 	}
 	fmt.Fprintln(w, "    volumes:")
 	fmt.Fprintf(w, "      - %s\n", dockerSocketMount)
+}
+
+func appendUnique(values []string, extras ...string) []string {
+	seen := make(map[string]struct{}, len(values)+len(extras))
+	for _, value := range values {
+		seen[value] = struct{}{}
+	}
+	for _, value := range extras {
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		values = append(values, value)
+		seen[value] = struct{}{}
+	}
+	return values
 }
 
 func writeRabbit(w io.Writer) {
