@@ -848,7 +848,46 @@ func (w *Worker) reenqueueUpstreamEOF(clientID inner.ClientID) error {
 		return errors.New("cached upstream EOF references invalid input index")
 	}
 	w.clearUpstreamEOF(clientID)
-	return w.inputs[cached.inputIndex].Send(cached.msg)
+	msg, err := w.retryUpstreamEOFMessage(clientID, cached.msg)
+	if err != nil {
+		return err
+	}
+	return w.inputs[cached.inputIndex].Send(msg)
+}
+
+func (w *Worker) retryUpstreamEOFMessage(clientID inner.ClientID, msg middleware.Message) (middleware.Message, error) {
+	parsed, err := inner.NewFromSerializedData([]byte(msg.Body))
+	if err != nil {
+		return middleware.Message{}, fmt.Errorf("parse cached upstream EOF: %w", err)
+	}
+	eofMessage, ok := parsed.(*inner.EOFMessage)
+	if !ok {
+		return middleware.Message{}, errors.New("cached upstream EOF is not an EOF message")
+	}
+	if eofMessage.ClientID != clientID {
+		return middleware.Message{}, fmt.Errorf("cached upstream EOF client mismatch: cached=%s expected=%s", eofMessage.ClientID, clientID)
+	}
+
+	key := seqKeyOf(clientID, eofMessage.Header)
+	// Re-enqueued EOFs are internal retries. The original EOF may already be in
+	// lastRecvSeqID, so the retry needs a fresh seq while preserving sender ID.
+	nextSeqID := eofMessage.SeqID + 1
+	if nextSeqID == 0 {
+		return middleware.Message{}, errors.New("cached upstream EOF seq id overflow")
+	}
+	if last := w.lastRecvSeqID[key]; last >= nextSeqID {
+		if last == ^uint64(0) {
+			return middleware.Message{}, errors.New("last received seq id overflow")
+		}
+		nextSeqID = last + 1
+	}
+	eofMessage.SeqID = nextSeqID
+
+	retry, err := serialize(eofMessage)
+	if err != nil {
+		return middleware.Message{}, err
+	}
+	return *retry, nil
 }
 
 func (w *Worker) cacheUpstreamEOF(clientID inner.ClientID, inputIndex int, msg middleware.Message) {
