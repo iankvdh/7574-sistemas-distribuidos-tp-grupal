@@ -16,11 +16,11 @@ const (
 	// KindShardedQueues fans messages out to K named queues (PREFIX_0..PREFIX_{K-1}),
 	// choosing the destination by hashing client_id so each client sticks to one shard.
 	KindShardedQueues
-	// KindRoundRobinQueues fans messages out to K named queues (PREFIX_0..PREFIX_{K-1}),
-	// choosing the destination by a per-client counter that increments on each data batch.
-	// The counter is persisted in the checkpoint so routing is deterministic across crashes.
+	// KindContentHashQueues fans messages out to K named queues (PREFIX_0..PREFIX_{K-1}),
+	// choosing the destination by hashing the emitted data, so retries after a
+	// crash route the same message to the same shard.
 	// Used for stateless downstream stages where uniform distribution matters more than affinity.
-	KindRoundRobinQueues
+	KindContentHashQueues
 	// KindFinalQueue is a regular AMQP queue, but the runtime serializes payloads
 	// addressed at it as FinalQueryResultBatch envelopes (instead of InnerBatch),
 	// so the gateway's final-queue consumer can pick them up unchanged. Used by
@@ -89,17 +89,17 @@ func parseOutputConfig(raw string, idx int) (OutputConfig, error) {
 			return OutputConfig{}, fmt.Errorf("OUTPUT_%d invalid shard count in %q", idx, raw)
 		}
 		return OutputConfig{Name: prefix, Kind: KindShardedQueues, ShardCount: K}, nil
-	case "round_robin_queues":
+	case "content_hash_queues":
 		subParts := strings.SplitN(rest, ":", 2)
 		if len(subParts) != 2 || subParts[0] == "" || subParts[1] == "" {
-			return OutputConfig{}, fmt.Errorf("OUTPUT_%d invalid round_robin_queues config: %q (expected round_robin_queues:PREFIX:K)", idx, raw)
+			return OutputConfig{}, fmt.Errorf("OUTPUT_%d invalid content_hash_queues config: %q (expected content_hash_queues:PREFIX:K)", idx, raw)
 		}
 		prefix, kRaw := subParts[0], subParts[1]
 		K, err := strconv.Atoi(kRaw)
 		if err != nil || K <= 0 {
 			return OutputConfig{}, fmt.Errorf("OUTPUT_%d invalid shard count in %q", idx, raw)
 		}
-		return OutputConfig{Name: prefix, Kind: KindRoundRobinQueues, ShardCount: K}, nil
+		return OutputConfig{Name: prefix, Kind: KindContentHashQueues, ShardCount: K}, nil
 	case "final_queue":
 		if rest == "" {
 			return OutputConfig{}, fmt.Errorf("OUTPUT_%d invalid final_queue target", idx)

@@ -2,6 +2,7 @@ package messagehandler
 
 import (
 	"fmt"
+	"hash/fnv"
 	"strconv"
 
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/account"
@@ -17,8 +18,6 @@ type MessageHandler struct {
 	transactionAmount uint32
 	accountAmount     uint32
 	outSeqID          uint64
-	txBatchSeq        uint32
-	acctBatchSeq      uint32
 }
 
 func NewMessageHandler(gatewayID inner.GatewayID, clientID inner.ClientID) MessageHandler {
@@ -47,16 +46,28 @@ func (handler *MessageHandler) outHeader() inner.Header {
 	}
 }
 
-func (handler *MessageHandler) NextTxShard(nShards int) string {
-	key := strconv.Itoa(int(handler.txBatchSeq % uint32(nShards)))
-	handler.txBatchSeq++
-	return key
+func TxShardForBatch(batch []transaction.Transaction, nShards int) (string, error) {
+	h := fnv.New32a()
+	for i := range batch {
+		payload, err := external.SerializeTransaction(&batch[i])
+		if err != nil {
+			return "", err
+		}
+		_, _ = h.Write(payload)
+	}
+	return strconv.Itoa(int(h.Sum32()) % nShards), nil
 }
 
-func (handler *MessageHandler) NextAcctShard(nShards int) string {
-	key := strconv.Itoa(int(handler.acctBatchSeq % uint32(nShards)))
-	handler.acctBatchSeq++
-	return key
+func AcctShardForBatch(batch []account.Account, nShards int) (string, error) {
+	h := fnv.New32a()
+	for i := range batch {
+		payload, err := external.SerializeAccount(&batch[i])
+		if err != nil {
+			return "", err
+		}
+		_, _ = h.Write(payload)
+	}
+	return strconv.Itoa(int(h.Sum32()) % nShards), nil
 }
 
 // SerializeTransactionBatch produces a single Batch message carrying all
