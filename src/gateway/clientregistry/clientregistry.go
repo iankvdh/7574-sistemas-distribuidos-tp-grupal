@@ -19,6 +19,11 @@ type ResultDelivery struct {
 	Nack    func()
 }
 
+type senderKey struct {
+	StageType uint8
+	ReplicaID uint16
+}
+
 type ClientState struct {
 	Conn net.Conn
 
@@ -27,18 +32,20 @@ type ClientState struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	resultQueue chan ResultDelivery
-	resultAckCh chan struct{}
+	resultQueue   chan ResultDelivery
+	resultAckCh   chan struct{}
+	lastRecvSeqID map[senderKey]uint64
 }
 
 func NewClientState(parentCtx context.Context, conn net.Conn) *ClientState {
 	ctx, cancel := context.WithCancel(parentCtx)
 	return &ClientState{
-		Conn:        conn,
-		ctx:         ctx,
-		cancel:      cancel,
-		resultQueue: make(chan ResultDelivery, defaultResultQueueSize),
-		resultAckCh: make(chan struct{}, 1),
+		Conn:          conn,
+		ctx:           ctx,
+		cancel:        cancel,
+		resultQueue:   make(chan ResultDelivery, defaultResultQueueSize),
+		resultAckCh:   make(chan struct{}, 1),
+		lastRecvSeqID: make(map[senderKey]uint64),
 	}
 }
 
@@ -104,6 +111,20 @@ func (state *ClientState) WaitForResultBatchAck() bool {
 func (state *ClientState) Close() {
 	state.cancel()
 	_ = state.Conn.Close()
+}
+
+func (state *ClientState) IsDuplicate(stageType uint8, replicaID uint16, seqID uint64) bool {
+	if seqID == 0 {
+		return false
+	}
+	return seqID <= state.lastRecvSeqID[senderKey{stageType, replicaID}]
+}
+
+func (state *ClientState) MarkReceived(stageType uint8, replicaID uint16, seqID uint64) {
+	k := senderKey{stageType, replicaID}
+	if seqID > state.lastRecvSeqID[k] {
+		state.lastRecvSeqID[k] = seqID
+	}
 }
 
 type ClientRegistry struct {
