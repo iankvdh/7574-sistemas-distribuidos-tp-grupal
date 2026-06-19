@@ -1,6 +1,8 @@
 package eof
 
 import (
+	"log/slog"
+
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/messageprotocol/inner"
 )
 
@@ -99,7 +101,16 @@ func (r *RingCoordinator) onClosingToken(token *Token) (Action, *RingResult) {
 func (r *RingCoordinator) tryFinalize(clientID inner.ClientID, aggMatched, aggNotMatched uint64) (Action, *RingResult) {
 	state := r.state[clientID]
 	aggTotal := aggMatched + aggNotMatched
-	if uint32(aggTotal) != state.UpstreamTotal {
+	if uint32(aggTotal) > state.UpstreamTotal {
+		slog.Error("ring: aggTotal exceeded UpstreamTotal — this should never happen",
+			"clientID", clientID,
+			"aggTotal", aggTotal,
+			"upstreamTotal", state.UpstreamTotal,
+		)
+		delete(r.state, clientID)
+		return Action{Kind: ActionReenqueueUpstreamEOF}, nil
+	}
+	if uint32(aggTotal) < state.UpstreamTotal {
 		delete(r.state, clientID)
 		return Action{Kind: ActionReenqueueUpstreamEOF}, nil
 	}

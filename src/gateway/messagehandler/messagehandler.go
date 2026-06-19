@@ -147,9 +147,12 @@ func serialize(msg inner.InternalMessage) (*middleware.Message, error) {
 }
 
 type FinalBatch struct {
-	GatewayID inner.GatewayID
-	ClientID  inner.ClientID
-	Items     []inner.QueryResultItem
+	GatewayID       inner.GatewayID
+	ClientID        inner.ClientID
+	SeqID           uint64
+	SenderStageType uint8
+	SenderReplicaID uint16
+	Items           []inner.QueryResultItem
 }
 
 func DeserializeFinalBatch(message *middleware.Message) (*FinalBatch, error) {
@@ -168,8 +171,11 @@ func DeserializeFinalBatch(message *middleware.Message) (*FinalBatch, error) {
 		items = append(items, inner.QueryResultItem{QueryID: item.QueryID, Data: string(item.Payload)})
 	}
 	return &FinalBatch{
-		GatewayID: batch.GatewayID,
-		ClientID:  batch.ClientID,
-		Items:     items,
+		GatewayID:       batch.GatewayID,
+		ClientID:        batch.ClientID,
+		SeqID:           batch.SeqID,
+		SenderStageType: batch.SenderStageType,
+		SenderReplicaID: batch.SenderReplicaID,
+		Items:           items,
 	}, nil
 }
