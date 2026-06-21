@@ -23,6 +23,15 @@ type Leadership interface {
 	IsLeader() bool
 }
 
+type PeerTracker interface {
+	PeersLastSeen() map[byte]time.Time
+}
+
+type SentinelPeerSpec struct {
+	ID        byte
+	Container string
+}
+
 type Config struct {
 	ListenAddr         string
 	ExpectedContainers []string
@@ -30,6 +39,12 @@ type Config struct {
 	HeartbeatTimeout   time.Duration
 	DetectionInterval  time.Duration
 	RestartCooldown    time.Duration
+
+	SentinelPeers             []SentinelPeerSpec
+	SentinelPeerTimeout       time.Duration
+	SentinelPeerGrace         time.Duration
+	SentinelPeerCooldown      time.Duration
+	SentinelDetectionInterval time.Duration
 }
 
 type NodeMonitor struct {
@@ -43,9 +58,14 @@ type NodeMonitor struct {
 	lastRestarted    map[string]time.Time
 	startupDeadline  time.Time
 	hbListener       *heartbeatListener
+
+	peerTracker            PeerTracker
+	sentinelPeers          map[byte]string
+	sentinelPeerGraceUntil time.Time
+	deadPeers              map[byte]bool
 }
 
-func NewNodeMonitor(cfg Config, bullyCoordinator Leadership, restarter Restarter, clock Clock) (*NodeMonitor, error) {
+func NewNodeMonitor(cfg Config, bullyCoordinator Leadership, restarter Restarter, clock Clock, peerTracker PeerTracker) (*NodeMonitor, error) {
 	if clock == nil {
 		clock = realClock{}
 	}
@@ -63,11 +83,20 @@ func NewNodeMonitor(cfg Config, bullyCoordinator Leadership, restarter Restarter
 		lastRestarted:    map[string]time.Time{},
 		startupDeadline:  clock.Now().Add(cfg.StartupGrace),
 		hbListener:       hbListener,
+		peerTracker:      peerTracker,
 	}
 	for _, name := range cfg.ExpectedContainers {
 		if name != "" {
 			nm.knownContainers[name] = true
 		}
+	}
+	if peerTracker != nil && len(cfg.SentinelPeers) > 0 {
+		nm.sentinelPeers = make(map[byte]string, len(cfg.SentinelPeers))
+		nm.deadPeers = make(map[byte]bool, len(cfg.SentinelPeers))
+		for _, sp := range cfg.SentinelPeers {
+			nm.sentinelPeers[sp.ID] = sp.Container
+		}
+		nm.sentinelPeerGraceUntil = clock.Now().Add(cfg.SentinelPeerGrace)
 	}
 	return nm, nil
 }
@@ -85,6 +114,14 @@ func (nm *NodeMonitor) Run(ctx context.Context) {
 		defer wg.Done()
 		nm.detectionLoop(ctx)
 	}()
+
+	if nm.peerTracker != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			nm.sentinelPeerLoop(ctx)
+		}()
+	}
 
 	<-ctx.Done()
 	_ = nm.hbListener.close()
@@ -111,12 +148,6 @@ func (nm *NodeMonitor) detectionLoop(ctx context.Context) {
 	}
 }
 
-// checkContainers is the detection pass. Only the leader restarts anything, but
-// it relies entirely on the heartbeat map (never on Docker) to decide.
-//
-// It selects the restart candidates under the lock (recording the cooldown
-// stamp atomically), then performs the potentially-slow docker restarts after
-// releasing the lock, so the UDP listener keeps recording heartbeats meanwhile.
 func (nm *NodeMonitor) checkContainers() {
 	if !nm.bullyCoordinator.IsLeader() {
 		return
@@ -150,5 +181,66 @@ func (nm *NodeMonitor) checkContainers() {
 			continue
 		}
 		slog.Warn("sentinel: container restarted", "container", name)
+	}
+}
+
+func (nm *NodeMonitor) sentinelPeerLoop(ctx context.Context) {
+	interval := nm.cfg.SentinelDetectionInterval
+	if interval <= 0 {
+		interval = nm.cfg.DetectionInterval
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if !nm.bullyCoordinator.IsLeader() {
+				continue
+			}
+			nm.checkSentinelPeers()
+		}
+	}
+}
+
+func (nm *NodeMonitor) checkSentinelPeers() {
+	now := nm.clock.Now()
+	if !now.After(nm.sentinelPeerGraceUntil) {
+		return
+	}
+	peersLastSeen := nm.peerTracker.PeersLastSeen()
+
+	var toRestart []string
+	var cameBack []string
+	nm.mu.Lock()
+	for peerID, container := range nm.sentinelPeers {
+		lastSeen, seen := peersLastSeen[peerID]
+		if seen && now.Sub(lastSeen) <= nm.cfg.SentinelPeerTimeout {
+			if nm.deadPeers[peerID] {
+				nm.deadPeers[peerID] = false
+				cameBack = append(cameBack, container)
+			}
+			continue
+		}
+		if last, ok := nm.lastRestarted[container]; ok && now.Sub(last) < nm.cfg.SentinelPeerCooldown {
+			slog.Warn("sentinel: peer cooldown active, skipping restart", "peer_container", container)
+			continue
+		}
+		nm.deadPeers[peerID] = true
+		nm.lastRestarted[container] = now
+		toRestart = append(toRestart, container)
+	}
+	nm.mu.Unlock()
+
+	for _, name := range cameBack {
+		slog.Info("sentinel: peer is back", "container", name)
+	}
+	for _, name := range toRestart {
+		if err := nm.restarter.Restart(name); err != nil {
+			slog.Error("sentinel: peer restart failed", "container", name, "err", err)
+			continue
+		}
+		slog.Warn("sentinel: peer restarted", "container", name)
 	}
 }

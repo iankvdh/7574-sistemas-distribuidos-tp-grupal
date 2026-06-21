@@ -60,6 +60,9 @@ type BullyCoordinator struct {
 	okReceived    chan struct{}
 	coordReceived chan struct{}
 	jitterFn      func() time.Duration
+
+	peerMu       sync.RWMutex
+	peerLastSeen map[byte]time.Time
 }
 
 func NewBullyCoordinator(cfg Config, control Control, ping Pinger) *BullyCoordinator {
@@ -76,6 +79,7 @@ func NewBullyCoordinator(cfg Config, control Control, ping Pinger) *BullyCoordin
 		leaderID:      noLeader,
 		okReceived:    make(chan struct{}, 1),
 		coordReceived: make(chan struct{}, 1),
+		peerLastSeen:  make(map[byte]time.Time),
 	}
 	bc.jitterFn = func() time.Duration {
 		if cfg.BaseJitter <= 0 {
@@ -96,6 +100,39 @@ func (bc *BullyCoordinator) LeaderID() byte {
 	bc.mu.RLock()
 	defer bc.mu.RUnlock()
 	return bc.leaderID
+}
+
+func (bc *BullyCoordinator) RecordPeerHeartbeat(peerID byte) {
+	bc.peerMu.Lock()
+	bc.peerLastSeen[peerID] = time.Now()
+	bc.peerMu.Unlock()
+}
+
+func (bc *BullyCoordinator) PeersLastSeen() map[byte]time.Time {
+	bc.peerMu.RLock()
+	defer bc.peerMu.RUnlock()
+	out := make(map[byte]time.Time, len(bc.peerLastSeen))
+	for k, v := range bc.peerLastSeen {
+		out[k] = v
+	}
+	return out
+}
+
+func (bc *BullyCoordinator) EmitPeerHeartbeats(ctx context.Context, sender HeartbeatSender, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			for _, peer := range bc.cfg.Peers {
+				if err := sender.SendHeartbeat(peer.UDPAddr, bc.cfg.SelfID); err != nil {
+					slog.Debug("bully: failed to send heartbeat to peer", "peer", peer.ID, "err", err)
+				}
+			}
+		}
+	}
 }
 
 func (bc *BullyCoordinator) Run(ctx context.Context) {

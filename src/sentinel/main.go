@@ -39,7 +39,6 @@ func run() int {
 		return 1
 	}
 
-	// --- bully coordinator -----------------------------------------------------
 	coordinator := bully.NewBullyCoordinator(bully.Config{
 		SelfID:             cfg.SelfID,
 		Peers:              cfg.Peers,
@@ -50,16 +49,20 @@ func run() int {
 		BaseJitter:         cfg.BaseJitter,
 	}, control, ping)
 
-	// --- monitor ----------------------------------------------------------
 	restarter := monitor.NewDockerRestarter(cfg.RestartTimeout, cfg.RestartStopGrace)
 	mon, err := monitor.NewNodeMonitor(monitor.Config{
-		ListenAddr:         cfg.WorkerUDPListenPort,
-		ExpectedContainers: cfg.ExpectedContainers,
-		StartupGrace:       cfg.StartupGrace,
-		HeartbeatTimeout:   cfg.HeartbeatTimeout,
-		DetectionInterval:  cfg.DetectionInterval,
-		RestartCooldown:    cfg.RestartCooldown,
-	}, coordinator, restarter, nil)
+		ListenAddr:           cfg.WorkerUDPListenPort,
+		ExpectedContainers:   cfg.ExpectedContainers,
+		StartupGrace:         cfg.StartupGrace,
+		HeartbeatTimeout:     cfg.HeartbeatTimeout,
+		DetectionInterval:    cfg.DetectionInterval,
+		RestartCooldown:      cfg.RestartCooldown,
+		SentinelPeers:             cfg.SentinelPeers,
+		SentinelPeerTimeout:       cfg.SentinelPeerTimeout,
+		SentinelPeerGrace:         cfg.SentinelPeerGrace,
+		SentinelPeerCooldown:      cfg.SentinelPeerCooldown,
+		SentinelDetectionInterval: cfg.SentinelDetectionInterval,
+	}, coordinator, restarter, nil, coordinator)
 	if err != nil {
 		slog.Error("While binding worker heartbeat listener", "addr", cfg.WorkerUDPListenPort, "err", err)
 		_ = ping.Close()
@@ -70,17 +73,20 @@ func run() int {
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 
-	// Serve loops for both transports.
 	wg.Add(1)
 	go func() { defer wg.Done(); control.Serve(coordinator.Handle) }()
 	wg.Add(1)
-	go func() { defer wg.Done(); ping.ServePing(coordinator.IsLeader, cfg.SelfID) }()
+	go func() {
+		defer wg.Done()
+		ping.ServePing(coordinator.IsLeader, cfg.SelfID, coordinator.RecordPeerHeartbeat)
+	}()
 
-	// Bully state machine (bootstrap + leader monitoring).
 	wg.Add(1)
 	go func() { defer wg.Done(); coordinator.Run(ctx) }()
 
-	// Worker monitor (heartbeat receiver + detection/restart loop).
+	wg.Add(1)
+	go func() { defer wg.Done(); coordinator.EmitPeerHeartbeats(ctx, ping, cfg.SentinelHBInterval) }()
+
 	wg.Add(1)
 	go func() { defer wg.Done(); mon.Run(ctx) }()
 
@@ -92,7 +98,6 @@ func run() int {
 		"worker_udp", cfg.WorkerUDPListenPort,
 	)
 
-	// Graceful quit on SIGINT/SIGTERM.
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
 	sig := <-signals

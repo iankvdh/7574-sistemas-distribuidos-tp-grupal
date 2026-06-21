@@ -8,6 +8,7 @@ import (
 
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/env"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/sentinel/bully"
+	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/sentinel/monitor"
 )
 
 type Config struct {
@@ -31,13 +32,21 @@ type Config struct {
 	ControlDialTimeout time.Duration
 	ControlIOTimeout   time.Duration
 
-	// Monitor config.
+	// Worker monitor config.
 	StartupGrace      time.Duration
 	HeartbeatTimeout  time.Duration
 	DetectionInterval time.Duration
 	RestartCooldown   time.Duration
 	RestartTimeout    time.Duration
 	RestartStopGrace  int
+
+	// Sentinel peer monitor config.
+	SentinelPeers                []monitor.SentinelPeerSpec
+	SentinelHBInterval           time.Duration
+	SentinelPeerTimeout          time.Duration
+	SentinelPeerGrace            time.Duration
+	SentinelPeerCooldown         time.Duration
+	SentinelDetectionInterval    time.Duration
 }
 
 func Load() (Config, error) {
@@ -99,12 +108,25 @@ func Load() (Config, error) {
 		{"BULLY_BOOTSTRAP_JITTER_MS", 500},
 		{"CONTROL_DIAL_TIMEOUT_MS", 2000},
 		{"CONTROL_IO_TIMEOUT_MS", 2000},
+		{"SENTINEL_HB_INTERVAL_SECONDS", 3},
+		{"SENTINEL_PEER_TIMEOUT_SECONDS", 9},
+		{"SENTINEL_PEER_GRACE_SECONDS", 10},
+		{"SENTINEL_PEER_COOLDOWN_SECONDS", 30},
+		{"SENTINEL_DETECTION_INTERVAL_SECONDS", 2},
 	} {
 		v, err := env.IntWithDefault(spec.key, spec.def, true)
 		if err != nil {
 			return Config{}, err
 		}
 		ints[spec.key] = v
+	}
+
+	sentinelPeers := make([]monitor.SentinelPeerSpec, 0, len(peers))
+	for _, p := range peers {
+		sentinelPeers = append(sentinelPeers, monitor.SentinelPeerSpec{
+			ID:        p.ID,
+			Container: p.Hostname,
+		})
 	}
 
 	return Config{
@@ -131,6 +153,13 @@ func Load() (Config, error) {
 		RestartCooldown:   secs(ints["RESTART_COOLDOWN_SECONDS"]),
 		RestartTimeout:    secs(ints["RESTART_TIMEOUT_SECONDS"]),
 		RestartStopGrace:  ints["RESTART_STOP_GRACE_SECONDS"],
+
+		SentinelPeers:        sentinelPeers,
+		SentinelHBInterval:        secs(ints["SENTINEL_HB_INTERVAL_SECONDS"]),
+		SentinelPeerTimeout:       secs(ints["SENTINEL_PEER_TIMEOUT_SECONDS"]),
+		SentinelPeerGrace:         secs(ints["SENTINEL_PEER_GRACE_SECONDS"]),
+		SentinelPeerCooldown:      secs(ints["SENTINEL_PEER_COOLDOWN_SECONDS"]),
+		SentinelDetectionInterval: secs(ints["SENTINEL_DETECTION_INTERVAL_SECONDS"]),
 	}, nil
 }
 
@@ -152,9 +181,10 @@ func parsePeers(raw string) ([]bully.Peer, error) {
 			return nil, fmt.Errorf("PEERS entry %q has empty field", entry)
 		}
 		peers = append(peers, bully.Peer{
-			ID:      byte(id),
-			TCPAddr: net_JoinHostPort(host, tcpPort),
-			UDPAddr: net_JoinHostPort(host, udpPort),
+			ID:       byte(id),
+			Hostname: host,
+			TCPAddr:  net_JoinHostPort(host, tcpPort),
+			UDPAddr:  net_JoinHostPort(host, udpPort),
 		})
 	}
 	if len(peers) == 0 {
@@ -166,7 +196,6 @@ func parsePeers(raw string) ([]bully.Peer, error) {
 func net_JoinHostPort(host, port string) string {
 	return host + ":" + port
 }
-
 
 func secs(n int) time.Duration  { return time.Duration(n) * time.Second }
 func msecs(n int) time.Duration { return time.Duration(n) * time.Millisecond }
