@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/dedup"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/messageprotocol/inner"
 )
 
@@ -72,16 +73,18 @@ type JACEntry struct {
 }
 
 type ClientCheckpoint struct {
-	Version            int                  `json:"v"`
-	ClientID           string               `json:"cid"`
-	StrategyState      []byte               `json:"ss,omitempty"`
-	RingStates         map[string]RingEntry `json:"rs,omitempty"`
-	JACStates          map[string]JACEntry  `json:"js,omitempty"`
-	LastRecvSeqID      map[string]uint64    `json:"lr,omitempty"` // "stageType:replicaID" → last seen SeqID
-	OutSeqID           uint64               `json:"os"`
-	OutCounts          map[string]uint64    `json:"oc,omitempty"` // "outputIndex|routingKey" → messages published
-	PendingEOFBody     []byte               `json:"peof,omitempty"`
-	PendingEOFInputIdx int                  `json:"peofidx,omitempty"`
+	Version        int                           `json:"v"`
+	ClientID       string                        `json:"cid"`
+	StrategyState  []byte                        `json:"ss,omitempty"`
+	RingStates     map[string]RingEntry          `json:"rs,omitempty"`
+	JACStates      map[string]JACEntry           `json:"js,omitempty"`
+	LastRecvSeqID  map[string]uint64             `json:"lr,omitempty"`
+	DedupSeen      map[string]*dedup.IntervalSet `json:"dd,omitempty"`
+	ProcessedItems uint64                        `json:"pi,omitempty"`
+	OutSeqID           uint64            `json:"os"`
+	OutCounts          map[string]uint64 `json:"oc,omitempty"` // "outputIndex|routingKey" → messages published
+	PendingEOFBody     []byte            `json:"peof,omitempty"`
+	PendingEOFInputIdx int               `json:"peofidx,omitempty"`
 }
 
 type MetaCheckpoint struct {
@@ -89,7 +92,7 @@ type MetaCheckpoint struct {
 	Tombstones map[string]int64 `json:"tb"` // clientID → timestamp of abort/expiry
 }
 
-const checkpointVersion = 1
+const checkpointVersion = 2
 const metaFileName = "meta.json"
 
 func ClientCheckpointPath(dir string, clientID inner.ClientID) string {

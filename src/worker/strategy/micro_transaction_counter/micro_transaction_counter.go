@@ -153,7 +153,7 @@ func (m *MicroTransactionCounter) OnUpstreamEOF(envelope *inner.Envelope) (strat
 	return m.outcomeFor(envelope.ClientID, action), nil
 }
 
-func (m *MicroTransactionCounter) OnRingToken(token *eof.Token) (strategy.EOFOutcome, error) {
+func (m *MicroTransactionCounter) OnRingToken(token *eof.Token, _ uint64) (strategy.EOFOutcome, error) {
 	if m.txRing == nil {
 		return strategy.EOFOutcome{Action: eof.Action{Kind: eof.ActionNone}}, nil
 	}
@@ -187,6 +187,7 @@ func (m *MicroTransactionCounter) outcomeFor(clientID inner.ClientID, action eof
 			OutputIndex: 0,
 			RoutingKey:  rk,
 			QueryID:     queryID,
+			Total:       uint32(len(outputs)),
 		}}
 		outcome.ClientCompleted = true
 	}

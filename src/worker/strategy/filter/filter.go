@@ -132,7 +132,7 @@ func (f *Filter) OnUpstreamEOF(env *inner.Envelope) (strategy.EOFOutcome, error)
 	return outcome, nil
 }
 
-func (f *Filter) OnRingToken(token *eof.Token) (strategy.EOFOutcome, error) {
+func (f *Filter) OnRingToken(token *eof.Token, _ uint64) (strategy.EOFOutcome, error) {
 	state := f.stateFor(token.ClientID)
 	action, result := f.coordinator.OnRingToken(token, state.matched, state.notMatched)
 	outcome := strategy.EOFOutcome{Action: action}

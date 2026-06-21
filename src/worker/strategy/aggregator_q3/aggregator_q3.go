@@ -75,7 +75,7 @@ func (a *AggregatorQ3) ProcessMessage(envelope *inner.Envelope) ([]strategy.Outp
 }
 
 func (a *AggregatorQ3) OnUpstreamEOF(envelope *inner.Envelope) (strategy.EOFOutcome, error) {
-	action := a.coordinator.OnUpstreamEOF(envelope.ClientID, envelope.SenderStageType, envelope.SenderReplicaID, envelope.Total)
+	action := a.coordinator.OnUpstreamEOF(envelope.ClientID, envelope.SenderStageType, envelope.SenderReplicaID, envelope.Total, envelope.LocalCount)
 	if action.Kind != eof.ActionEmitEOFs {
 		return strategy.EOFOutcome{Action: action}, nil
 	}
@@ -93,6 +93,7 @@ func (a *AggregatorQ3) OnUpstreamEOF(envelope *inner.Envelope) (strategy.EOFOutc
 
 	for i := 0; i < a.nFilterQ3; i++ {
 		rk := a.rkCache[i]
+		var n uint32
 		for _, format := range formats {
 			count := st.counts[format]
 			if count == 0 {
@@ -114,11 +115,13 @@ func (a *AggregatorQ3) OnUpstreamEOF(envelope *inner.Envelope) (strategy.EOFOutc
 				BatchItemKind: inner.Q3AverageItem,
 				BatchQueryID:  queryID,
 			})
+			n++
 		}
 		eofs = append(eofs, eof.EOFEmit{
 			OutputIndex: 0,
 			RoutingKey:  rk,
 			QueryID:     queryID,
+			Total:       n,
 		})
 	}
 
@@ -130,7 +133,7 @@ func (a *AggregatorQ3) OnUpstreamEOF(envelope *inner.Envelope) (strategy.EOFOutc
 	}, nil
 }
 
-func (a *AggregatorQ3) OnRingToken(_ *eof.Token) (strategy.EOFOutcome, error) {
+func (a *AggregatorQ3) OnRingToken(_ *eof.Token, _ uint64) (strategy.EOFOutcome, error) {
 	return strategy.EOFOutcome{Action: eof.Action{Kind: eof.ActionNone}}, nil
 }
 

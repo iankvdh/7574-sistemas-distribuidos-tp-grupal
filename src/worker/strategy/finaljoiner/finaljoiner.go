@@ -12,7 +12,8 @@ import (
 )
 
 type finalJoinerCheckpoint struct {
-	JACs map[string]eof.JACStateSnapshot `json:"jacs"`
+	JACs      map[string]eof.JACStateSnapshot `json:"jacs"`
+	Forwarded map[string]uint64               `json:"fwd,omitempty"`
 }
 
 var supportedQueries = []uint8{1, 2, 3, 4, 5}
@@ -21,11 +22,13 @@ type FinalJoiner struct {
 	strategy.NoopValidator
 	cfg          strategy.StrategyConfig
 	coordinators map[uint8]*eof.JoinerAccumulateCoordinator
+	forwarded map[inner.ClientID]map[uint8]uint64
 }
 
 func New() *FinalJoiner {
 	return &FinalJoiner{
 		coordinators: map[uint8]*eof.JoinerAccumulateCoordinator{},
+		forwarded:    map[inner.ClientID]map[uint8]uint64{},
 	}
 }
 
@@ -64,6 +67,10 @@ func (j *FinalJoiner) ProcessMessage(envelope *inner.Envelope) ([]strategy.Outpu
 	if err != nil {
 		return nil, strategy.LocalCounts{}, err
 	}
+	if j.forwarded[envelope.ClientID] == nil {
+		j.forwarded[envelope.ClientID] = map[uint8]uint64{}
+	}
+	j.forwarded[envelope.ClientID][envelope.QueryID]++
 	return []strategy.OutputMessage{{
 		OutputIndices: []int{idx},
 		Body:          []byte(row),
@@ -79,7 +86,7 @@ func (j *FinalJoiner) OnUpstreamEOF(envelope *inner.Envelope) (strategy.EOFOutco
 		// EOF for a query this FJ doesn't track — silently ignore.
 		return strategy.EOFOutcome{Action: eof.Action{Kind: eof.ActionNone}}, nil
 	}
-	action := coordinator.OnUpstreamEOF(envelope.ClientID, envelope.SenderStageType, envelope.SenderReplicaID, envelope.Total)
+	action := coordinator.OnUpstreamEOF(envelope.ClientID, envelope.SenderStageType, envelope.SenderReplicaID, envelope.Total, j.forwarded[envelope.ClientID][qid])
 	if action.Kind != eof.ActionEmitEOFs {
 		return strategy.EOFOutcome{Action: action}, nil
 	}
@@ -94,16 +101,20 @@ func (j *FinalJoiner) OnUpstreamEOF(envelope *inner.Envelope) (strategy.EOFOutco
 	}, nil
 }
 
-func (j *FinalJoiner) OnRingToken(_ *eof.Token) (strategy.EOFOutcome, error) {
+func (j *FinalJoiner) OnRingToken(_ *eof.Token, _ uint64) (strategy.EOFOutcome, error) {
 	return strategy.EOFOutcome{Action: eof.Action{Kind: eof.ActionNone}}, nil
 }
 
 func (j *FinalJoiner) MarshalClientState(clientID inner.ClientID) ([]byte, error) {
 	checkPoint := finalJoinerCheckpoint{
-		JACs: make(map[string]eof.JACStateSnapshot, len(j.coordinators)),
+		JACs:      make(map[string]eof.JACStateSnapshot, len(j.coordinators)),
+		Forwarded: make(map[string]uint64, len(j.forwarded[clientID])),
 	}
 	for qid, coord := range j.coordinators {
 		checkPoint.JACs[fmt.Sprintf("q%d", qid)] = coord.GetClientJACState(clientID)
+	}
+	for qid, n := range j.forwarded[clientID] {
+		checkPoint.Forwarded[fmt.Sprintf("q%d", qid)] = n
 	}
 	return json.Marshal(checkPoint)
 }
@@ -119,6 +130,15 @@ func (j *FinalJoiner) UnmarshalClientState(clientID inner.ClientID, data []byte)
 			coord.RestoreClientJACState(clientID, snap)
 		}
 	}
+	if len(checkPoint.Forwarded) > 0 {
+		fwd := make(map[uint8]uint64, len(checkPoint.Forwarded))
+		for _, qid := range supportedQueries {
+			if n, ok := checkPoint.Forwarded[fmt.Sprintf("q%d", qid)]; ok {
+				fwd[qid] = n
+			}
+		}
+		j.forwarded[clientID] = fwd
+	}
 	return nil
 }
 
@@ -126,6 +146,7 @@ func (j *FinalJoiner) CleanupClient(clientID inner.ClientID) {
 	for _, coord := range j.coordinators {
 		coord.CleanupClient(clientID)
 	}
+	delete(j.forwarded, clientID)
 }
 
 // outputIndexFor maps the originating gateway (1-based) to an output index
