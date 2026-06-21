@@ -3,6 +3,7 @@ package runtime
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -23,6 +24,7 @@ import (
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/heartbeat"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/messageprotocol/inner"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/middleware"
+	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/wal"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/config"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/builder"
@@ -62,6 +64,21 @@ type Worker struct {
 	dedupSeen map[inner.DedupKey]*dedup.IntervalSet
 	processedItems map[inner.ClientID]uint64
 	outSeqID map[inner.ClientID]uint64
+
+	deltaCP       strategy.DeltaCheckpointer
+	wals          map[inner.ClientID]*wal.Log
+	walGen        map[inner.ClientID]uint64
+	pendingDeltas map[inner.ClientID][][]byte
+	lastSnapSize  map[inner.ClientID]int64
+}
+
+const walCompactionFloorBytes = 1 << 20
+
+type walDelta struct {
+	IDSpace   string `json:"is"`
+	SeqID     uint64 `json:"s"`
+	ItemCount uint32 `json:"n"`
+	Delta     []byte `json:"d,omitempty"`
 }
 
 type deliveryRef struct {
@@ -180,6 +197,13 @@ func New(cfg config.WorkerConfig) (*Worker, error) {
 		dedupSeen:      map[inner.DedupKey]*dedup.IntervalSet{},
 		processedItems: map[inner.ClientID]uint64{},
 		outSeqID:       map[inner.ClientID]uint64{},
+		wals:           map[inner.ClientID]*wal.Log{},
+		walGen:         map[inner.ClientID]uint64{},
+		pendingDeltas:  map[inner.ClientID][][]byte{},
+		lastSnapSize:   map[inner.ClientID]int64{},
+	}
+	if dcp, ok := strat.(strategy.DeltaCheckpointer); ok && cfg.WALEnabled {
+		w.deltaCP = dcp
 	}
 
 	foundCheckpoints := w.loadCheckpoints()
@@ -468,6 +492,9 @@ func (w *Worker) handleBatch(batch *inner.BatchMessage, raw []byte, inputIndex i
 	}
 	w.dedupAdd(header)
 	w.processedItems[header.ClientID] += uint64(len(batch.Items))
+	if w.deltaCP != nil {
+		w.bufferDelta(header, len(batch.Items))
+	}
 	if completed {
 		w.completeClient(header.ClientID, deliveryRef{ack: ack, nack: nack})
 		return
@@ -1060,12 +1087,16 @@ func (w *Worker) checkpointAndAck(clientID inner.ClientID) {
 		slog.Error("FlushPublisher failed, exiting for redelivery", "client_id", clientID, "err", err)
 		os.Exit(1)
 	}
-	cp := w.buildClientCheckpoint(clientID)
-	if err := checkpoint.WriteClientCheckpoint(w.cfg.CheckpointDir, cp); err != nil {
-		slog.Error("WriteClientCheckpoint failed, exiting before ACK", "client_id", clientID, "err", err)
-		os.Exit(1)
+	if w.deltaCP != nil {
+		w.walCheckpoint(clientID)
+	} else {
+		cp := w.buildClientCheckpoint(clientID)
+		if err := checkpoint.WriteClientCheckpoint(w.cfg.CheckpointDir, cp); err != nil {
+			slog.Error("WriteClientCheckpoint failed, exiting before ACK", "client_id", clientID, "err", err)
+			os.Exit(1)
+		}
+		w.writeGlobalState()
 	}
-	w.writeGlobalState()
 	w.ackAllPending(clientID)
 }
 
@@ -1093,6 +1124,133 @@ func (w *Worker) writeGlobalState() {
 	}
 }
 
+
+func walBaseFor(clientID inner.ClientID) string {
+	return checkpointNamePrefix + string(clientID)
+}
+
+func (w *Worker) bufferDelta(header inner.Header, itemCount int) {
+	rec := walDelta{
+		IDSpace:   inner.IDSpaceOf(header),
+		SeqID:     header.SeqID,
+		ItemCount: uint32(itemCount),
+		Delta:     w.deltaCP.TakeDelta(header.ClientID),
+	}
+	payload, err := json.Marshal(rec)
+	if err != nil {
+		slog.Error("marshal wal delta failed, exiting", "client_id", header.ClientID, "err", err)
+		os.Exit(1)
+	}
+	w.pendingDeltas[header.ClientID] = append(w.pendingDeltas[header.ClientID], payload)
+}
+
+func (w *Worker) walFor(clientID inner.ClientID) *wal.Log {
+	if l, ok := w.wals[clientID]; ok {
+		return l
+	}
+	l, err := wal.Open(w.cfg.CheckpointDir, walBaseFor(clientID), w.walGen[clientID])
+	if err != nil {
+		slog.Error("wal open failed, exiting", "client_id", clientID, "err", err)
+		os.Exit(1)
+	}
+	w.wals[clientID] = l
+	return l
+}
+
+func (w *Worker) walCheckpoint(clientID inner.ClientID) {
+	log := w.walFor(clientID)
+	if w.lastSnapSize[clientID] == 0 {
+		w.writeWALSnapshot(clientID, log.Gen())
+		w.pendingDeltas[clientID] = nil
+		return
+	}
+	if recs := w.pendingDeltas[clientID]; len(recs) > 0 {
+		if err := log.AppendBatch(recs); err != nil {
+			slog.Error("wal append failed, exiting before ACK", "client_id", clientID, "err", err)
+			os.Exit(1)
+		}
+		w.pendingDeltas[clientID] = nil
+	}
+	threshold := int64(w.cfg.WALCompactionFactor) * w.lastSnapSize[clientID]
+	if threshold < walCompactionFloorBytes {
+		threshold = walCompactionFloorBytes
+	}
+	if log.Size() >= threshold {
+		w.compactWAL(clientID, log)
+	}
+}
+
+func (w *Worker) writeWALSnapshot(clientID inner.ClientID, gen uint64) {
+	w.walGen[clientID] = gen
+	cp := w.buildClientCheckpoint(clientID)
+	data, err := json.Marshal(cp)
+	if err != nil {
+		slog.Error("marshal wal snapshot failed, exiting", "client_id", clientID, "err", err)
+		os.Exit(1)
+	}
+	if err := checkpoint.WriteClientCheckpoint(w.cfg.CheckpointDir, cp); err != nil {
+		slog.Error("WriteClientCheckpoint (wal snapshot) failed, exiting before ACK", "client_id", clientID, "err", err)
+		os.Exit(1)
+	}
+	w.writeGlobalState()
+	w.lastSnapSize[clientID] = int64(len(data))
+}
+
+func (w *Worker) compactWAL(clientID inner.ClientID, log *wal.Log) {
+	w.writeWALSnapshot(clientID, log.Gen()+1)
+	if _, err := log.Rotate(); err != nil {
+		slog.Error("wal rotate failed, exiting", "client_id", clientID, "err", err)
+		os.Exit(1)
+	}
+}
+
+func (w *Worker) replayWAL(clientID inner.ClientID, gen uint64) {
+	err := wal.Replay(w.cfg.CheckpointDir, walBaseFor(clientID), gen, func(payload []byte) error {
+		var rec walDelta
+		if err := json.Unmarshal(payload, &rec); err != nil {
+			return err
+		}
+		if len(rec.Delta) > 0 {
+			if err := w.deltaCP.ApplyDelta(clientID, rec.Delta); err != nil {
+				return err
+			}
+		}
+		w.dedupAddKeyed(clientID, rec.IDSpace, rec.SeqID)
+		w.processedItems[clientID] += uint64(rec.ItemCount)
+		return nil
+	})
+	if err != nil {
+		slog.Error("wal replay failed, exiting", "client_id", clientID, "err", err)
+		os.Exit(1)
+	}
+}
+
+func (w *Worker) dedupAddKeyed(clientID inner.ClientID, idSpace string, seqID uint64) {
+	if seqID == 0 {
+		return
+	}
+	key := inner.DedupKey{ClientID: clientID, IDSpace: idSpace}
+	set := w.dedupSeen[key]
+	if set == nil {
+		set = &dedup.IntervalSet{}
+		w.dedupSeen[key] = set
+	}
+	set.Add(seqID)
+}
+
+func (w *Worker) closeWAL(clientID inner.ClientID) {
+	if w.deltaCP == nil {
+		return
+	}
+	if l, ok := w.wals[clientID]; ok {
+		_ = l.Close()
+		delete(w.wals, clientID)
+	}
+	_ = wal.Remove(w.cfg.CheckpointDir, walBaseFor(clientID))
+	delete(w.walGen, clientID)
+	delete(w.pendingDeltas, clientID)
+	delete(w.lastSnapSize, clientID)
+}
 
 func (w *Worker) completeClient(clientID inner.ClientID, finalRef deliveryRef) {
 	if err := w.flushClientBuffers(clientID); err != nil {
@@ -1126,6 +1284,7 @@ func (w *Worker) abortClient(clientID inner.ClientID) {
 }
 
 func (w *Worker) cleanupClientState(clientID inner.ClientID) {
+	w.closeWAL(clientID)
 	if recoverableClientState, ok := w.strategy.(strategy.RecoverableStrategy); ok {
 		recoverableClientState.CleanupClient(clientID)
 	}
@@ -1249,6 +1408,13 @@ func (w *Worker) loadCheckpoints() bool {
 				slog.Warn("UnmarshalClientState failed", "client_id", clientID, "err", err)
 			}
 		}
+		if w.deltaCP != nil {
+			w.walGen[clientID] = clientCheckpoint.WALGen
+			w.replayWAL(clientID, clientCheckpoint.WALGen)
+			if info, err := os.Stat(checkpointPath); err == nil {
+				w.lastSnapSize[clientID] = info.Size()
+			}
+		}
 		if len(clientCheckpoint.PendingEOFBody) > 0 {
 			w.upstreamEOFs[clientID] = cachedEOF{
 				inputIndex: clientCheckpoint.PendingEOFInputIdx,
@@ -1286,6 +1452,7 @@ func (w *Worker) buildClientCheckpoint(clientID inner.ClientID) *checkpoint.Clie
 		LastRecvSeqID:  w.serializeSeqMap(clientID),
 		DedupSeen:      w.serializeDedup(clientID),
 		ProcessedItems: w.processedItems[clientID],
+		WALGen:         w.walGen[clientID],
 	}
 	if recoverableStrategy, ok := w.strategy.(strategy.RecoverableStrategy); ok {
 		data, err := recoverableStrategy.MarshalClientState(clientID)

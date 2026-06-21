@@ -81,6 +81,7 @@ type ClientCheckpoint struct {
 	LastRecvSeqID  map[string]uint64             `json:"lr,omitempty"`
 	DedupSeen      map[string]*dedup.IntervalSet `json:"dd,omitempty"`
 	ProcessedItems uint64                        `json:"pi,omitempty"`
+	WALGen             uint64            `json:"wg,omitempty"`
 	OutSeqID           uint64            `json:"os"`
 	OutCounts          map[string]uint64 `json:"oc,omitempty"` // "outputIndex|routingKey" → messages published
 	PendingEOFBody     []byte            `json:"peof,omitempty"`

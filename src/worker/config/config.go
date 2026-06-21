@@ -22,6 +22,7 @@ const (
 	defaultAMQPCloseTimeoutSecs  = 5
 	defaultMaintenanceIntervalS  = 1
 	defaultMaxPendingAckAgeS     = 10
+	defaultWALCompactionFactor   = 2
 )
 
 type WorkerConfig struct {
@@ -42,6 +43,8 @@ type WorkerConfig struct {
 	DataDir               string
 	CheckpointDir         string
 	CheckpointInterval    int
+	WALCompactionFactor   int
+	WALEnabled            bool
 	ClientTTL             time.Duration
 	TombstoneTTL          time.Duration
 	AMQPCloseTimeout      time.Duration
@@ -96,6 +99,15 @@ func Load() (WorkerConfig, error) {
 			"CHECKPOINT_INTERVAL (%d) must be <= PREFETCH_COUNT (%d)",
 			checkpointInterval, middleware.PrefetchCount)
 	}
+
+	walCompactionFactor, err := env.IntWithDefault("WAL_COMPACTION_FACTOR", defaultWALCompactionFactor, true)
+	if err != nil {
+		return WorkerConfig{}, err
+	}
+	if walCompactionFactor < 1 {
+		walCompactionFactor = defaultWALCompactionFactor
+	}
+	walEnabled := env.StringWithDefault("WAL_ENABLED", "true") != "false"
 
 	clientTTLSecs, err := env.IntWithDefault("CLIENT_TTL_SECONDS", defaultClientTTLSeconds, true)
 	if err != nil {
@@ -190,6 +202,8 @@ func Load() (WorkerConfig, error) {
 		DataDir:             dataDir,
 		CheckpointDir:       checkpointDir,
 		CheckpointInterval:  checkpointInterval,
+		WALCompactionFactor: walCompactionFactor,
+		WALEnabled:          walEnabled,
 		ClientTTL:           time.Duration(clientTTLSecs) * time.Second,
 		TombstoneTTL:        time.Duration(tombstoneTTLSecs) * time.Second,
 		AMQPCloseTimeout:    time.Duration(amqpCloseTimeoutSecs) * time.Second,
