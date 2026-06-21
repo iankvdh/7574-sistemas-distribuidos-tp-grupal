@@ -20,9 +20,6 @@ type BatchMessage struct {
 func (b *BatchMessage) Type() MessageType { return Batch }
 
 func (b *BatchMessage) Serialize() ([]byte, error) {
-	if len(b.Items) == 0 {
-		return nil, errors.New("batch must contain at least one item")
-	}
 	if len(b.Items) > 0xFFFF {
 		return nil, errors.New("batch exceeds max items (65535)")
 	}
