@@ -7,6 +7,13 @@ sentinels: 3
 log_level: info
 expected_query_eofs: 5
 
+sentinels_env:
+  SENTINEL_HB_INTERVAL_SECONDS: 3
+  SENTINEL_PEER_TIMEOUT_SECONDS: 9
+  SENTINEL_PEER_GRACE_SECONDS: 10
+  SENTINEL_PEER_COOLDOWN_SECONDS: 30
+  SENTINEL_DETECTION_INTERVAL_SECONDS: 2
+
 chaos_monkey:
   exclude:
     - gateway_1

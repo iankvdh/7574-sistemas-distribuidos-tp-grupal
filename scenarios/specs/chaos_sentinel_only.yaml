@@ -1,16 +1,14 @@
-# Topología (idéntica a scaled.yaml) + Chaos Monkey.
-# El Chaos Monkey puede matar workers, gateways, sentinels y fetchers al azar.
-# TARGETS/EXCLUDE los calcula compose-gen automáticamente (no editar a mano).
+# Spec de prueba para sentinel self-revival.
+# Topología idéntica a chaos.yaml, pero el Chaos Monkey SOLO mata sentinels.
+# Kill interval = 10s (más agresivo que chaos.yaml) para estresar el peor caso.
+# Con 3 sentinels y revival_time ≈ 14s > 10s = kill_interval, puede haber momentos
+# con 1 sentinel vivo, pero nunca 0 (la gracia de 30s evita la tormenta inicial).
 
 gateways: 4
 sentinels: 3
 log_level: info
 expected_query_eofs: 5
 
-# revival_time = SENTINEL_PEER_TIMEOUT (9s)
-#             + SENTINEL_DETECTION_INTERVAL (2s)
-#             + restart_overhead (~1s, container ya estaba stopped)
-#             = ~12s < KILL_INTERVAL (20s en chaos.yaml)
 sentinels_env:
   SENTINEL_HB_INTERVAL_SECONDS: 3
   SENTINEL_PEER_TIMEOUT_SECONDS: 9
@@ -19,9 +17,13 @@ sentinels_env:
   SENTINEL_DETECTION_INTERVAL_SECONDS: 2
 
 chaos_monkey:
+  targets_only:
+    - sentinel_0
+    - sentinel_1
+    - sentinel_2
   env:
-    KILL_INTERVAL_SECONDS: 20
-    KILL_TIMEOUT_SECONDS: 10
+    KILL_INTERVAL_SECONDS: 13
+    KILL_TIMEOUT_SECONDS: 5
 
 fetchers:
   - name: fetcher_q5
