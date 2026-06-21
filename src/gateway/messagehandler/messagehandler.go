@@ -152,6 +152,7 @@ type FinalBatch struct {
 	SeqID           uint64
 	SenderStageType uint8
 	SenderReplicaID uint16
+	IDSpace         string
 	Items           []inner.QueryResultItem
 }
 
@@ -176,6 +177,7 @@ func DeserializeFinalBatch(message *middleware.Message) (*FinalBatch, error) {
 		SeqID:           batch.SeqID,
 		SenderStageType: batch.SenderStageType,
 		SenderReplicaID: batch.SenderReplicaID,
+		IDSpace:         inner.IDSpaceOf(batch.Header),
 		Items:           items,
 	}, nil
 }
