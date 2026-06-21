@@ -93,3 +93,9 @@ type DedupRecoverer interface {
 type BufferFlusher interface {
 	CloseAllBuffers()
 }
+
+type DeltaCheckpointer interface {
+	RecoverableStrategy
+	TakeDelta(clientID inner.ClientID) []byte
+	ApplyDelta(clientID inner.ClientID, delta []byte) error
+}
