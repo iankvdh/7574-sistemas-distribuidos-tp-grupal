@@ -15,13 +15,8 @@ import (
 
 const queryID uint8 = 1
 
-type clientState struct {
-	processed uint64
-}
-
 type sharderCheckpoint struct {
-	Processed uint64                `json:"processed"`
-	Ring      eof.RingStateSnapshot `json:"ring"`
+	Ring eof.RingStateSnapshot `json:"ring"`
 }
 
 type Sharder struct {
@@ -29,12 +24,11 @@ type Sharder struct {
 	cfg             strategy.StrategyConfig
 	nFinalJoiners   int
 	ringCoordinator *eof.RingCoordinator
-	state           map[inner.ClientID]*clientState
 	rkCache         []string
 }
 
 func New() *Sharder {
-	return &Sharder{state: map[inner.ClientID]*clientState{}}
+	return &Sharder{}
 }
 
 func (s *Sharder) Init(cfg strategy.StrategyConfig) error {
@@ -79,7 +73,6 @@ func (s *Sharder) ProcessMessage(envelope *inner.Envelope) ([]strategy.OutputMes
 		return nil, strategy.LocalCounts{}, fmt.Errorf("serialize query1 row: %w", err)
 	}
 
-	s.stateFor(envelope.ClientID).processed++
 	return []strategy.OutputMessage{{
 		OutputIndices: []int{0},
 		Body:          body,
@@ -91,21 +84,19 @@ func (s *Sharder) ProcessMessage(envelope *inner.Envelope) ([]strategy.OutputMes
 }
 
 func (s *Sharder) OnUpstreamEOF(envelope *inner.Envelope) (strategy.EOFOutcome, error) {
-	st := s.stateFor(envelope.ClientID)
-	action, _ := s.ringCoordinator.OnUpstreamEOF(envelope.ClientID, envelope.Total, st.processed, 0)
-	return s.outcomeFor(envelope.ClientID, action), nil
+	action, _ := s.ringCoordinator.OnUpstreamEOF(envelope.ClientID, envelope.Total, envelope.LocalCount, 0)
+	return s.outcomeFor(envelope.ClientID, action, envelope.LocalCount), nil
 }
 
-func (s *Sharder) OnRingToken(token *eof.Token) (strategy.EOFOutcome, error) {
+func (s *Sharder) OnRingToken(token *eof.Token, localCount uint64) (strategy.EOFOutcome, error) {
 	if s.ringCoordinator == nil {
 		return strategy.EOFOutcome{Action: eof.Action{Kind: eof.ActionNone}}, nil
 	}
-	st := s.stateFor(token.ClientID)
-	action, _ := s.ringCoordinator.OnRingToken(token, st.processed, 0)
-	return s.outcomeFor(token.ClientID, action), nil
+	action, _ := s.ringCoordinator.OnRingToken(token, localCount, 0)
+	return s.outcomeFor(token.ClientID, action, localCount), nil
 }
 
-func (s *Sharder) outcomeFor(clientID inner.ClientID, action eof.Action) strategy.EOFOutcome {
+func (s *Sharder) outcomeFor(clientID inner.ClientID, action eof.Action, localCount uint64) strategy.EOFOutcome {
 	outcome := strategy.EOFOutcome{Action: action}
 	switch action.Kind {
 	case eof.ActionEmitEOFs, eof.ActionEmitEOFsAndForwardToken:
@@ -113,6 +104,7 @@ func (s *Sharder) outcomeFor(clientID inner.ClientID, action eof.Action) strateg
 			OutputIndex: 0,
 			RoutingKey:  s.routingKeyFor(clientID),
 			QueryID:     queryID,
+			Total:       uint32(localCount),
 		}}
 		outcome.ClientCompleted = true
 	}
@@ -120,11 +112,7 @@ func (s *Sharder) outcomeFor(clientID inner.ClientID, action eof.Action) strateg
 }
 
 func (s *Sharder) MarshalClientState(clientID inner.ClientID) ([]byte, error) {
-	state := s.state[clientID]
 	checkPoint := sharderCheckpoint{}
-	if state != nil {
-		checkPoint.Processed = state.processed
-	}
 	checkPoint.Ring, _ = s.ringCoordinator.GetClientRingState(clientID)
 	return json.Marshal(checkPoint)
 }
@@ -134,26 +122,14 @@ func (s *Sharder) UnmarshalClientState(clientID inner.ClientID, data []byte) err
 	if err := json.Unmarshal(data, &checkPoint); err != nil {
 		return err
 	}
-	state := s.stateFor(clientID)
-	state.processed = checkPoint.Processed
 	s.ringCoordinator.RestoreClientRingState(clientID, checkPoint.Ring)
 	return nil
 }
 
 func (s *Sharder) CleanupClient(clientID inner.ClientID) {
-	delete(s.state, clientID)
 	s.ringCoordinator.CleanupClient(clientID)
 }
 
 func (s *Sharder) routingKeyFor(clientID inner.ClientID) string {
 	return s.rkCache[hashing.Shard(string(clientID), s.nFinalJoiners)]
-}
-
-func (s *Sharder) stateFor(clientID inner.ClientID) *clientState {
-	st, ok := s.state[clientID]
-	if !ok {
-		st = &clientState{}
-		s.state[clientID] = st
-	}
-	return st
 }

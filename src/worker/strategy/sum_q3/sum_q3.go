@@ -22,14 +22,12 @@ type partialAvg struct {
 }
 
 type clientState struct {
-	processed uint64
-	partials  map[string]*partialAvg
+	partials map[string]*partialAvg
 }
 
 type sumQ3Checkpoint struct {
-	Processed uint64                 `json:"processed"`
-	Partials  map[string]*partialAvg `json:"partials"`
-	Ring      eof.RingStateSnapshot  `json:"ring"`
+	Partials map[string]*partialAvg `json:"partials"`
+	Ring     eof.RingStateSnapshot  `json:"ring"`
 }
 
 type SumQ3 struct {
@@ -76,8 +74,6 @@ func (a *SumQ3) ProcessMessage(envelope *inner.Envelope) ([]strategy.OutputMessa
 	}
 
 	st := a.stateFor(envelope.ClientID)
-	st.processed++
-
 	pa, ok := st.partials[tx.PaymentFormat]
 	if !ok {
 		pa = &partialAvg{}
@@ -89,17 +85,15 @@ func (a *SumQ3) ProcessMessage(envelope *inner.Envelope) ([]strategy.OutputMessa
 }
 
 func (a *SumQ3) OnUpstreamEOF(envelope *inner.Envelope) (strategy.EOFOutcome, error) {
-	st := a.stateFor(envelope.ClientID)
-	action, _ := a.ringCoordinator.OnUpstreamEOF(envelope.ClientID, envelope.Total, st.processed, 0)
+	action, _ := a.ringCoordinator.OnUpstreamEOF(envelope.ClientID, envelope.Total, envelope.LocalCount, 0)
 	return a.outcomeFor(envelope.ClientID, action), nil
 }
 
-func (a *SumQ3) OnRingToken(token *eof.Token) (strategy.EOFOutcome, error) {
+func (a *SumQ3) OnRingToken(token *eof.Token, localCount uint64) (strategy.EOFOutcome, error) {
 	if a.ringCoordinator == nil {
 		return strategy.EOFOutcome{Action: eof.Action{Kind: eof.ActionNone}}, nil
 	}
-	st := a.stateFor(token.ClientID)
-	action, _ := a.ringCoordinator.OnRingToken(token, st.processed, 0)
+	action, _ := a.ringCoordinator.OnRingToken(token, localCount, 0)
 	return a.outcomeFor(token.ClientID, action), nil
 }
 
@@ -141,6 +135,7 @@ func (a *SumQ3) outcomeFor(clientID inner.ClientID, action eof.Action) strategy.
 			OutputIndex: 0,
 			RoutingKey:  rk,
 			QueryID:     queryID,
+			Total:       uint32(len(outputs)),
 		}}
 		outcome.ClientCompleted = true
 	}
@@ -151,7 +146,6 @@ func (a *SumQ3) MarshalClientState(clientID inner.ClientID) ([]byte, error) {
 	state := a.state[clientID]
 	checkPoint := sumQ3Checkpoint{}
 	if state != nil {
-		checkPoint.Processed = state.processed
 		checkPoint.Partials = state.partials
 	}
 	checkPoint.Ring, _ = a.ringCoordinator.GetClientRingState(clientID)
@@ -164,7 +158,6 @@ func (a *SumQ3) UnmarshalClientState(clientID inner.ClientID, data []byte) error
 		return err
 	}
 	st := a.stateFor(clientID)
-	st.processed = checkPoint.Processed
 	if checkPoint.Partials != nil {
 		st.partials = checkPoint.Partials
 	}

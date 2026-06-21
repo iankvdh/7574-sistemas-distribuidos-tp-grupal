@@ -89,7 +89,7 @@ func (a *AggregatorQ2) ProcessMessage(envelope *inner.Envelope) ([]strategy.Outp
 }
 
 func (a *AggregatorQ2) OnUpstreamEOF(envelope *inner.Envelope) (strategy.EOFOutcome, error) {
-	action := a.coordinator.OnUpstreamEOF(envelope.ClientID, envelope.SenderStageType, envelope.SenderReplicaID, envelope.Total)
+	action := a.coordinator.OnUpstreamEOF(envelope.ClientID, envelope.SenderStageType, envelope.SenderReplicaID, envelope.Total, envelope.LocalCount)
 	if action.Kind != eof.ActionEmitEOFs {
 		return strategy.EOFOutcome{Action: action}, nil
 	}
@@ -139,11 +139,12 @@ func (a *AggregatorQ2) OnUpstreamEOF(envelope *inner.Envelope) (strategy.EOFOutc
 			OutputIndex: 0,
 			RoutingKey:  rk,
 			QueryID:     queryID,
+			Total:       uint32(len(outputs)),
 		}},
 	}, nil
 }
 
-func (a *AggregatorQ2) OnRingToken(_ *eof.Token) (strategy.EOFOutcome, error) {
+func (a *AggregatorQ2) OnRingToken(_ *eof.Token, _ uint64) (strategy.EOFOutcome, error) {
 	return strategy.EOFOutcome{Action: eof.Action{Kind: eof.ActionNone}}, nil
 }
 

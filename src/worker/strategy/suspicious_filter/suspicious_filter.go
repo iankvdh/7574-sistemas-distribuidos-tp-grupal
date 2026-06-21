@@ -27,21 +27,28 @@ type accountKey struct {
 }
 
 type accountState struct {
-	outAccounts   map[accountKey]struct{}
-	inAccounts    map[accountKey]struct{}
-	outSuspicious bool
-	inSuspicious  bool
+	outAccounts map[accountKey]struct{}
+	inAccounts  map[accountKey]struct{}
 }
 
 type clientState struct {
 	accounts map[accountKey]*accountState
+	pendingDelta *suspDelta
+}
+
+type suspEdge struct {
+	K  string `json:"k"`
+	P  string `json:"p"`
+	In bool   `json:"i,omitempty"`
+}
+
+type suspDelta struct {
+	Edges []suspEdge `json:"e,omitempty"`
 }
 
 type accountStateJSON struct {
-	OutAccounts   []string `json:"out_accounts,omitempty"`
-	InAccounts    []string `json:"in_accounts,omitempty"`
-	OutSuspicious bool     `json:"out_suspicious"`
-	InSuspicious  bool     `json:"in_suspicious"`
+	OutAccounts []string `json:"out_accounts,omitempty"`
+	InAccounts  []string `json:"in_accounts,omitempty"`
 }
 
 type suspFilterCheckpoint struct {
@@ -106,91 +113,90 @@ func (s *SuspiciousFilter) ProcessMessage(envelope *inner.Envelope) ([]strategy.
 	dest := accountKey{Bank: stx.ToBank, Account: stx.ToAccount}
 
 	cst := s.stateFor(envelope.ClientID)
-
-	var key, peer accountKey
-	if stx.ShardedBySource {
-		key, peer = source, dest
-	} else {
+	key, peer := source, dest
+	if !stx.ShardedBySource {
 		key, peer = dest, source
 	}
-	accSt := cst.accountFor(key)
-
-	outputs, err := s.processSide(stx.ShardedBySource, accSt, source, dest, peer, envelope.ClientID)
-	if err != nil {
-		return nil, strategy.LocalCounts{}, err
-	}
-	return outputs, strategy.LocalCounts{Processed: 1}, nil
+	cst.addEdge(key, peer, !stx.ShardedBySource)
+	return nil, strategy.LocalCounts{Processed: 1}, nil
 }
 
-func (s *SuspiciousFilter) processSide(
-	shardedBySource bool,
-	accSt *accountState,
-	source, dest, peer accountKey,
-	clientID inner.ClientID,
-) ([]strategy.OutputMessage, error) {
-	suspicious := accSt.outSuspicious
+func (c *clientState) addEdge(key, peer accountKey, in bool) {
+	accSt := c.accountFor(key)
 	set := accSt.outAccounts
-	if !shardedBySource {
-		suspicious = accSt.inSuspicious
+	if in {
 		set = accSt.inAccounts
 	}
-
-	// Si la cuenta ya fue marcada suspicious en esta dirección, reenviamos la
-	// tx 1-a-1 con el flag invertido. Sin dedup: el path_finder ya dedupea.
-	if suspicious {
-		out, err := s.buildOutput(source, dest, !shardedBySource, clientID)
-		if err != nil {
-			return nil, err
-		}
-		return []strategy.OutputMessage{out}, nil
-	}
-
 	if _, exists := set[peer]; exists {
-		return nil, nil
+		return
 	}
-
 	set[peer] = struct{}{}
-	if len(set) < s.threshold {
-		return nil, nil
+	if c.pendingDelta == nil {
+		c.pendingDelta = &suspDelta{}
 	}
+	c.pendingDelta.Edges = append(c.pendingDelta.Edges, suspEdge{
+		K:  accountKeyString(key.Bank, key.Account),
+		P:  accountKeyString(peer.Bank, peer.Account),
+		In: in,
+	})
+}
 
-	// Umbral alcanzado: marcar suspicious y emitir todas las ShardedTx
-	// acumuladas (incluyendo la que disparó el llenado) con el flag invertido.
-	// Orden determinístico de la emisión: un replay tras crash debe reproducir
-	// el mismo orden para que los SeqID downstream coincidan (dedup high-water).
-	accs := make([]accountKey, 0, len(set))
-	for acc := range set {
-		accs = append(accs, acc)
-	}
-	slices.SortFunc(accs, func(a, b accountKey) int {
+func sortAccountKeys(keys []accountKey) {
+	slices.SortFunc(keys, func(a, b accountKey) int {
 		if a.Bank != b.Bank {
 			return cmp.Compare(a.Bank, b.Bank)
 		}
 		return cmp.Compare(a.Account, b.Account)
 	})
-	outputs := make([]strategy.OutputMessage, 0, s.threshold)
-	for _, acc := range accs {
-		var emitSource, emitDest accountKey
-		if shardedBySource {
-			emitSource, emitDest = source, acc
-		} else {
-			emitSource, emitDest = acc, dest
-		}
-		out, err := s.buildOutput(emitSource, emitDest, !shardedBySource, clientID)
-		if err != nil {
-			return nil, err
-		}
-		outputs = append(outputs, out)
-	}
+}
 
-	if shardedBySource {
-		accSt.outSuspicious = true
-		accSt.outAccounts = nil
-	} else {
-		accSt.inSuspicious = true
-		accSt.inAccounts = nil
+func (s *SuspiciousFilter) buildSuspiciousOutputs(clientID inner.ClientID) ([]strategy.OutputMessage, map[string]uint32, error) {
+	cst := s.stateFor(clientID)
+	keys := make([]accountKey, 0, len(cst.accounts))
+	for k := range cst.accounts {
+		keys = append(keys, k)
 	}
-	return outputs, nil
+	sortAccountKeys(keys)
+
+	outputs := make([]strategy.OutputMessage, 0)
+	perShard := make(map[string]uint32, s.kPathFinders)
+	emit := func(src, dst accountKey, outShardedBySource bool) error {
+		out, err := s.buildOutput(src, dst, outShardedBySource, clientID)
+		if err != nil {
+			return err
+		}
+		perShard[out.RoutingKey]++
+		outputs = append(outputs, out)
+		return nil
+	}
+	for _, key := range keys {
+		accSt := cst.accounts[key]
+		if len(accSt.outAccounts) >= s.threshold {
+			peers := make([]accountKey, 0, len(accSt.outAccounts))
+			for p := range accSt.outAccounts {
+				peers = append(peers, p)
+			}
+			sortAccountKeys(peers)
+			for _, peer := range peers {
+				if err := emit(key, peer, false); err != nil {
+					return nil, nil, err
+				}
+			}
+		}
+		if len(accSt.inAccounts) >= s.threshold {
+			peers := make([]accountKey, 0, len(accSt.inAccounts))
+			for p := range accSt.inAccounts {
+				peers = append(peers, p)
+			}
+			sortAccountKeys(peers)
+			for _, peer := range peers {
+				if err := emit(peer, key, true); err != nil {
+					return nil, nil, err
+				}
+			}
+		}
+	}
+	return outputs, perShard, nil
 }
 
 func (s *SuspiciousFilter) buildOutput(source, dest accountKey, outShardedBySource bool, clientID inner.ClientID) (strategy.OutputMessage, error) {
@@ -221,18 +227,23 @@ func (s *SuspiciousFilter) buildOutput(source, dest accountKey, outShardedBySour
 }
 
 func (s *SuspiciousFilter) OnUpstreamEOF(envelope *inner.Envelope) (strategy.EOFOutcome, error) {
-	action := s.coordinator.OnUpstreamEOF(envelope.ClientID, envelope.SenderStageType, envelope.SenderReplicaID, envelope.Total)
+	action := s.coordinator.OnUpstreamEOF(envelope.ClientID, envelope.SenderStageType, envelope.SenderReplicaID, envelope.Total, envelope.LocalCount)
 	if action.Kind != eof.ActionEmitEOFs {
 		return strategy.EOFOutcome{Action: action}, nil
 	}
+	outputs, perShard, err := s.buildSuspiciousOutputs(envelope.ClientID)
+	if err != nil {
+		return strategy.EOFOutcome{}, err
+	}
 	return strategy.EOFOutcome{
 		Action:          eof.Action{Kind: eof.ActionEmitEOFs},
-		EOFs:            s.buildEOFEmits(),
+		Outputs:         outputs,
+		EOFs:            s.buildEOFEmits(perShard),
 		ClientCompleted: true,
 	}, nil
 }
 
-func (s *SuspiciousFilter) OnRingToken(_ *eof.Token) (strategy.EOFOutcome, error) {
+func (s *SuspiciousFilter) OnRingToken(_ *eof.Token, _ uint64) (strategy.EOFOutcome, error) {
 	return strategy.EOFOutcome{Action: eof.Action{Kind: eof.ActionNone}}, nil
 }
 
@@ -244,10 +255,7 @@ func (s *SuspiciousFilter) MarshalClientState(clientID inner.ClientID) ([]byte, 
 	if state != nil {
 		checkPoint.Accounts = make(map[string]*accountStateJSON, len(state.accounts))
 		for k, accSt := range state.accounts {
-			aj := &accountStateJSON{
-				OutSuspicious: accSt.outSuspicious,
-				InSuspicious:  accSt.inSuspicious,
-			}
+			aj := &accountStateJSON{}
 			for acc := range accSt.outAccounts {
 				aj.OutAccounts = append(aj.OutAccounts, accountKeyString(acc.Bank, acc.Account))
 			}
@@ -273,10 +281,8 @@ func (s *SuspiciousFilter) UnmarshalClientState(clientID inner.ClientID, data []
 			return fmt.Errorf("decode account key %q: %w", ks, err)
 		}
 		accSt := &accountState{
-			outSuspicious: aj.OutSuspicious,
-			inSuspicious:  aj.InSuspicious,
-			outAccounts:   make(map[accountKey]struct{}, len(aj.OutAccounts)),
-			inAccounts:    make(map[accountKey]struct{}, len(aj.InAccounts)),
+			outAccounts: make(map[accountKey]struct{}, len(aj.OutAccounts)),
+			inAccounts:  make(map[accountKey]struct{}, len(aj.InAccounts)),
 		}
 		for _, raw := range aj.OutAccounts {
 			acc, err := decodeAccountKey(raw)
@@ -304,12 +310,13 @@ func (s *SuspiciousFilter) CleanupClient(clientID inner.ClientID) {
 	runtime.GC()
 }
 
-func (s *SuspiciousFilter) buildEOFEmits() []eof.EOFEmit {
+func (s *SuspiciousFilter) buildEOFEmits(perShard map[string]uint32) []eof.EOFEmit {
 	emits := make([]eof.EOFEmit, 0, s.kPathFinders)
 	for i := 0; i < s.kPathFinders; i++ {
 		emits = append(emits, eof.EOFEmit{
 			OutputIndex: 0,
 			RoutingKey:  s.rkCache[i],
+			Total:       perShard[s.rkCache[i]],
 		})
 	}
 	return emits
@@ -322,6 +329,44 @@ func (s *SuspiciousFilter) stateFor(clientID inner.ClientID) *clientState {
 		s.state[clientID] = state
 	}
 	return state
+}
+
+func (s *SuspiciousFilter) TakeDelta(clientID inner.ClientID) []byte {
+	st := s.state[clientID]
+	if st == nil || st.pendingDelta == nil {
+		return nil
+	}
+	data, err := json.Marshal(st.pendingDelta)
+	st.pendingDelta = nil
+	if err != nil {
+		return nil
+	}
+	return data
+}
+
+func (s *SuspiciousFilter) ApplyDelta(clientID inner.ClientID, data []byte) error {
+	var d suspDelta
+	if err := json.Unmarshal(data, &d); err != nil {
+		return err
+	}
+	cst := s.stateFor(clientID)
+	for _, e := range d.Edges {
+		key, err := decodeAccountKey(e.K)
+		if err != nil {
+			return fmt.Errorf("decode delta key %q: %w", e.K, err)
+		}
+		peer, err := decodeAccountKey(e.P)
+		if err != nil {
+			return fmt.Errorf("decode delta peer %q: %w", e.P, err)
+		}
+		accSt := cst.accountFor(key)
+		if e.In {
+			accSt.inAccounts[peer] = struct{}{}
+		} else {
+			accSt.outAccounts[peer] = struct{}{}
+		}
+	}
+	return nil
 }
 
 func (c *clientState) accountFor(k accountKey) *accountState {

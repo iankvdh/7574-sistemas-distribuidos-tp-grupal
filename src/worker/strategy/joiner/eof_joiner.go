@@ -105,7 +105,7 @@ func (j *EOFJoiner) ReadyEOFs(env *inner.Envelope) (strategy.EOFOutcome, bool) {
 	return j.emitOutcome(env.ClientID), true
 }
 
-func (j *EOFJoiner) OnRingToken(_ *eof.Token) (strategy.EOFOutcome, error) {
+func (j *EOFJoiner) OnRingToken(_ *eof.Token, _ uint64) (strategy.EOFOutcome, error) {
 	return noneOutcome(), nil
 }
 

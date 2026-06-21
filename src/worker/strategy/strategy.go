@@ -56,7 +56,7 @@ type Strategy interface {
 	Validate(env *inner.Envelope) error
 	ProcessMessage(env *inner.Envelope) ([]OutputMessage, LocalCounts, error)
 	OnUpstreamEOF(env *inner.Envelope) (EOFOutcome, error)
-	OnRingToken(token *eof.Token) (EOFOutcome, error)
+	OnRingToken(token *eof.Token, localCount uint64) (EOFOutcome, error)
 }
 
 type DeferredInputProvider interface {
@@ -86,8 +86,8 @@ type RawBatchStrategy interface {
 	)
 }
 
-type SeqIDRecoverer interface {
-	BoostSeqIDs() map[inner.SeqKey]uint64
+type DedupRecoverer interface {
+	RecoveredDedupHeaders() []inner.Header
 }
 
 type BufferFlusher interface {

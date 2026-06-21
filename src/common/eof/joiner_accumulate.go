@@ -10,17 +10,21 @@ import (
 type JACStateSnapshot struct {
 	ReceivedFrom map[string]uint32
 	Expected     int
+	Finalized bool
 }
 
-func (s *JACStateSnapshot) OnEOF(senderStageType uint8, senderReplicaID uint16, total uint32) bool {
+func (s *JACStateSnapshot) recordEOF(senderStageType uint8, senderReplicaID uint16, total uint32) {
 	key := fmt.Sprintf("%d:%d", senderStageType, senderReplicaID)
 	if existing, ok := s.ReceivedFrom[key]; ok {
 		if existing != total {
 			panic(fmt.Sprintf("JAC: duplicate EOF with different Total — protocol bug: key=%s previous=%d new=%d", key, existing, total))
 		}
-		return false
+		return
 	}
 	s.ReceivedFrom[key] = total
+}
+
+func (s *JACStateSnapshot) allReceived() bool {
 	return len(s.ReceivedFrom) >= s.Expected
 }
 
@@ -53,7 +57,7 @@ func NewJoinerAccumulateCoordinator(expectedEOFs, outputCount int) *JoinerAccumu
 	}
 }
 
-func (j *JoinerAccumulateCoordinator) OnUpstreamEOF(clientID inner.ClientID, senderStageType uint8, senderReplicaID uint16, upstreamTotal uint32) Action {
+func (j *JoinerAccumulateCoordinator) OnUpstreamEOF(clientID inner.ClientID, senderStageType uint8, senderReplicaID uint16, upstreamTotal uint32, localCount uint64) Action {
 	state, ok := j.state[clientID]
 	if !ok {
 		state = &JACStateSnapshot{
@@ -63,12 +67,21 @@ func (j *JoinerAccumulateCoordinator) OnUpstreamEOF(clientID inner.ClientID, sen
 		j.state[clientID] = state
 	}
 
-	if !state.OnEOF(senderStageType, senderReplicaID, upstreamTotal) {
+	state.recordEOF(senderStageType, senderReplicaID, upstreamTotal)
+
+	if state.Finalized {
+		return Action{Kind: ActionNone}
+	}
+	if !state.allReceived() {
 		return Action{Kind: ActionNone}
 	}
 
 	aggTotal := state.AggTotal()
-	delete(j.state, clientID)
+	if aggTotal > 0 && localCount < aggTotal {
+		return Action{Kind: ActionReenqueueUpstreamEOF}
+	}
+
+	state.Finalized = true
 	emits := make([]EOFEmit, j.outputCount)
 	for i := 0; i < j.outputCount; i++ {
 		emits[i] = EOFEmit{OutputIndex: i, Total: uint32(aggTotal)}
@@ -87,6 +100,7 @@ func (j *JoinerAccumulateCoordinator) GetClientJACState(clientID inner.ClientID)
 	snap := JACStateSnapshot{
 		ReceivedFrom: make(map[string]uint32, len(state.ReceivedFrom)),
 		Expected:     state.Expected,
+		Finalized:    state.Finalized,
 	}
 	maps.Copy(snap.ReceivedFrom, state.ReceivedFrom)
 	return snap
@@ -96,6 +110,7 @@ func (j *JoinerAccumulateCoordinator) RestoreClientJACState(clientID inner.Clien
 	restored := &JACStateSnapshot{
 		ReceivedFrom: make(map[string]uint32, len(snap.ReceivedFrom)),
 		Expected:     snap.Expected,
+		Finalized:    snap.Finalized,
 	}
 	maps.Copy(restored.ReceivedFrom, snap.ReceivedFrom)
 	j.state[clientID] = restored

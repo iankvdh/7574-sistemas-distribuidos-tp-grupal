@@ -1,6 +1,10 @@
 package middleware
 
-import "errors"
+import (
+	"errors"
+
+	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/env"
+)
 
 var (
 	ErrMessageMiddlewareMessage      = errors.New("message middleware: message error")
@@ -12,7 +16,15 @@ var (
 // to a single consumer. With batches of ~64 KB, 64 keeps ~4 MB unacked per
 // consumer — the broker's unacked-tracking stays cheap and round-robin between
 // replicas remains responsive.
-const PrefetchCount = 64
+var PrefetchCount = loadPrefetchCount()
+
+func loadPrefetchCount() int {
+	n, err := env.IntWithDefault("PREFETCH_COUNT", 64, true)
+	if err != nil || n <= 0 {
+		return 64
+	}
+	return n
+}
 
 type Message struct {
 	Body string

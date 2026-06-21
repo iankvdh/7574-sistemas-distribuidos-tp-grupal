@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/checkpoint"
+	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/dedup"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/eof"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/hashing"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/heartbeat"
@@ -57,8 +58,10 @@ type Worker struct {
 	totalPending   int
 	lastSeen       map[inner.ClientID]time.Time
 	tombstones     map[inner.ClientID]time.Time
-	lastRecvSeqID  map[inner.SeqKey]uint64
-	outSeqID       map[inner.ClientID]uint64
+	lastRecvSeqID map[inner.SeqKey]uint64
+	dedupSeen map[inner.DedupKey]*dedup.IntervalSet
+	processedItems map[inner.ClientID]uint64
+	outSeqID map[inner.ClientID]uint64
 }
 
 type deliveryRef struct {
@@ -174,6 +177,8 @@ func New(cfg config.WorkerConfig) (*Worker, error) {
 		lastSeen:       map[inner.ClientID]time.Time{},
 		tombstones:     map[inner.ClientID]time.Time{},
 		lastRecvSeqID:  map[inner.SeqKey]uint64{},
+		dedupSeen:      map[inner.DedupKey]*dedup.IntervalSet{},
+		processedItems: map[inner.ClientID]uint64{},
 		outSeqID:       map[inner.ClientID]uint64{},
 	}
 
@@ -217,7 +222,7 @@ func initOutputTargetBuffers(outputTargets []OutputTarget) []*outputTargetBuffer
 	buffers := make([]*outputTargetBuffer, len(outputTargets))
 	for i, target := range outputTargets {
 		shards := 1
-		if target.Kind == config.KindShardedQueues || target.Kind == config.KindContentHashQueues {
+		if target.Kind == config.KindShardedQueues || target.Kind == config.KindBatchQueues {
 			shards = target.ShardCount
 		}
 		perShard := make([]map[batchKey]*pendingBatch, shards)
@@ -371,16 +376,21 @@ func (w *Worker) handleInputMessage(inputIndex int, msg middleware.Message, ack 
 		ack()
 		return
 	}
-	if w.isDuplicate(clientID, header) {
-		ack()
-		return
-	}
-	w.lastSeen[clientID] = time.Now()
 
 	switch typed := parsed.(type) {
 	case *inner.EOFMessage:
+		if w.isDuplicateEOF(clientID, header) {
+			ack()
+			return
+		}
+		w.lastSeen[clientID] = time.Now()
 		w.handleUpstreamEOF(typed, msg, inputIndex, header, ack, nack)
 	case *inner.BatchMessage:
+		if w.isDuplicateData(header) {
+			ack()
+			return
+		}
+		w.lastSeen[clientID] = time.Now()
 		w.handleBatch(typed, []byte(msg.Body), inputIndex, header, ack, nack)
 	default:
 		slog.Error("Unexpected message type in input queue", "input_index", inputIndex, "type", parsed.Type())
@@ -416,7 +426,7 @@ func (w *Worker) handleRingMessage(msg middleware.Message, ack func(), nack func
 		ack()
 		return
 	}
-	if w.isDuplicate(clientID, header) {
+	if w.isDuplicateEOF(clientID, header) {
 		ack()
 		return
 	}
@@ -425,11 +435,29 @@ func (w *Worker) handleRingMessage(msg middleware.Message, ack func(), nack func
 	w.handleRingToken(typed, header, ack, nack)
 }
 
-func (w *Worker) isDuplicate(clientID inner.ClientID, header inner.Header) bool {
+func (w *Worker) isDuplicateEOF(clientID inner.ClientID, header inner.Header) bool {
 	if header.SeqID == 0 {
 		return false
 	}
 	return header.SeqID <= w.lastRecvSeqID[seqKeyOf(clientID, header)]
+}
+
+func (w *Worker) isDuplicateData(header inner.Header) bool {
+	set := w.dedupSeen[inner.DedupKeyOf(header)]
+	return set != nil && header.SeqID != 0 && set.Contains(header.SeqID)
+}
+
+func (w *Worker) dedupAdd(header inner.Header) {
+	if header.SeqID == 0 {
+		return
+	}
+	key := inner.DedupKeyOf(header)
+	set := w.dedupSeen[key]
+	if set == nil {
+		set = &dedup.IntervalSet{}
+		w.dedupSeen[key] = set
+	}
+	set.Add(header.SeqID)
 }
 
 func (w *Worker) handleBatch(batch *inner.BatchMessage, raw []byte, inputIndex int, header inner.Header, ack, nack func()) {
@@ -438,7 +466,8 @@ func (w *Worker) handleBatch(batch *inner.BatchMessage, raw []byte, inputIndex i
 		slog.Error("processBatch failed, exiting for redelivery", "client_id", batch.ClientID, "err", err)
 		os.Exit(1)
 	}
-	w.lastRecvSeqID[seqKeyOf(header.ClientID, header)] = header.SeqID
+	w.dedupAdd(header)
+	w.processedItems[header.ClientID] += uint64(len(batch.Items))
 	if completed {
 		w.completeClient(header.ClientID, deliveryRef{ack: ack, nack: nack})
 		return
@@ -460,6 +489,7 @@ func (w *Worker) handleUpstreamEOF(typed *inner.EOFMessage, msg middleware.Messa
 		InputIndex:      inputIndex,
 		SenderStageType: typed.SenderStageType,
 		SenderReplicaID: typed.SenderReplicaID,
+		LocalCount:      w.processedItems[typed.ClientID],
 	}
 	w.cacheUpstreamEOF(envelope.ClientID, inputIndex, msg)
 	outcome, err := w.strategy.OnUpstreamEOF(envelope)
@@ -482,7 +512,7 @@ func (w *Worker) handleUpstreamEOF(typed *inner.EOFMessage, msg middleware.Messa
 
 func (w *Worker) handleRingToken(typed *inner.RingTokenMessage, header inner.Header, ack, nack func()) {
 	token := tokenFromMessage(typed)
-	outcome, err := w.strategy.OnRingToken(token)
+	outcome, err := w.strategy.OnRingToken(token, w.processedItems[token.ClientID])
 	if err != nil {
 		slog.Error("Strategy OnRingToken failed, exiting for redelivery", "client_id", token.ClientID, "err", err)
 		os.Exit(1)
@@ -512,6 +542,7 @@ func tokenFromMessage(m *inner.RingTokenMessage) *eof.Token {
 }
 
 func (w *Worker) processBatch(batch *inner.BatchMessage, rawBatch []byte, inputIndex int) (bool, error) {
+	var dataOutputs []strategy.OutputMessage
 	if rawStrat, ok := w.strategy.(strategy.RawBatchStrategy); ok {
 		outputs, _, handled, err := rawStrat.ProcessRawBatch(batch, rawBatch, inputIndex)
 		if err != nil {
@@ -521,16 +552,17 @@ func (w *Worker) processBatch(batch *inner.BatchMessage, rawBatch []byte, inputI
 			}
 			return false, err
 		}
-		if err := w.appendOutputMessages(batch.GatewayID, outputs); err != nil {
-			return false, err
-		}
+		dataOutputs = append(dataOutputs, outputs...)
 		if handled {
-			return false, nil
+			return false, w.emitDataOutputs(batch.Header, dataOutputs)
 		}
 	}
-	clientCompleted := false
+
+	emitter, hasEmitter := w.strategy.(strategy.ReadyEOFEmitter)
+	var readyEnv *inner.Envelope
+	var readyOutcome strategy.EOFOutcome
 	for _, item := range batch.Items {
-		envelope := &inner.Envelope{
+		env := &inner.Envelope{
 			Kind:            batch.ItemKind,
 			GatewayID:       batch.GatewayID,
 			ClientID:        batch.ClientID,
@@ -540,44 +572,36 @@ func (w *Worker) processBatch(batch *inner.BatchMessage, rawBatch []byte, inputI
 			SenderStageType: batch.SenderStageType,
 			SenderReplicaID: batch.SenderReplicaID,
 		}
-		itemCompleted, err := w.processSingleItem(envelope)
+		if err := w.strategy.Validate(env); err != nil {
+			if errors.Is(err, strategy.ErrInvalidData) {
+				slog.Warn("Strategy.Validate: invalid data, discarding", "client_id", env.ClientID, "err", err)
+				continue
+			}
+			return false, err
+		}
+		outputs, _, err := w.strategy.ProcessMessage(env)
 		if err != nil {
 			return false, err
 		}
-		if itemCompleted {
-			clientCompleted = true
+		dataOutputs = append(dataOutputs, outputs...)
+		if hasEmitter && readyEnv == nil {
+			if outcome, ready := emitter.ReadyEOFs(env); ready {
+				readyEnv = env
+				readyOutcome = outcome
+			}
 		}
 	}
-	return clientCompleted, nil
-}
 
-func (w *Worker) processSingleItem(env *inner.Envelope) (bool, error) {
-	if err := w.strategy.Validate(env); err != nil {
-		if errors.Is(err, strategy.ErrInvalidData) {
-			slog.Warn("Strategy.Validate: invalid data, discarding", "client_id", env.ClientID, "err", err)
-			return false, nil
+	if err := w.emitDataOutputs(batch.Header, dataOutputs); err != nil {
+		return false, err
+	}
+	if readyEnv != nil {
+		if err := w.applyEOFOutcome(readyEnv, readyOutcome); err != nil {
+			return false, err
 		}
-		return false, err
+		return readyOutcome.ClientCompleted, nil
 	}
-	outputMessages, _, err := w.strategy.ProcessMessage(env)
-	if err != nil {
-		return false, err
-	}
-	if err := w.appendOutputMessages(env.GatewayID, outputMessages); err != nil {
-		return false, err
-	}
-	emitter, ok := w.strategy.(strategy.ReadyEOFEmitter)
-	if !ok {
-		return false, nil
-	}
-	outcome, ready := emitter.ReadyEOFs(env)
-	if !ready {
-		return false, nil
-	}
-	if err := w.applyEOFOutcome(env, outcome); err != nil {
-		return false, err
-	}
-	return outcome.ClientCompleted, nil
+	return false, nil
 }
 
 func (w *Worker) applyEOFOutcome(env *inner.Envelope, outcome strategy.EOFOutcome) error {
@@ -688,7 +712,7 @@ func (w *Worker) appendOutputMessages(gatewayID inner.GatewayID, outputMessages 
 
 func (w *Worker) appendToShard(idx int, gatewayID inner.GatewayID, om strategy.OutputMessage) error {
 	buf := w.outputTargetBuffers[idx]
-	shard := w.dataShard(idx, buf.target, om)
+	shard := w.dataShard(buf.target, om, 0)
 	itemKind := om.BatchItemKind
 	if itemKind == 0 {
 		itemKind = inner.TransactionMessage
@@ -790,38 +814,109 @@ func (w *Worker) flushClientBuffers(clientID inner.ClientID) error {
 	return nil
 }
 
+func (w *Worker) emitDataOutputs(src inner.Header, outputs []strategy.OutputMessage) error {
+	if len(outputs) == 0 {
+		return nil
+	}
+	type groupKey struct {
+		outputIdx int
+		dest      string
+		itemKind  inner.MsgKind
+	}
+	type dataGroup struct {
+		mwIndex    int
+		routingKey string
+		itemKind   inner.MsgKind
+		outputIdx  int
+		items      []inner.BatchItem
+	}
+	groups := map[groupKey]*dataGroup{}
+	var order []groupKey
+	for _, om := range outputs {
+		for _, idx := range om.OutputIndices {
+			if idx < 0 || idx >= len(w.outputs) {
+				return errors.New("strategy returned invalid output index")
+			}
+			target := w.outputs[idx]
+			shard := w.dataShard(target, om, src.SeqID)
+			dest, routingKey, mwIndex := destinationFor(target, shard, om.RoutingKey)
+			itemKind := om.BatchItemKind
+			if itemKind == 0 {
+				itemKind = inner.TransactionMessage
+			}
+			if target.Kind == config.KindFinalQueue {
+				itemKind = inner.ResultRow
+			}
+			k := groupKey{outputIdx: idx, dest: dest, itemKind: itemKind}
+			g := groups[k]
+			if g == nil {
+				g = &dataGroup{mwIndex: mwIndex, routingKey: routingKey, itemKind: itemKind, outputIdx: idx}
+				groups[k] = g
+				order = append(order, k)
+			}
+			g.items = append(g.items, inner.BatchItem{QueryID: om.BatchQueryID, Payload: om.Body})
+		}
+	}
+	multiOutput := len(w.outputs) > 1
+	for _, k := range order {
+		g := groups[k]
+		branchPath := src.BranchPath
+		if multiOutput {
+			branchPath = inner.WithBranch(src.BranchPath, g.outputIdx)
+		}
+		msg, err := serialize(&inner.BatchMessage{
+			Header: inner.Header{
+				GatewayID:       src.GatewayID,
+				ClientID:        src.ClientID,
+				SeqID:           src.SeqID,
+				SenderStageType: w.cfg.StageType,
+				SenderReplicaID: uint16(w.cfg.ReplicaID),
+				MinterStageType: src.MinterStageType,
+				MinterReplicaID: src.MinterReplicaID,
+				BranchPath:      branchPath,
+			},
+			ItemKind: g.itemKind,
+			Items:    g.items,
+		})
+		if err != nil {
+			return err
+		}
+		target := w.outputs[g.outputIdx]
+		if g.mwIndex < 0 || g.mwIndex >= len(target.Middlewares) {
+			return errors.New("data emission: shard index out of range")
+		}
+		if err := sendOnTarget(target.Middlewares[g.mwIndex], *msg, g.routingKey); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func destinationFor(target OutputTarget, shard int, omRoutingKey string) (dest, routingKey string, mwIndex int) {
+	switch target.Kind {
+	case config.KindShardedQueues, config.KindBatchQueues:
+		return strconv.Itoa(shard), "", shard
+	default:
+		return omRoutingKey, omRoutingKey, 0
+	}
+}
+
 func (w *Worker) shardFor(target OutputTarget, clientID inner.ClientID) int {
-	if target.Kind == config.KindShardedQueues || target.Kind == config.KindContentHashQueues {
+	if target.Kind == config.KindShardedQueues || target.Kind == config.KindBatchQueues {
 		return hashing.Shard(string(clientID), target.ShardCount)
 	}
 	return 0
 }
 
-func (w *Worker) dataShard(idx int, target OutputTarget, om strategy.OutputMessage) int {
+func (w *Worker) dataShard(target OutputTarget, om strategy.OutputMessage, seqID uint64) int {
 	switch target.Kind {
 	case config.KindShardedQueues:
 		return hashing.Shard(string(om.ClientID), target.ShardCount)
-	case config.KindContentHashQueues:
-		return hashing.Shard(contentHashShardSeed(idx, om), target.ShardCount)
+	case config.KindBatchQueues:
+		return hashing.Shard(string(om.ClientID)+"|"+strconv.FormatUint(seqID, 10), target.ShardCount)
 	default:
 		return 0
 	}
-}
-
-func contentHashShardSeed(idx int, om strategy.OutputMessage) string {
-	var seed strings.Builder
-	seed.WriteString(string(om.ClientID))
-	seed.WriteByte('|')
-	seed.WriteString(strconv.Itoa(idx))
-	seed.WriteByte('|')
-	seed.WriteString(strconv.Itoa(int(om.BatchItemKind)))
-	seed.WriteByte('|')
-	seed.WriteString(strconv.Itoa(int(om.BatchQueryID)))
-	seed.WriteByte('|')
-	seed.WriteString(om.RoutingKey)
-	seed.WriteByte('|')
-	_, _ = seed.Write(om.Body)
-	return seed.String()
 }
 
 func (w *Worker) publishEOFs(env *inner.Envelope, emits []eof.EOFEmit) error {
@@ -929,6 +1024,8 @@ func (w *Worker) outHeader(gatewayID inner.GatewayID, clientID inner.ClientID) i
 		SeqID:           w.nextSeqID(clientID),
 		SenderStageType: w.cfg.StageType,
 		SenderReplicaID: uint16(w.cfg.ReplicaID),
+		MinterStageType: w.cfg.StageType,
+		MinterReplicaID: uint16(w.cfg.ReplicaID),
 	}
 }
 
@@ -996,6 +1093,7 @@ func (w *Worker) writeGlobalState() {
 	}
 }
 
+
 func (w *Worker) completeClient(clientID inner.ClientID, finalRef deliveryRef) {
 	if err := w.flushClientBuffers(clientID); err != nil {
 		slog.Error("flushClientBuffers failed on complete, exiting", "client_id", clientID, "err", err)
@@ -1036,7 +1134,13 @@ func (w *Worker) cleanupClientState(clientID inner.ClientID) {
 			delete(w.lastRecvSeqID, sequenceKey)
 		}
 	}
+	for dedupKey := range w.dedupSeen {
+		if dedupKey.ClientID == clientID {
+			delete(w.dedupSeen, dedupKey)
+		}
+	}
 	delete(w.outSeqID, clientID)
+	delete(w.processedItems, clientID)
 	delete(w.lastSeen, clientID)
 	delete(w.upstreamEOFs, clientID)
 	delete(w.firstPendingAt, clientID)
@@ -1132,7 +1236,14 @@ func (w *Worker) loadCheckpoints() bool {
 			}
 			w.lastRecvSeqID[sequenceKey] = sequenceId
 		}
+		for idSpace, set := range clientCheckpoint.DedupSeen {
+			if set == nil {
+				continue
+			}
+			w.dedupSeen[inner.DedupKey{ClientID: clientID, IDSpace: idSpace}] = set
+		}
 		w.outSeqID[clientID] = clientCheckpoint.OutSeqID
+		w.processedItems[clientID] = clientCheckpoint.ProcessedItems
 		if recoverableStrategy, ok := w.strategy.(strategy.RecoverableStrategy); ok {
 			if err := recoverableStrategy.UnmarshalClientState(clientID, clientCheckpoint.StrategyState); err != nil {
 				slog.Warn("UnmarshalClientState failed", "client_id", clientID, "err", err)
@@ -1147,11 +1258,9 @@ func (w *Worker) loadCheckpoints() bool {
 		w.lastSeen[clientID] = time.Now()
 		foundAnyCheckpoint = true
 	}
-	if booster, ok := w.strategy.(strategy.SeqIDRecoverer); ok {
-		for sk, maxSeq := range booster.BoostSeqIDs() {
-			if maxSeq > w.lastRecvSeqID[sk] {
-				w.lastRecvSeqID[sk] = maxSeq
-			}
+	if recoverer, ok := w.strategy.(strategy.DedupRecoverer); ok {
+		for _, h := range recoverer.RecoveredDedupHeaders() {
+			w.dedupAdd(h)
 		}
 	}
 
@@ -1172,9 +1281,11 @@ func (w *Worker) loadCheckpoints() bool {
 
 func (w *Worker) buildClientCheckpoint(clientID inner.ClientID) *checkpoint.ClientCheckpoint {
 	clientCheckpoint := &checkpoint.ClientCheckpoint{
-		ClientID:      string(clientID),
-		OutSeqID:      w.outSeqID[clientID],
-		LastRecvSeqID: w.serializeSeqMap(clientID),
+		ClientID:       string(clientID),
+		OutSeqID:       w.outSeqID[clientID],
+		LastRecvSeqID:  w.serializeSeqMap(clientID),
+		DedupSeen:      w.serializeDedup(clientID),
+		ProcessedItems: w.processedItems[clientID],
 	}
 	if recoverableStrategy, ok := w.strategy.(strategy.RecoverableStrategy); ok {
 		data, err := recoverableStrategy.MarshalClientState(clientID)
@@ -1193,6 +1304,19 @@ func (w *Worker) buildClientCheckpoint(clientID inner.ClientID) *checkpoint.Clie
 
 func seqKeyOf(clientID inner.ClientID, h inner.Header) inner.SeqKey {
 	return inner.SeqKey{ClientID: clientID, StageType: h.SenderStageType, ReplicaID: h.SenderReplicaID}
+}
+
+func (w *Worker) serializeDedup(clientID inner.ClientID) map[string]*dedup.IntervalSet {
+	out := map[string]*dedup.IntervalSet{}
+	for k, set := range w.dedupSeen {
+		if k.ClientID == clientID {
+			out[k.IDSpace] = set
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func (w *Worker) serializeSeqMap(clientID inner.ClientID) map[string]uint64 {

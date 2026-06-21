@@ -15,7 +15,6 @@ import (
 )
 
 type bankAggCheckpoint struct {
-	Processed uint64                `json:"processed"`
 	BankNames map[string]string     `json:"banks"`
 	Ring      eof.RingStateSnapshot `json:"ring"`
 }
@@ -23,8 +22,12 @@ type bankAggCheckpoint struct {
 const queryID uint8 = 2
 
 type clientState struct {
-	processed uint64
 	bankNames map[uint32]string
+	pendingDelta *bankDelta
+}
+
+type bankDelta struct {
+	Banks map[string]string `json:"b,omitempty"`
 }
 
 type BankAggregator struct {
@@ -71,23 +74,57 @@ func (b *BankAggregator) ProcessMessage(envelope *inner.Envelope) ([]strategy.Ou
 	}
 
 	st := b.stateFor(envelope.ClientID)
-	st.processed++
 	st.bankNames[acc.BankID] = acc.BankName
+	st.recordDelta(acc.BankID, acc.BankName)
 	return nil, strategy.LocalCounts{Processed: 1, Matched: 1}, nil
 }
 
+func (st *clientState) recordDelta(bankID uint32, bankName string) {
+	if st.pendingDelta == nil {
+		st.pendingDelta = &bankDelta{Banks: map[string]string{}}
+	}
+	st.pendingDelta.Banks[strconv.FormatUint(uint64(bankID), 10)] = bankName
+}
+
+func (b *BankAggregator) TakeDelta(clientID inner.ClientID) []byte {
+	st := b.state[clientID]
+	if st == nil || st.pendingDelta == nil {
+		return nil
+	}
+	data, err := json.Marshal(st.pendingDelta)
+	st.pendingDelta = nil
+	if err != nil {
+		return nil
+	}
+	return data
+}
+
+func (b *BankAggregator) ApplyDelta(clientID inner.ClientID, data []byte) error {
+	var d bankDelta
+	if err := json.Unmarshal(data, &d); err != nil {
+		return err
+	}
+	st := b.stateFor(clientID)
+	for k, v := range d.Banks {
+		bankID, err := strconv.ParseUint(k, 10, 32)
+		if err != nil {
+			return fmt.Errorf("bad bank id in delta %q: %w", k, err)
+		}
+		st.bankNames[uint32(bankID)] = v
+	}
+	return nil
+}
+
 func (b *BankAggregator) OnUpstreamEOF(envelope *inner.Envelope) (strategy.EOFOutcome, error) {
-	st := b.stateFor(envelope.ClientID)
-	action, _ := b.ringCoordinator.OnUpstreamEOF(envelope.ClientID, envelope.Total, st.processed, 0)
+	action, _ := b.ringCoordinator.OnUpstreamEOF(envelope.ClientID, envelope.Total, envelope.LocalCount, 0)
 	return b.outcomeFor(envelope.ClientID, action), nil
 }
 
-func (b *BankAggregator) OnRingToken(token *eof.Token) (strategy.EOFOutcome, error) {
+func (b *BankAggregator) OnRingToken(token *eof.Token, localCount uint64) (strategy.EOFOutcome, error) {
 	if b.ringCoordinator == nil {
 		return strategy.EOFOutcome{Action: eof.Action{Kind: eof.ActionNone}}, nil
 	}
-	st := b.stateFor(token.ClientID)
-	action, _ := b.ringCoordinator.OnRingToken(token, st.processed, 0)
+	action, _ := b.ringCoordinator.OnRingToken(token, localCount, 0)
 	return b.outcomeFor(token.ClientID, action), nil
 }
 
@@ -104,16 +141,19 @@ func (b *BankAggregator) outcomeFor(clientID inner.ClientID, action eof.Action) 
 		slices.Sort(bankIDs)
 
 		outputs := make([]strategy.OutputMessage, 0, len(st.bankNames))
+		perShard := make(map[string]uint32, b.kAggregators)
 		for _, bankID := range bankIDs {
 			body, err := inner.SerializeQ2BankName(&inner.Q2BankName{BankID: bankID, BankName: st.bankNames[bankID]})
 			if err != nil {
 				continue
 			}
+			rk := b.routingKeyFor(clientID, bankID)
+			perShard[rk]++
 			outputs = append(outputs, strategy.OutputMessage{
 				OutputIndices: []int{0},
 				Body:          body,
 				ClientID:      clientID,
-				RoutingKey:    b.routingKeyFor(clientID, bankID),
+				RoutingKey:    rk,
 				BatchItemKind: inner.Q2BankNameItem,
 				BatchQueryID:  queryID,
 			})
@@ -121,7 +161,7 @@ func (b *BankAggregator) outcomeFor(clientID inner.ClientID, action eof.Action) 
 		outcome.Outputs = outputs
 		emits := make([]eof.EOFEmit, b.kAggregators)
 		for i := range b.kAggregators {
-			emits[i] = eof.EOFEmit{OutputIndex: 0, RoutingKey: b.rkCache[i], QueryID: queryID}
+			emits[i] = eof.EOFEmit{OutputIndex: 0, RoutingKey: b.rkCache[i], QueryID: queryID, Total: perShard[b.rkCache[i]]}
 		}
 		outcome.EOFs = emits
 		outcome.ClientCompleted = true
@@ -133,7 +173,6 @@ func (b *BankAggregator) MarshalClientState(clientID inner.ClientID) ([]byte, er
 	state := b.state[clientID]
 	checkPoint := bankAggCheckpoint{}
 	if state != nil {
-		checkPoint.Processed = state.processed
 		checkPoint.BankNames = make(map[string]string, len(state.bankNames))
 		for k, v := range state.bankNames {
 			checkPoint.BankNames[strconv.FormatUint(uint64(k), 10)] = v
@@ -149,7 +188,6 @@ func (b *BankAggregator) UnmarshalClientState(clientID inner.ClientID, data []by
 		return err
 	}
 	state := b.stateFor(clientID)
-	state.processed = checkPoint.Processed
 	state.bankNames = make(map[uint32]string, len(checkPoint.BankNames))
 	for k, v := range checkPoint.BankNames {
 		bankID, err := strconv.ParseUint(k, 10, 32)

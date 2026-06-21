@@ -33,7 +33,7 @@ func BuildOutputTargets(outputConfigs []config.OutputConfig, conn middleware.Con
 				return nil, fmt.Errorf("open output %q: %w", outputConfig.Name, err)
 			}
 			targets = append(targets, OutputTarget{Name: outputConfig.Name, Kind: outputConfig.Kind, Middlewares: []middleware.Middleware{mw}})
-		case config.KindShardedQueues, config.KindContentHashQueues:
+		case config.KindShardedQueues, config.KindBatchQueues:
 			if outputConfig.ShardCount <= 0 {
 				closeOutputTargets(targets)
 				return nil, fmt.Errorf("output %q: sharded/content_hash queues requires ShardCount>0", outputConfig.Name)
