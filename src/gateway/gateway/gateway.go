@@ -231,17 +231,16 @@ func (gateway *Gateway) forwardFinalMessage(msg middleware.Message, ack func(), 
 		return
 	}
 
-	if state.IsDuplicate(batch.SenderStageType, batch.SenderReplicaID, batch.SeqID) {
+	if state.IsDuplicate(batch.IDSpace, batch.SeqID) {
 		slog.Debug("Dropping duplicate result batch",
 			"client_id", batch.ClientID,
 			"seq_id", batch.SeqID,
-			"stage_type", batch.SenderStageType,
-			"replica_id", batch.SenderReplicaID,
+			"id_space", batch.IDSpace,
 		)
 		ack()
 		return
 	}
-	state.MarkReceived(batch.SenderStageType, batch.SenderReplicaID, batch.SeqID)
+	state.MarkReceived(batch.IDSpace, batch.SeqID)
 
 	// NOTA: NO BORRAR
 	// At-least-once delivery: the AMQP ack fires only when all items in this
