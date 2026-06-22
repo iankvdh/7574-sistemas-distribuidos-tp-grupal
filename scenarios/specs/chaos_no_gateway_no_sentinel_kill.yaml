@@ -1,6 +1,23 @@
 # Topología (idéntica a scaled.yaml) + Chaos Monkey.
 # El Chaos Monkey mata workers y fetchers al azar, pero no mata gateways ni sentinels.
 # TARGETS/EXCLUDE los calcula compose-gen automáticamente (no editar a mano).
+#
+# ── Fórmulas de invarianza ──────────────────────────────────────────────────
+#
+#   revival_time = SENTINEL_PEER_TIMEOUT + OK_TIMEOUT + T_restart_docker
+#               =          3s           +     3s      +      ~3s
+#               = ~9s
+#
+#   Para que el cluster sea indestructible, SENTINEL_PEER_COOLDOWN debe satisfacer:
+#
+#     revival_time  <  SENTINEL_PEER_COOLDOWN  <  KILL_INTERVAL × N_sentinels
+#
+#   En este spec los sentinels están EXCLUIDOS de los kills, por lo que la restricción
+#   se satisface vacuamente (SENTINEL_PEER_COOLDOWN nunca se activa para sentinels).
+#   Los valores se mantienen consistentes con los demás specs para no introducir
+#   discrepancias si se cambia el spec a incluir sentinels en el futuro:
+#          9s < 12s < 20s × 3 = 60s  ✓
+# ────────────────────────────────────────────────────────────────────────────
 
 gateways: 4
 sentinels: 3
@@ -8,11 +25,12 @@ log_level: info
 expected_query_eofs: 5
 
 sentinels_env:
-  SENTINEL_HB_INTERVAL_SECONDS: 3
-  SENTINEL_PEER_TIMEOUT_SECONDS: 9
-  SENTINEL_PEER_GRACE_SECONDS: 10
-  SENTINEL_PEER_COOLDOWN_SECONDS: 30
-  SENTINEL_DETECTION_INTERVAL_SECONDS: 2
+  SENTINEL_HB_INTERVAL_SECONDS: 1
+  SENTINEL_PEER_TIMEOUT_SECONDS: 3
+  SENTINEL_PEER_GRACE_SECONDS: 5
+  SENTINEL_PEER_COOLDOWN_SECONDS: 12
+  SENTINEL_DETECTION_INTERVAL_SECONDS: 1
+  OK_TIMEOUT_SECONDS: 3
 
 chaos_monkey:
   exclude:

@@ -1,22 +1,41 @@
 # Topología (idéntica a scaled.yaml) + Chaos Monkey.
 # El Chaos Monkey puede matar workers, gateways, sentinels y fetchers al azar.
 # TARGETS/EXCLUDE los calcula compose-gen automáticamente (no editar a mano).
+#
+# ── Fórmulas de invarianza ──────────────────────────────────────────────────
+#
+#   revival_time = SENTINEL_PEER_TIMEOUT + OK_TIMEOUT + T_restart_docker
+#               =          3s           +     3s      +      ~3s
+#               = ~9s
+#
+#   Para que el cluster sea indestructible, SENTINEL_PEER_COOLDOWN debe satisfacer:
+#
+#     revival_time  <  SENTINEL_PEER_COOLDOWN  <  KILL_INTERVAL × N_sentinels
+#          9s       <        12s               <       20s × 3 = 60s          ✓
+#
+#   - Cota inferior: evita restart loops (no reiniciar un nodo que aún está levantando).
+#   - Cota superior: garantiza que un nodo bloqueado por cooldown salga de él antes
+#     de que el chaos monkey pueda agotar TODAS las N réplicas. Si COOLDOWN ≥
+#     KILL_INTERVAL × N, el mismo nodo puede estar bloqueado mientras el monkey
+#     elimina las restantes réplicas → colapso total (0/N vivos).
+#
+#   Nota: en este spec el monkey mata ~45 containers, no solo sentinels. El effective
+#   kill rate sobre sentinels es menor, por lo que el margen real es mayor. La fórmula
+#   aplica de forma conservadora usando KILL_INTERVAL y N = cantidad de sentinels.
+# ────────────────────────────────────────────────────────────────────────────
 
 gateways: 4
 sentinels: 3
 log_level: info
 expected_query_eofs: 5
 
-# revival_time = SENTINEL_PEER_TIMEOUT (9s)
-#             + SENTINEL_DETECTION_INTERVAL (2s)
-#             + restart_overhead (~1s, container ya estaba stopped)
-#             = ~12s < KILL_INTERVAL (20s en chaos.yaml)
 sentinels_env:
-  SENTINEL_HB_INTERVAL_SECONDS: 3
-  SENTINEL_PEER_TIMEOUT_SECONDS: 9
-  SENTINEL_PEER_GRACE_SECONDS: 10
-  SENTINEL_PEER_COOLDOWN_SECONDS: 30
-  SENTINEL_DETECTION_INTERVAL_SECONDS: 2
+  SENTINEL_HB_INTERVAL_SECONDS: 1
+  SENTINEL_PEER_TIMEOUT_SECONDS: 3
+  SENTINEL_PEER_GRACE_SECONDS: 5
+  SENTINEL_PEER_COOLDOWN_SECONDS: 12
+  SENTINEL_DETECTION_INTERVAL_SECONDS: 1
+  OK_TIMEOUT_SECONDS: 3
 
 chaos_monkey:
   env:

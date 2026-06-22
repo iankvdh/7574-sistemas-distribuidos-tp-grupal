@@ -17,15 +17,13 @@ type Config struct {
 
 	// Listen addresses (:port)
 	BullyTCPListenPort  string
-	BullyUDPListenPort  string
+	SentinelHBListenPort  string
 	WorkerUDPListenPort string
 
 	ExpectedContainers []string
 
 	// Bully config.
-	LeaderPingInterval time.Duration
-	LeaderPingFailures int
-	PongTimeout        time.Duration
+	LeaderCheckInterval time.Duration
 	OKTimeout          time.Duration
 	CoordTimeout       time.Duration
 	BaseJitter         time.Duration
@@ -80,7 +78,7 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	udpPort, err := env.IntWithDefault("SENTINEL_BULLY_UDP_PORT", 8092, true)
+	udpPort, err := env.IntWithDefault("SENTINEL_HB_UDP_PORT", 8092, true)
 	if err != nil {
 		return Config{}, err
 	}
@@ -100,19 +98,17 @@ func Load() (Config, error) {
 		{"RESTART_COOLDOWN_SECONDS", 60},
 		{"RESTART_TIMEOUT_SECONDS", 30},
 		{"RESTART_STOP_GRACE_SECONDS", 10},
-		{"LEADER_PING_INTERVAL_SECONDS", 1},
-		{"LEADER_PING_FAILURES", 4},
-		{"LEADER_PONG_TIMEOUT_MS", 800},
+		{"LEADER_CHECK_INTERVAL_SECONDS", 1},
 		{"OK_TIMEOUT_SECONDS", 3},
 		{"COORD_TIMEOUT_SECONDS", 5},
 		{"BULLY_BOOTSTRAP_JITTER_MS", 500},
-		{"CONTROL_DIAL_TIMEOUT_MS", 2000},
+		{"CONTROL_DIAL_TIMEOUT_MS", 500},
 		{"CONTROL_IO_TIMEOUT_MS", 2000},
-		{"SENTINEL_HB_INTERVAL_SECONDS", 3},
-		{"SENTINEL_PEER_TIMEOUT_SECONDS", 9},
-		{"SENTINEL_PEER_GRACE_SECONDS", 10},
-		{"SENTINEL_PEER_COOLDOWN_SECONDS", 30},
-		{"SENTINEL_DETECTION_INTERVAL_SECONDS", 2},
+		{"SENTINEL_HB_INTERVAL_SECONDS", 1},
+		{"SENTINEL_PEER_TIMEOUT_SECONDS", 3},
+		{"SENTINEL_PEER_GRACE_SECONDS", 5},
+		{"SENTINEL_PEER_COOLDOWN_SECONDS", 12},
+		{"SENTINEL_DETECTION_INTERVAL_SECONDS", 1},
 	} {
 		v, err := env.IntWithDefault(spec.key, spec.def, true)
 		if err != nil {
@@ -133,14 +129,12 @@ func Load() (Config, error) {
 		SelfID:              byte(selfIDInt),
 		Peers:               peers,
 		BullyTCPListenPort:  fmt.Sprintf(":%d", tcpPort),
-		BullyUDPListenPort:  fmt.Sprintf(":%d", udpPort),
+		SentinelHBListenPort:  fmt.Sprintf(":%d", udpPort),
 		WorkerUDPListenPort: fmt.Sprintf(":%d", workerUDPPort),
 
 		ExpectedContainers: expected,
 
-		LeaderPingInterval: secs(ints["LEADER_PING_INTERVAL_SECONDS"]),
-		LeaderPingFailures: ints["LEADER_PING_FAILURES"],
-		PongTimeout:        msecs(ints["LEADER_PONG_TIMEOUT_MS"]),
+		LeaderCheckInterval: secs(ints["LEADER_CHECK_INTERVAL_SECONDS"]),
 		OKTimeout:          secs(ints["OK_TIMEOUT_SECONDS"]),
 		CoordTimeout:       secs(ints["COORD_TIMEOUT_SECONDS"]),
 		BaseJitter:         msecs(ints["BULLY_BOOTSTRAP_JITTER_MS"]),
