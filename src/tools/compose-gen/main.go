@@ -694,7 +694,7 @@ func writeSentinels(w io.Writer, monitored []string, logLevel string, replicas i
 		fmt.Fprintf(w, "      - PEERS=%s\n", strings.Join(peers, ","))
 		fmt.Fprintf(w, "      - EXPECTED_CONTAINERS=%s\n", expected)
 		fmt.Fprintf(w, "      - SENTINEL_BULLY_TCP_PORT=%d\n", sentinelTCPPort)
-		fmt.Fprintf(w, "      - SENTINEL_BULLY_UDP_PORT=%d\n", sentinelUDPPort)
+		fmt.Fprintf(w, "      - SENTINEL_HB_UDP_PORT=%d\n", sentinelUDPPort)
 		fmt.Fprintf(w, "      - SENTINEL_UDP_PORT=%d\n", sentinelWorkerPort)
 		fmt.Fprintf(w, "      - STARTUP_GRACE_SECONDS=%d\n", sentinelStartGrace)
 		fmt.Fprintf(w, "      - LOG_LEVEL=%s\n", logLevel)

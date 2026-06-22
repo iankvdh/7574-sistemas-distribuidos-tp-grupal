@@ -8,9 +8,7 @@ const (
 	MsgElection          MsgType = 0x01
 	MsgOK                MsgType = 0x02
 	MsgCoord             MsgType = 0x03
-	MsgSentinelPing      MsgType = 0x04
-	MsgSentinelPong      MsgType = 0x05
-	MsgSentinelHeartbeat MsgType = 0x06
+	MsgPeerHeartbeat MsgType = 0x04
 )
 
 func (t MsgType) String() string {
@@ -21,11 +19,7 @@ func (t MsgType) String() string {
 		return "OK"
 	case MsgCoord:
 		return "Coord"
-	case MsgSentinelPing:
-		return "Ping"
-	case MsgSentinelPong:
-		return "Pong"
-	case MsgSentinelHeartbeat:
+	case MsgPeerHeartbeat:
 		return "Heartbeat"
 	default:
 		return fmt.Sprintf("Unknown(0x%02x)", byte(t))

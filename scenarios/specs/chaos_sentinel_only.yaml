@@ -1,8 +1,26 @@
 # Spec de prueba para sentinel self-revival.
 # Topología idéntica a chaos.yaml, pero el Chaos Monkey SOLO mata sentinels.
-# Kill interval = 10s (más agresivo que chaos.yaml) para estresar el peor caso.
-# Con 3 sentinels y revival_time ≈ 14s > 10s = kill_interval, puede haber momentos
-# con 1 sentinel vivo, pero nunca 0 (la gracia de 30s evita la tormenta inicial).
+#
+# ── Fórmulas de invarianza ──────────────────────────────────────────────────
+#
+#   revival_time = SENTINEL_PEER_TIMEOUT + OK_TIMEOUT + T_restart_docker
+#               =          3s           +     3s      +      ~3s
+#               = ~9s
+#
+#   Para que el cluster sea indestructible, SENTINEL_PEER_COOLDOWN debe satisfacer:
+#
+#     revival_time  <  SENTINEL_PEER_COOLDOWN  <  KILL_INTERVAL × N_sentinels
+#          9s       <        12s               <       10s × 3 = 30s          ✓
+#
+#   - Cota inferior: evita restart loops (no reiniciar un nodo que aún está levantando).
+#   - Cota superior: garantiza que un nodo bloqueado por cooldown salga de él antes
+#     de que el chaos monkey pueda agotar TODAS las N réplicas. Si COOLDOWN ≥
+#     KILL_INTERVAL × N, el mismo nodo puede estar bloqueado mientras el monkey
+#     elimina las restantes réplicas → colapso total (0/N vivos).
+#
+#   El grace period (SENTINEL_PEER_GRACE_SECONDS=5s) corre en paralelo con la
+#   detección del siguiente evento, no en serie.
+# ────────────────────────────────────────────────────────────────────────────
 
 gateways: 4
 sentinels: 3
@@ -10,11 +28,12 @@ log_level: info
 expected_query_eofs: 5
 
 sentinels_env:
-  SENTINEL_HB_INTERVAL_SECONDS: 3
-  SENTINEL_PEER_TIMEOUT_SECONDS: 9
-  SENTINEL_PEER_GRACE_SECONDS: 10
-  SENTINEL_PEER_COOLDOWN_SECONDS: 30
-  SENTINEL_DETECTION_INTERVAL_SECONDS: 2
+  SENTINEL_HB_INTERVAL_SECONDS: 1
+  SENTINEL_PEER_TIMEOUT_SECONDS: 3
+  SENTINEL_PEER_GRACE_SECONDS: 5
+  SENTINEL_PEER_COOLDOWN_SECONDS: 12
+  SENTINEL_DETECTION_INTERVAL_SECONDS: 1
+  OK_TIMEOUT_SECONDS: 3
 
 chaos_monkey:
   targets_only:
@@ -22,7 +41,7 @@ chaos_monkey:
     - sentinel_1
     - sentinel_2
   env:
-    KILL_INTERVAL_SECONDS: 13
+    KILL_INTERVAL_SECONDS: 10
     KILL_TIMEOUT_SECONDS: 5
 
 fetchers:
