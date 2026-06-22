@@ -33,8 +33,6 @@ CHUNK_SIZE = 500_000
 TRANS_DTYPES = {
     "From Bank":          "int32",
     "To Bank":            "int32",
-    "Amount Received":    "float32",
-    "Amount Paid":        "float32",
     "Receiving Currency": "category",
     "Payment Currency":   "category",
     "Payment Format":     "category",
