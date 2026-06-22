@@ -71,16 +71,8 @@ workers:
     replicas: 2
     input: queue:joiner_usd_input_{REPLICA_ID}
     outputs:
-      - content_hash_queues:usd_for_amount_lt_50:2
-      - sharded_queues:q2_input:2
-
-  - name: filter_amount_lt_50
-    strategy: filter_amount_lt_50
-    replicas: 2
-    input: queue:usd_for_amount_lt_50_{REPLICA_ID}
-    match_count: 1
-    outputs:
       - content_hash_queues:q1_input:2
+      - sharded_queues:q2_input:2
 
   - name: sharder_q1
     strategy: sharder_q1

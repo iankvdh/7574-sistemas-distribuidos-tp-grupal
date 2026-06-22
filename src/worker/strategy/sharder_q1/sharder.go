@@ -3,6 +3,7 @@ package sharder_q1
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"strconv"
 
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/env"
@@ -14,17 +15,21 @@ import (
 )
 
 const queryID uint8 = 1
+const defaultAmountThreshold = 50.0
 
 type sharderCheckpoint struct {
-	Ring eof.RingStateSnapshot `json:"ring"`
+	Ring    eof.RingStateSnapshot `json:"ring"`
+	Matched uint64                `json:"matched"`
 }
 
 type Sharder struct {
 	strategy.NoopValidator
 	cfg             strategy.StrategyConfig
 	nFinalJoiners   int
+	amountThreshold float64
 	ringCoordinator *eof.RingCoordinator
 	rkCache         []string
+	matchedCount    map[inner.ClientID]uint64
 }
 
 func New() *Sharder {
@@ -42,13 +47,23 @@ func (s *Sharder) Init(cfg strategy.StrategyConfig) error {
 	if err != nil {
 		return err
 	}
+	threshold := defaultAmountThreshold
+	if raw := os.Getenv("AMOUNT_THRESHOLD_USD"); raw != "" {
+		v, err := strconv.ParseFloat(raw, 64)
+		if err != nil || v <= 0 {
+			return fmt.Errorf("invalid AMOUNT_THRESHOLD_USD=%q — expected a positive number", raw)
+		}
+		threshold = v
+	}
 	s.cfg = cfg
 	s.nFinalJoiners = n
+	s.amountThreshold = threshold
 	s.rkCache = make([]string, n)
 	for i := 0; i < n; i++ {
 		s.rkCache[i] = strconv.Itoa(i)
 	}
 	s.ringCoordinator = eof.NewBroadcastRingCoordinator(cfg.ReplicaID, cfg.NReplicas)
+	s.matchedCount = make(map[inner.ClientID]uint64)
 	return nil
 }
 
@@ -59,6 +74,10 @@ func (s *Sharder) ProcessMessage(envelope *inner.Envelope) ([]strategy.OutputMes
 	tx, err := external.DeserializeTransaction(envelope.Payload)
 	if err != nil {
 		return nil, strategy.LocalCounts{}, fmt.Errorf("deserialize transaction: %w", err)
+	}
+
+	if tx.AmountPaid >= s.amountThreshold {
+		return nil, strategy.LocalCounts{Processed: 1}, nil
 	}
 
 	row := &inner.Query1Row{
@@ -73,6 +92,7 @@ func (s *Sharder) ProcessMessage(envelope *inner.Envelope) ([]strategy.OutputMes
 		return nil, strategy.LocalCounts{}, fmt.Errorf("serialize query1 row: %w", err)
 	}
 
+	s.matchedCount[envelope.ClientID]++
 	return []strategy.OutputMessage{{
 		OutputIndices: []int{0},
 		Body:          body,
@@ -84,19 +104,23 @@ func (s *Sharder) ProcessMessage(envelope *inner.Envelope) ([]strategy.OutputMes
 }
 
 func (s *Sharder) OnUpstreamEOF(envelope *inner.Envelope) (strategy.EOFOutcome, error) {
-	action, _ := s.ringCoordinator.OnUpstreamEOF(envelope.ClientID, envelope.Total, envelope.LocalCount, 0)
-	return s.outcomeFor(envelope.ClientID, action, envelope.LocalCount), nil
+	localMatched := s.matchedCount[envelope.ClientID]
+	localNotMatched := envelope.LocalCount - localMatched
+	action, _ := s.ringCoordinator.OnUpstreamEOF(envelope.ClientID, envelope.Total, localMatched, localNotMatched)
+	return s.outcomeFor(envelope.ClientID, action, localMatched), nil
 }
 
 func (s *Sharder) OnRingToken(token *eof.Token, localCount uint64) (strategy.EOFOutcome, error) {
 	if s.ringCoordinator == nil {
 		return strategy.EOFOutcome{Action: eof.Action{Kind: eof.ActionNone}}, nil
 	}
-	action, _ := s.ringCoordinator.OnRingToken(token, localCount, 0)
-	return s.outcomeFor(token.ClientID, action, localCount), nil
+	localMatched := s.matchedCount[token.ClientID]
+	localNotMatched := localCount - localMatched
+	action, _ := s.ringCoordinator.OnRingToken(token, localMatched, localNotMatched)
+	return s.outcomeFor(token.ClientID, action, localMatched), nil
 }
 
-func (s *Sharder) outcomeFor(clientID inner.ClientID, action eof.Action, localCount uint64) strategy.EOFOutcome {
+func (s *Sharder) outcomeFor(clientID inner.ClientID, action eof.Action, localMatched uint64) strategy.EOFOutcome {
 	outcome := strategy.EOFOutcome{Action: action}
 	switch action.Kind {
 	case eof.ActionEmitEOFs, eof.ActionEmitEOFsAndForwardToken:
@@ -104,7 +128,7 @@ func (s *Sharder) outcomeFor(clientID inner.ClientID, action eof.Action, localCo
 			OutputIndex: 0,
 			RoutingKey:  s.routingKeyFor(clientID),
 			QueryID:     queryID,
-			Total:       uint32(localCount),
+			Total:       uint32(localMatched),
 		}}
 		outcome.ClientCompleted = true
 	}
@@ -112,7 +136,9 @@ func (s *Sharder) outcomeFor(clientID inner.ClientID, action eof.Action, localCo
 }
 
 func (s *Sharder) MarshalClientState(clientID inner.ClientID) ([]byte, error) {
-	checkPoint := sharderCheckpoint{}
+	checkPoint := sharderCheckpoint{
+		Matched: s.matchedCount[clientID],
+	}
 	checkPoint.Ring, _ = s.ringCoordinator.GetClientRingState(clientID)
 	return json.Marshal(checkPoint)
 }
@@ -122,11 +148,13 @@ func (s *Sharder) UnmarshalClientState(clientID inner.ClientID, data []byte) err
 	if err := json.Unmarshal(data, &checkPoint); err != nil {
 		return err
 	}
+	s.matchedCount[clientID] = checkPoint.Matched
 	s.ringCoordinator.RestoreClientRingState(clientID, checkPoint.Ring)
 	return nil
 }
 
 func (s *Sharder) CleanupClient(clientID inner.ClientID) {
+	delete(s.matchedCount, clientID)
 	s.ringCoordinator.CleanupClient(clientID)
 }
 
