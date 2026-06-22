@@ -28,12 +28,6 @@ func Build(name string) (strategy.Strategy, error) {
 		return joiner.NewEOFJoiner(), nil
 	case "filter_wire_ach":
 		return filter.New("filter_wire_ach", filter.IsWireOrACH), nil
-	case "filter_amount_lt_50":
-		threshold, err := filter.ParseAmountThreshold()
-		if err != nil {
-			return nil, err
-		}
-		return filter.New("filter_amount_lt_50", filter.AmountLessThan(threshold)), nil
 	case "filter_period1":
 		defStart, defEnd := filter.Period1Defaults()
 		start, end, err := filter.ParsePeriodRange("PERIOD1_START", "PERIOD1_END", defStart, defEnd)
