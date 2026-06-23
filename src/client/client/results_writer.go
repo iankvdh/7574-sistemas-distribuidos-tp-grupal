@@ -122,3 +122,14 @@ func (writer *queryResultsWriter) createQueryResultFile(queryID uint8, header st
 func resultFileName(clientID string, queryID uint8) string {
 	return fmt.Sprintf("%s_q%d.csv", clientID, queryID)
 }
+
+func removeResultFiles(dir, clientID string) error {
+	var firstErr error
+	for queryID := range queryHeaders {
+		path := filepath.Join(dir, resultFileName(clientID, queryID))
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
