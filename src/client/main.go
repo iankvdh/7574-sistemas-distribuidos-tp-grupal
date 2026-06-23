@@ -23,7 +23,7 @@ func run() int {
 
 	newClient, err := client.NewClient(cfg)
 	if err != nil {
-		slog.Error("While connecting to gateway", "err", err)
+		slog.Error("While initializing client", "err", err)
 		return 1
 	}
 
