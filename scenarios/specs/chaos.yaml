@@ -111,8 +111,8 @@ workers:
       - content_hash_queues:q1_input:2
       - sharded_queues:q2_input:2
 
-  - name: sharder_q1
-    strategy: sharder_q1
+  - name: filter_amount_lt_50
+    strategy: filter_amount_lt_50
     replicas: 2
     input: queue:q1_input_{REPLICA_ID}
     outputs:

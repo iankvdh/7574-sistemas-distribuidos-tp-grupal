@@ -74,8 +74,8 @@ workers:
       - batch_queues:q1_input:1
       - sharded_queues:q2_input:1
 
-  - name: sharder_q1
-    strategy: sharder_q1
+  - name: filter_amount_lt_50
+    strategy: filter_amount_lt_50
     replicas: 1
     input: queue:q1_input_{REPLICA_ID}
     outputs:
