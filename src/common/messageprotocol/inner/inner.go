@@ -25,6 +25,11 @@ const (
 	EOF
 	// RingToken carries the ring token between replicas of a strategy.
 	RingToken
+	// ClientAborted signals that a client session ended at the gateway
+	// (disconnect/abort or gateway revival). Workers consume it to drop all state
+	// for that client. It carries only the Header (ClientID); SeqID=0, so it is
+	// outside the per-sequence dedup stream (idempotency guarded by tombstones).
+	ClientAborted
 )
 
 // MsgKind identifies the type of item that travels inside a Batch.
@@ -227,6 +232,8 @@ func HeaderOf(msg InternalMessage) Header {
 		return m.Header
 	case *RingTokenMessage:
 		return m.Header
+	case *ClientAbortedMessage:
+		return m.Header
 	default:
 		panic(fmt.Sprintf("HeaderOf: unknown InternalMessage type %T", msg))
 	}
@@ -246,6 +253,8 @@ func NewFromSerializedData(data []byte) (InternalMessage, error) {
 		return parseEOF(header, body)
 	case RingToken:
 		return parseRingToken(header, body)
+	case ClientAborted:
+		return parseClientAborted(header, body)
 	default:
 		return nil, ErrUnexpectedKind
 	}
@@ -254,6 +263,14 @@ func NewFromSerializedData(data []byte) (InternalMessage, error) {
 // validateHeader rejects messages with missing SeqID or SenderStageType.
 // Every message must carry SeqID > 0 (the dedup sequence) and SenderStageType != 0.
 func validateHeader(h Header, typ MessageType) error {
+	if typ == ClientAborted {
+		// ClientAborted travels with SeqID=0 (outside the per-sequence dedup
+		// stream): it is identified only by ClientID, so SeqID>0 is not required.
+		if h.SenderStageType == 0 {
+			return fmt.Errorf("%w: SenderStageType=0 in message type=%d", ErrMalformedEnvelope, typ)
+		}
+		return nil
+	}
 	if h.SeqID == 0 {
 		return fmt.Errorf("%w: SeqID=0 in message type=%d", ErrMalformedEnvelope, typ)
 	}

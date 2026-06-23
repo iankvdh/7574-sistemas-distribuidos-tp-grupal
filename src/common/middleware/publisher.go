@@ -27,6 +27,8 @@ type publisher struct {
 	confirms        chan amqp.Confirmation
 	pendingConfirms int
 	flushHighWater  int
+
+	mandatory bool
 }
 
 func newPublisher(settings ConnSettings) (*publisher, error) {
@@ -78,6 +80,7 @@ func newPublisher(settings ConnSettings) (*publisher, error) {
 		channel:        ch,
 		confirms:       confirms,
 		flushHighWater: flushHighWaterFor(maxOutstanding, ratio),
+		mandatory:      true,
 	}, nil
 }
 
@@ -101,8 +104,8 @@ func (p *publisher) publishLocked(exchange, routingKey string, body []byte) erro
 	if err := p.channel.Publish(
 		exchange,
 		routingKey,
-		true,  // mandatory
-		false, // immediate
+		p.mandatory, // mandatory
+		false,       // immediate
 		amqp.Publishing{
 			ContentType: "text/plain",
 			Body:        body,

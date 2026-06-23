@@ -13,7 +13,7 @@ import (
 const checkpointFileMode = 0o644
 const checkpointFileFlags = os.O_CREATE | os.O_TRUNC | os.O_WRONLY
 
-func atomicWriteFile(path string, data []byte) error {
+func AtomicWriteFile(path string, data []byte) error {
 	dir := filepath.Dir(path)
 	tmp := path + ".tmp"
 	f, err := os.OpenFile(tmp, checkpointFileFlags, checkpointFileMode)
@@ -47,7 +47,7 @@ func GlobalStatePath(dir string) string {
 }
 
 func WriteGlobalState(dir string, data []byte) error {
-	return atomicWriteFile(GlobalStatePath(dir), data)
+	return AtomicWriteFile(GlobalStatePath(dir), data)
 }
 
 func ReadGlobalState(dir string) ([]byte, error) {
@@ -73,19 +73,19 @@ type JACEntry struct {
 }
 
 type ClientCheckpoint struct {
-	Version        int                           `json:"v"`
-	ClientID       string                        `json:"cid"`
-	StrategyState  []byte                        `json:"ss,omitempty"`
-	RingStates     map[string]RingEntry          `json:"rs,omitempty"`
-	JACStates      map[string]JACEntry           `json:"js,omitempty"`
-	LastRecvSeqID  map[string]uint64             `json:"lr,omitempty"`
-	DedupSeen      map[string]*dedup.IntervalSet `json:"dd,omitempty"`
-	ProcessedItems uint64                        `json:"pi,omitempty"`
-	WALGen             uint64            `json:"wg,omitempty"`
-	OutSeqID           uint64            `json:"os"`
-	OutCounts          map[string]uint64 `json:"oc,omitempty"` // "outputIndex|routingKey" → messages published
-	PendingEOFBody     []byte            `json:"peof,omitempty"`
-	PendingEOFInputIdx int               `json:"peofidx,omitempty"`
+	Version            int                           `json:"v"`
+	ClientID           string                        `json:"cid"`
+	StrategyState      []byte                        `json:"ss,omitempty"`
+	RingStates         map[string]RingEntry          `json:"rs,omitempty"`
+	JACStates          map[string]JACEntry           `json:"js,omitempty"`
+	LastRecvSeqID      map[string]uint64             `json:"lr,omitempty"`
+	DedupSeen          map[string]*dedup.IntervalSet `json:"dd,omitempty"`
+	ProcessedItems     uint64                        `json:"pi,omitempty"`
+	WALGen             uint64                        `json:"wg,omitempty"`
+	OutSeqID           uint64                        `json:"os"`
+	OutCounts          map[string]uint64             `json:"oc,omitempty"` // "outputIndex|routingKey" → messages published
+	PendingEOFBody     []byte                        `json:"peof,omitempty"`
+	PendingEOFInputIdx int                           `json:"peofidx,omitempty"`
 }
 
 type MetaCheckpoint struct {
@@ -106,7 +106,7 @@ func WriteClientCheckpoint(dir string, cp *ClientCheckpoint) error {
 	if err != nil {
 		return fmt.Errorf("marshal checkpoint for %s: %w", cp.ClientID, err)
 	}
-	return atomicWriteFile(ClientCheckpointPath(dir, inner.ClientID(cp.ClientID)), data)
+	return AtomicWriteFile(ClientCheckpointPath(dir, inner.ClientID(cp.ClientID)), data)
 }
 
 func ReadClientCheckpoint(path string) (*ClientCheckpoint, error) {
@@ -146,5 +146,5 @@ func WriteMetaCheckpoint(dir string, meta *MetaCheckpoint) error {
 	if err != nil {
 		return fmt.Errorf("marshal meta: %w", err)
 	}
-	return atomicWriteFile(filepath.Join(dir, metaFileName), data)
+	return AtomicWriteFile(filepath.Join(dir, metaFileName), data)
 }

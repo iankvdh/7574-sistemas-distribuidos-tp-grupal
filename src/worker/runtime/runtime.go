@@ -37,6 +37,7 @@ type Worker struct {
 	cfg                 config.WorkerConfig
 	strategy            strategy.Strategy
 	inputs              []middleware.Middleware
+	clientAborts        middleware.Middleware
 	ringIn              middleware.Middleware
 	ringOut             middleware.Middleware
 	outputs             []OutputTarget
@@ -58,12 +59,11 @@ type Worker struct {
 	pendingAcks    map[inner.ClientID][]deliveryRef
 	firstPendingAt map[inner.ClientID]time.Time
 	totalPending   int
-	lastSeen       map[inner.ClientID]time.Time
 	tombstones     map[inner.ClientID]time.Time
-	lastRecvSeqID map[inner.SeqKey]uint64
-	dedupSeen map[inner.DedupKey]*dedup.IntervalSet
+	lastRecvSeqID  map[inner.SeqKey]uint64
+	dedupSeen      map[inner.DedupKey]*dedup.IntervalSet
 	processedItems map[inner.ClientID]uint64
-	outSeqID map[inner.ClientID]uint64
+	outSeqID       map[inner.ClientID]uint64
 
 	deltaCP       strategy.DeltaCheckpointer
 	wals          map[inner.ClientID]*wal.Log
@@ -173,12 +173,24 @@ func New(cfg config.WorkerConfig) (*Worker, error) {
 		return nil, fmt.Errorf("create checkpoint dir %q: %w", cfg.CheckpointDir, err)
 	}
 
+	if cfg.ContainerName == "" {
+		closeAll(inputs, ringIn, ringOut, outputTargets)
+		return nil, errors.New("CONTAINER_NAME is required to bind the per-worker client_aborts queue")
+	}
+	abortsQueue := cfg.ClientAbortsExchange + "_" + cfg.ContainerName
+	clientAborts, err := middleware.CreateBoundQueueMiddleware(abortsQueue, cfg.ClientAbortsExchange, "", conn)
+	if err != nil {
+		closeAll(inputs, ringIn, ringOut, outputTargets)
+		return nil, fmt.Errorf("open client_aborts queue %q: %w", abortsQueue, err)
+	}
+
 	runCtx, cancel := context.WithCancel(context.Background())
 	buffers := initOutputTargetBuffers(outputTargets)
 	w := &Worker{
 		cfg:                 cfg,
 		strategy:            strat,
 		inputs:              inputs,
+		clientAborts:        clientAborts,
 		ringIn:              ringIn,
 		ringOut:             ringOut,
 		outputs:             outputTargets,
@@ -191,7 +203,6 @@ func New(cfg config.WorkerConfig) (*Worker, error) {
 
 		pendingAcks:    map[inner.ClientID][]deliveryRef{},
 		firstPendingAt: map[inner.ClientID]time.Time{},
-		lastSeen:       map[inner.ClientID]time.Time{},
 		tombstones:     map[inner.ClientID]time.Time{},
 		lastRecvSeqID:  map[inner.SeqKey]uint64{},
 		dedupSeen:      map[inner.DedupKey]*dedup.IntervalSet{},
@@ -293,6 +304,9 @@ func (w *Worker) Run() error {
 		go w.consumeRing()
 	}
 
+	w.waitingGroup.Add(1)
+	go w.consumeClientAborts()
+
 	for i := range w.inputs {
 		if w.deferredInputs[i] {
 			continue
@@ -352,6 +366,45 @@ func (w *Worker) consumeRing() {
 	}
 }
 
+func (w *Worker) consumeClientAborts() {
+	defer w.waitingGroup.Done()
+	err := w.clientAborts.StartConsuming(w.handleClientAborted)
+	if err != nil && w.ctx.Err() == nil {
+		slog.Error("ClientAborts consumer stopped unexpectedly", "err", err)
+	}
+}
+
+func (w *Worker) handleClientAborted(msg middleware.Message, ack func(), nack func()) {
+	w.stateMu.Lock()
+	defer w.stateMu.Unlock()
+
+	if w.draining {
+		nack()
+		return
+	}
+
+	parsed, err := inner.NewFromSerializedData([]byte(msg.Body))
+	if err != nil {
+		slog.Error("Malformed message in client_aborts queue (poison, discarding)", "err", err)
+		ack()
+		return
+	}
+	aborted, ok := parsed.(*inner.ClientAbortedMessage)
+	if !ok {
+		slog.Warn("Unexpected message type on client_aborts queue", "type", parsed.Type())
+		ack()
+		return
+	}
+
+	clientID := aborted.ClientID
+	if _, dead := w.tombstones[clientID]; dead {
+		ack()
+		return
+	}
+	w.abortClient(clientID)
+	ack()
+}
+
 func (w *Worker) flushPublishers() error {
 	for _, mw := range w.inputs {
 		if err := mw.FlushPublisher(); err != nil {
@@ -407,14 +460,12 @@ func (w *Worker) handleInputMessage(inputIndex int, msg middleware.Message, ack 
 			ack()
 			return
 		}
-		w.lastSeen[clientID] = time.Now()
 		w.handleUpstreamEOF(typed, msg, inputIndex, header, ack, nack)
 	case *inner.BatchMessage:
 		if w.isDuplicateData(header) {
 			ack()
 			return
 		}
-		w.lastSeen[clientID] = time.Now()
 		w.handleBatch(typed, []byte(msg.Body), inputIndex, header, ack, nack)
 	default:
 		slog.Error("Unexpected message type in input queue", "input_index", inputIndex, "type", parsed.Type())
@@ -454,7 +505,6 @@ func (w *Worker) handleRingMessage(msg middleware.Message, ack func(), nack func
 		ack()
 		return
 	}
-	w.lastSeen[clientID] = time.Now()
 
 	w.handleRingToken(typed, header, ack, nack)
 }
@@ -1124,7 +1174,6 @@ func (w *Worker) writeGlobalState() {
 	}
 }
 
-
 func walBaseFor(clientID inner.ClientID) string {
 	return checkpointNamePrefix + string(clientID)
 }
@@ -1300,7 +1349,6 @@ func (w *Worker) cleanupClientState(clientID inner.ClientID) {
 	}
 	delete(w.outSeqID, clientID)
 	delete(w.processedItems, clientID)
-	delete(w.lastSeen, clientID)
 	delete(w.upstreamEOFs, clientID)
 	delete(w.firstPendingAt, clientID)
 }
@@ -1338,12 +1386,6 @@ func (w *Worker) runMaintenance() {
 	for clientID, timestamp := range w.firstPendingAt {
 		if now.Sub(timestamp) > w.cfg.MaxPendingAckAge {
 			w.checkpointAndAck(clientID)
-		}
-	}
-	for clientID, timestamp := range w.lastSeen {
-		if now.Sub(timestamp) > w.cfg.ClientTTL {
-			slog.Warn("CLIENT_TTL expired, aborting client", "client_id", clientID, "idle", now.Sub(timestamp))
-			w.abortClient(clientID)
 		}
 	}
 	changed := false
@@ -1421,7 +1463,6 @@ func (w *Worker) loadCheckpoints() bool {
 				msg:        middleware.Message{Body: string(clientCheckpoint.PendingEOFBody)},
 			}
 		}
-		w.lastSeen[clientID] = time.Now()
 		foundAnyCheckpoint = true
 	}
 	if recoverer, ok := w.strategy.(strategy.DedupRecoverer); ok {
@@ -1547,6 +1588,10 @@ func (w *Worker) shutdownWatcher() {
 		for _, mw := range w.inputs {
 			_ = mw.StopConsuming()
 			_ = mw.Close()
+		}
+		if w.clientAborts != nil {
+			_ = w.clientAborts.StopConsuming()
+			_ = w.clientAborts.Close()
 		}
 		if w.ringIn != nil {
 			_ = w.ringIn.StopConsuming()

@@ -657,16 +657,16 @@ func (s *spec) renderServer(w io.Writer) error {
 	}
 	writeRabbit(w)
 	writeNetwork(w, false)
-	writeWorkerVolumes(w, workerNames)
+	writeDataVolumes(w, append(append([]string{}, gatewayNames...), workerNames...))
 	return nil
 }
 
-func writeWorkerVolumes(w io.Writer, workerNames []string) {
-	if len(workerNames) == 0 {
+func writeDataVolumes(w io.Writer, serviceNames []string) {
+	if len(serviceNames) == 0 {
 		return
 	}
 	fmt.Fprintln(w, "volumes:")
-	for _, name := range workerNames {
+	for _, name := range serviceNames {
 		fmt.Fprintf(w, "  %s:\n", workerDataVolume(name))
 	}
 }
@@ -794,9 +794,13 @@ func writeGateway(w io.Writer, id int, logLevel string, expectedQueryEOFs, senti
 	}
 	fmt.Fprintf(w, "      - LOG_LEVEL=%s\n", logLevel)
 	fmt.Fprintf(w, "      - CONTAINER_NAME=%s\n", name)
+	fmt.Fprintf(w, "      - DATA_DIR=%s\n", workerDataDir)
 	fmt.Fprintf(w, "      - SENTINEL_UDP=%s\n", sentinelHeartbeatTargets(sentinels))
 	fmt.Fprintf(w, "      - HEARTBEAT_INTERVAL_SECONDS=%d\n", heartbeatIntervalS)
 	fmt.Fprintf(w, "      - HEARTBEAT_JITTER_MS=%d\n", heartbeatJitterMs)
+
+	fmt.Fprintln(w, "    volumes:")
+	fmt.Fprintf(w, "      - %s:%s\n", workerDataVolume(name), workerDataDir)
 }
 
 func writeWorker(w io.Writer, ws workerSpec, replica int, logLevel string, gateways, sentinels int) {

@@ -20,6 +20,7 @@ import (
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/messageprotocol/inner"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/middleware"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/gateway/clientregistry"
+	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/gateway/clientstore"
 	gatewayconfig "github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/gateway/config"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/gateway/messagehandler"
 )
@@ -42,6 +43,11 @@ type Gateway struct {
 	ctx                   context.Context
 	cancel                context.CancelFunc
 	waitingGroup          sync.WaitGroup
+
+	clientAborts middleware.Middleware
+	dataDir      string
+	clientsMu    sync.Mutex
+	clients      map[inner.ClientID]struct{}
 
 	heartbeatEnabled  bool
 	containerName     string
@@ -88,11 +94,36 @@ func NewGateway(config gatewayconfig.GatewayConfig) (*Gateway, error) {
 		return nil, err
 	}
 
+	clientAborts, err := middleware.CreateBestEffortExchangeMiddleware(config.ClientAbortsExchange, []string{""}, connSettings)
+	if err != nil {
+		_ = txPublishers.Close()
+		_ = acctPublishers.Close()
+		_ = finalQueue.Close()
+		return nil, err
+	}
+
+	if err := os.MkdirAll(config.DataDir, 0o755); err != nil {
+		_ = txPublishers.Close()
+		_ = acctPublishers.Close()
+		_ = finalQueue.Close()
+		_ = clientAborts.Close()
+		return nil, fmt.Errorf("create gateway data dir %q: %w", config.DataDir, err)
+	}
+	clients, err := clientstore.Load(config.DataDir)
+	if err != nil {
+		_ = txPublishers.Close()
+		_ = acctPublishers.Close()
+		_ = finalQueue.Close()
+		_ = clientAborts.Close()
+		return nil, err
+	}
+
 	listener, err := net.Listen("tcp", config.ServerHost+":"+config.ServerPort)
 	if err != nil {
 		_ = txPublishers.Close()
 		_ = acctPublishers.Close()
 		_ = finalQueue.Close()
+		_ = clientAborts.Close()
 		return nil, err
 	}
 
@@ -110,6 +141,10 @@ func NewGateway(config gatewayconfig.GatewayConfig) (*Gateway, error) {
 		listener:              listener,
 		ctx:                   ctx,
 		cancel:                cancel,
+
+		clientAborts: clientAborts,
+		dataDir:      config.DataDir,
+		clients:      clients,
 
 		heartbeatEnabled:  config.HeartbeatEnabled,
 		containerName:     config.ContainerName,
@@ -135,6 +170,10 @@ func (gateway *Gateway) Run() error {
 	go gateway.handleSignals()
 
 	gateway.startHeartbeat()
+
+	if err := gateway.abortPreviousClients(); err != nil {
+		slog.Error("Failed to abort previously active clients on revival; will retry next restart", "err", err)
+	}
 
 	slog.Info("Gateway accepting client connections")
 
@@ -280,12 +319,15 @@ func (gateway *Gateway) forwardFinalMessage(msg middleware.Message, ack func(), 
 
 func (gateway *Gateway) handleClientSession(state *clientregistry.ClientState, handler *messagehandler.MessageHandler) {
 	defer gateway.waitingGroup.Done()
-	defer gateway.registry.Remove(handler.ClientID())
-	defer state.Close()
+	defer gateway.cleanupClientSession(state, handler.ClientID())
 
 	if err := gateway.handleHandshake(state, handler.ClientID()); err != nil {
 		slog.Debug("Client handshake failed", "client_id", handler.ClientID(), "err", err)
 		return
+	}
+
+	if err := gateway.registerClient(handler.ClientID()); err != nil {
+		slog.Error("Failed to persist client registration", "client_id", handler.ClientID(), "err", err)
 	}
 
 	slog.Info("Client connected", "client_id", handler.ClientID(), "remote_addr", state.Conn.RemoteAddr())
@@ -395,6 +437,84 @@ func (gateway *Gateway) handleHandshake(state *clientregistry.ClientState, clien
 	})
 }
 
+func (gateway *Gateway) cleanupClientSession(state *clientregistry.ClientState, clientID inner.ClientID) {
+	if gateway.ctx.Err() == nil && gateway.isClientRegistered(clientID) {
+		if err := gateway.publishClientAborted(clientID); err != nil {
+			slog.Error("Failed to publish ClientAborted; client state will be reclaimed on revival",
+				"client_id", clientID, "err", err)
+		} else if err := gateway.unregisterClient(clientID); err != nil {
+			slog.Error("Failed to persist client deregistration", "client_id", clientID, "err", err)
+		}
+	}
+	gateway.registry.Remove(clientID)
+	state.Close()
+}
+
+func (gateway *Gateway) registerClient(clientID inner.ClientID) error {
+	gateway.clientsMu.Lock()
+	defer gateway.clientsMu.Unlock()
+	gateway.clients[clientID] = struct{}{}
+	return clientstore.Save(gateway.dataDir, gateway.clients)
+}
+
+func (gateway *Gateway) unregisterClient(clientID inner.ClientID) error {
+	gateway.clientsMu.Lock()
+	defer gateway.clientsMu.Unlock()
+	delete(gateway.clients, clientID)
+	return clientstore.Save(gateway.dataDir, gateway.clients)
+}
+
+func (gateway *Gateway) isClientRegistered(clientID inner.ClientID) bool {
+	gateway.clientsMu.Lock()
+	defer gateway.clientsMu.Unlock()
+	_, ok := gateway.clients[clientID]
+	return ok
+}
+
+func (gateway *Gateway) publishClientAborted(clientID inner.ClientID) error {
+	msg, err := serializeClientAborted(gateway.gatewayID, clientID)
+	if err != nil {
+		return err
+	}
+	if err := gateway.clientAborts.SendWithKey(*msg, ""); err != nil {
+		return err
+	}
+	return gateway.clientAborts.FlushPublisher()
+}
+
+func (gateway *Gateway) abortPreviousClients() error {
+	gateway.clientsMu.Lock()
+	defer gateway.clientsMu.Unlock()
+	if len(gateway.clients) == 0 {
+		return nil
+	}
+	for clientID := range gateway.clients {
+		if err := gateway.publishClientAborted(clientID); err != nil {
+			return fmt.Errorf("revival abort for client %s: %w", clientID, err)
+		}
+	}
+	slog.Info("Revival: aborted previously active clients", "count", len(gateway.clients))
+	gateway.clients = map[inner.ClientID]struct{}{}
+	return clientstore.Save(gateway.dataDir, gateway.clients)
+}
+
+func serializeClientAborted(gatewayID inner.GatewayID, clientID inner.ClientID) (*middleware.Message, error) {
+	aborted := &inner.ClientAbortedMessage{
+		Header: inner.Header{
+			GatewayID:       gatewayID,
+			ClientID:        clientID,
+			SeqID:           0,
+			SenderStageType: inner.StageGateway,
+			MinterStageType: inner.StageGateway,
+		},
+	}
+	raw, err := aborted.Serialize()
+	if err != nil {
+		return nil, err
+	}
+	return &middleware.Message{Body: string(raw)}, nil
+}
+
 func shardKeys(n int) []string {
 	keys := make([]string, n)
 	for i := range keys {
@@ -494,4 +614,5 @@ func (gateway *Gateway) shutdownWatcher() {
 	_ = gateway.finalQueue.Close()
 	_ = gateway.txPublishers.Close()
 	_ = gateway.acctPublishers.Close()
+	_ = gateway.clientAborts.Close()
 }
