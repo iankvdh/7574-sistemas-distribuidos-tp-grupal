@@ -68,7 +68,7 @@ var strategiesWithRing = map[string]struct{}{
 	"filter_period2":                    {},
 	"joiner_usd":                        {},
 	"sharder_q4":                        {},
-	"sharder_q1":                        {},
+	"filter_amount_lt_50":                {},
 	"max_q2":                            {},
 	"bank_aggregator":                   {},
 	"sum_q3":                            {},
@@ -89,7 +89,7 @@ var stageTypeByStrategy = map[string]string{
 	"filter_currency_usd_p2":            "FilterCurrencyUsdP2",
 	"filter_currency_usd_other_periods": "FilterCurrencyUsdOther",
 	"joiner_usd":                        "JoinerUSD",
-	"sharder_q1":                        "SharderQ1",
+	"filter_amount_lt_50":                "FilterAmountLt50",
 	"sharder_q4":                        "SharderQ4",
 	"suspicious_account_filter":         "SuspiciousFilter",
 	"path_finder_q4":                    "PathFinder",
@@ -465,7 +465,7 @@ func injectDerivedEnvs(workers []workerSpec, fetchers []fetcherSpec) {
 	for i := range workers {
 		env := workers[i].Env
 		switch workers[i].Strategy {
-		case "sharder_q1":
+		case "filter_amount_lt_50":
 			if n := r("final_joiner"); n > 0 {
 				set(env, "N_FINAL_JOINERS", itoa(n))
 			}
@@ -540,7 +540,7 @@ func injectDerivedEnvs(workers []workerSpec, fetchers []fetcherSpec) {
 				set(env, "EXPECTED_EOFS", itoa(joinerUSDUpstreams))
 			}
 		case "final_joiner":
-			if n := r("sharder_q1"); n > 0 {
+			if n := r("filter_amount_lt_50"); n > 0 {
 				set(env, "EXPECTED_EOFS_Q1", itoa(n))
 			}
 			if n := r("aggregator_q2"); n > 0 {

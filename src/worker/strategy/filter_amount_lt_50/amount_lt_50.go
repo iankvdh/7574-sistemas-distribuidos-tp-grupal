@@ -1,4 +1,4 @@
-package sharder_q1
+package filter_amount_lt_50
 
 import (
 	"encoding/json"
@@ -17,12 +17,12 @@ import (
 const queryID uint8 = 1
 const defaultAmountThreshold = 50.0
 
-type sharderCheckpoint struct {
+type filterCheckpoint struct {
 	Ring    eof.RingStateSnapshot `json:"ring"`
 	Matched uint64                `json:"matched"`
 }
 
-type Sharder struct {
+type Filter struct {
 	strategy.NoopValidator
 	cfg             strategy.StrategyConfig
 	nFinalJoiners   int
@@ -32,16 +32,16 @@ type Sharder struct {
 	matchedCount    map[inner.ClientID]uint64
 }
 
-func New() *Sharder {
-	return &Sharder{}
+func New() *Filter {
+	return &Filter{}
 }
 
-func (s *Sharder) Init(cfg strategy.StrategyConfig) error {
+func (s *Filter) Init(cfg strategy.StrategyConfig) error {
 	if cfg.OutputCount != 1 {
-		return fmt.Errorf("sharder_q1 expects exactly 1 output, got %d", cfg.OutputCount)
+		return fmt.Errorf("filter_amount_lt_50 expects exactly 1 output, got %d", cfg.OutputCount)
 	}
 	if cfg.NReplicas > 1 && (cfg.RingQueueIn == "" || cfg.RingQueueOut == "") {
-		return fmt.Errorf("sharder_q1 requires RING_QUEUE_IN/RING_QUEUE_OUT when N_REPLICAS>1")
+		return fmt.Errorf("filter_amount_lt_50 requires RING_QUEUE_IN/RING_QUEUE_OUT when N_REPLICAS>1")
 	}
 	n, err := env.RequiredInt("N_FINAL_JOINERS", true)
 	if err != nil {
@@ -67,9 +67,9 @@ func (s *Sharder) Init(cfg strategy.StrategyConfig) error {
 	return nil
 }
 
-func (s *Sharder) ProcessMessage(envelope *inner.Envelope) ([]strategy.OutputMessage, strategy.LocalCounts, error) {
+func (s *Filter) ProcessMessage(envelope *inner.Envelope) ([]strategy.OutputMessage, strategy.LocalCounts, error) {
 	if envelope.Kind != inner.TransactionMessage {
-		return nil, strategy.LocalCounts{}, fmt.Errorf("sharder_q1 expects TransactionMessage, got kind=%d", envelope.Kind)
+		return nil, strategy.LocalCounts{}, fmt.Errorf("filter_amount_lt_50 expects TransactionMessage, got kind=%d", envelope.Kind)
 	}
 	tx, err := external.DeserializeTransaction(envelope.Payload)
 	if err != nil {
@@ -103,14 +103,14 @@ func (s *Sharder) ProcessMessage(envelope *inner.Envelope) ([]strategy.OutputMes
 	}}, strategy.LocalCounts{Processed: 1, Matched: 1}, nil
 }
 
-func (s *Sharder) OnUpstreamEOF(envelope *inner.Envelope) (strategy.EOFOutcome, error) {
+func (s *Filter) OnUpstreamEOF(envelope *inner.Envelope) (strategy.EOFOutcome, error) {
 	localMatched := s.matchedCount[envelope.ClientID]
 	localNotMatched := envelope.LocalCount - localMatched
 	action, _ := s.ringCoordinator.OnUpstreamEOF(envelope.ClientID, envelope.Total, localMatched, localNotMatched)
 	return s.outcomeFor(envelope.ClientID, action, localMatched), nil
 }
 
-func (s *Sharder) OnRingToken(token *eof.Token, localCount uint64) (strategy.EOFOutcome, error) {
+func (s *Filter) OnRingToken(token *eof.Token, localCount uint64) (strategy.EOFOutcome, error) {
 	if s.ringCoordinator == nil {
 		return strategy.EOFOutcome{Action: eof.Action{Kind: eof.ActionNone}}, nil
 	}
@@ -120,7 +120,7 @@ func (s *Sharder) OnRingToken(token *eof.Token, localCount uint64) (strategy.EOF
 	return s.outcomeFor(token.ClientID, action, localMatched), nil
 }
 
-func (s *Sharder) outcomeFor(clientID inner.ClientID, action eof.Action, localMatched uint64) strategy.EOFOutcome {
+func (s *Filter) outcomeFor(clientID inner.ClientID, action eof.Action, localMatched uint64) strategy.EOFOutcome {
 	outcome := strategy.EOFOutcome{Action: action}
 	switch action.Kind {
 	case eof.ActionEmitEOFs, eof.ActionEmitEOFsAndForwardToken:
@@ -135,16 +135,16 @@ func (s *Sharder) outcomeFor(clientID inner.ClientID, action eof.Action, localMa
 	return outcome
 }
 
-func (s *Sharder) MarshalClientState(clientID inner.ClientID) ([]byte, error) {
-	checkPoint := sharderCheckpoint{
+func (s *Filter) MarshalClientState(clientID inner.ClientID) ([]byte, error) {
+	checkPoint := filterCheckpoint{
 		Matched: s.matchedCount[clientID],
 	}
 	checkPoint.Ring, _ = s.ringCoordinator.GetClientRingState(clientID)
 	return json.Marshal(checkPoint)
 }
 
-func (s *Sharder) UnmarshalClientState(clientID inner.ClientID, data []byte) error {
-	var checkPoint sharderCheckpoint
+func (s *Filter) UnmarshalClientState(clientID inner.ClientID, data []byte) error {
+	var checkPoint filterCheckpoint
 	if err := json.Unmarshal(data, &checkPoint); err != nil {
 		return err
 	}
@@ -153,11 +153,11 @@ func (s *Sharder) UnmarshalClientState(clientID inner.ClientID, data []byte) err
 	return nil
 }
 
-func (s *Sharder) CleanupClient(clientID inner.ClientID) {
+func (s *Filter) CleanupClient(clientID inner.ClientID) {
 	delete(s.matchedCount, clientID)
 	s.ringCoordinator.CleanupClient(clientID)
 }
 
-func (s *Sharder) routingKeyFor(clientID inner.ClientID) string {
+func (s *Filter) routingKeyFor(clientID inner.ClientID) string {
 	return s.rkCache[hashing.Shard(string(clientID), s.nFinalJoiners)]
 }

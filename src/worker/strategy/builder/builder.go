@@ -16,7 +16,7 @@ import (
 	max_q2 "github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/max_q2"
 	micro_transaction_counter "github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/micro_transaction_counter"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/pathfinder"
-	sharder_q1 "github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/sharder_q1"
+	filter_amount_lt_50 "github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/filter_amount_lt_50"
 	sharder "github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/sharder_q4"
 	sum_q3 "github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/sum_q3"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy/suspicious_filter"
@@ -49,8 +49,8 @@ func Build(name string) (strategy.Strategy, error) {
 			WithMatchProjection(filter.WithoutPaymentCurrencyAndDate), nil
 	case "sharder_q4":
 		return sharder.New(), nil
-	case "sharder_q1":
-		return sharder_q1.New(), nil
+	case "filter_amount_lt_50":
+		return filter_amount_lt_50.New(), nil
 	case "final_joiner":
 		return finaljoiner.New(), nil
 	case "suspicious_account_filter":
