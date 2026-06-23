@@ -134,6 +134,23 @@ func (t *RingTokenMessage) Serialize() ([]byte, error) {
 	return buf, nil
 }
 
+type ClientAbortedMessage struct {
+	Header
+}
+
+func (c *ClientAbortedMessage) Type() MessageType { return ClientAborted }
+
+func (c *ClientAbortedMessage) Serialize() ([]byte, error) {
+	return writeHeader(ClientAborted, c.Header)
+}
+
+func parseClientAborted(header Header, body []byte) (*ClientAbortedMessage, error) {
+	if len(body) != 0 {
+		return nil, ErrMalformedEnvelope
+	}
+	return &ClientAbortedMessage{Header: header}, nil
+}
+
 func parseRingToken(header Header, body []byte) (*RingTokenMessage, error) {
 	const size = int(serializer.UINT32_SIZE) + int(serializer.UINT64_SIZE) + int(serializer.UINT64_SIZE) + 1
 	if len(body) != size {

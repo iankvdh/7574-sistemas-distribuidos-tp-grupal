@@ -17,8 +17,8 @@ const (
 	defaultMaxInternalBatchBytes = 65536
 	defaultDataDir               = "/data"
 	defaultCheckpointInterval    = 64
-	defaultClientTTLSeconds      = 7200
 	defaultTombstoneTTLSeconds   = 3600
+	defaultClientAbortsExchange  = "client_aborts"
 	defaultAMQPCloseTimeoutSecs  = 5
 	defaultMaintenanceIntervalS  = 1
 	defaultMaxPendingAckAgeS     = 10
@@ -42,10 +42,10 @@ type WorkerConfig struct {
 	StageType             uint8
 	DataDir               string
 	CheckpointDir         string
+	ClientAbortsExchange  string
 	CheckpointInterval    int
 	WALCompactionFactor   int
 	WALEnabled            bool
-	ClientTTL             time.Duration
 	TombstoneTTL          time.Duration
 	AMQPCloseTimeout      time.Duration
 	MaintenanceInterval   time.Duration
@@ -109,10 +109,6 @@ func Load() (WorkerConfig, error) {
 	}
 	walEnabled := env.StringWithDefault("WAL_ENABLED", "true") != "false"
 
-	clientTTLSecs, err := env.IntWithDefault("CLIENT_TTL_SECONDS", defaultClientTTLSeconds, true)
-	if err != nil {
-		return WorkerConfig{}, err
-	}
 	tombstoneTTLSecs, err := env.IntWithDefault("TOMBSTONE_TTL_SECONDS", defaultTombstoneTTLSeconds, true)
 	if err != nil {
 		return WorkerConfig{}, err
@@ -198,14 +194,14 @@ func Load() (WorkerConfig, error) {
 		MomPort:               momPort,
 		MaxInternalBatchBytes: maxInternalBatchBytes,
 
-		StageType:           stageType,
-		DataDir:             dataDir,
-		CheckpointDir:       checkpointDir,
-		CheckpointInterval:  checkpointInterval,
-		WALCompactionFactor: walCompactionFactor,
-		WALEnabled:          walEnabled,
-		ClientTTL:           time.Duration(clientTTLSecs) * time.Second,
-		TombstoneTTL:        time.Duration(tombstoneTTLSecs) * time.Second,
+		StageType:            stageType,
+		DataDir:              dataDir,
+		CheckpointDir:        checkpointDir,
+		ClientAbortsExchange: env.StringWithDefault("CLIENT_ABORTS_EXCHANGE", defaultClientAbortsExchange),
+		CheckpointInterval:   checkpointInterval,
+		WALCompactionFactor:  walCompactionFactor,
+		WALEnabled:           walEnabled,
+		TombstoneTTL:         time.Duration(tombstoneTTLSecs) * time.Second,
 		AMQPCloseTimeout:    time.Duration(amqpCloseTimeoutSecs) * time.Second,
 		MaintenanceInterval: time.Duration(maintenanceIntervalSecs) * time.Second,
 		MaxPendingAckAge:    time.Duration(maxPendingAckAgeSecs) * time.Second,

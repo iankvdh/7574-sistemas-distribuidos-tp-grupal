@@ -16,6 +16,8 @@ const (
 	defaultExpectedQueryEOFs       = 5
 	defaultShardCount              = 1
 	defaultPublisherPoolSize       = 8
+	defaultDataDir                 = "/data"
+	defaultClientAbortsExchange    = "client_aborts"
 )
 
 type GatewayConfig struct {
@@ -32,6 +34,8 @@ type GatewayConfig struct {
 	MomHost                 string
 	MomPort                 int
 	PublisherPoolSize       int
+	DataDir                 string
+	ClientAbortsExchange    string
 
 	HeartbeatEnabled  bool
 	ContainerName     string
@@ -116,6 +120,8 @@ func Load() (GatewayConfig, error) {
 		MomHost:                 momHost,
 		MomPort:                 momPort,
 		PublisherPoolSize:       publisherPoolSize,
+		DataDir:                 env.StringWithDefault("DATA_DIR", defaultDataDir),
+		ClientAbortsExchange:    env.StringWithDefault("CLIENT_ABORTS_EXCHANGE", defaultClientAbortsExchange),
 
 		HeartbeatEnabled:  heartbeatEnabled,
 		ContainerName:     containerName,

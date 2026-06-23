@@ -1,7 +1,7 @@
 # Topología mínima: 1 gateway, 1 réplica por worker.
 
 gateways: 1
-sentinels: 1
+sentinels: 3
 log_level: info
 expected_query_eofs: 5
 
