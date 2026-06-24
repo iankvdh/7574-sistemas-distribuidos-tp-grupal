@@ -167,7 +167,7 @@ func (nm *NodeMonitor) checkContainers() {
 			continue
 		}
 		if last, ok := nm.lastRestarted[name]; ok && now.Sub(last) < nm.cfg.RestartCooldown {
-			slog.Warn("sentinel: cooldown active, skipping restart", "container", name)
+			slog.Debug("sentinel: cooldown active, skipping restart", "container", name)
 			continue
 		}
 		nm.lastRestarted[name] = now
@@ -224,7 +224,7 @@ func (nm *NodeMonitor) checkSentinelPeers() {
 			continue
 		}
 		if last, ok := nm.lastRestarted[container]; ok && now.Sub(last) < nm.cfg.SentinelPeerCooldown {
-			slog.Warn("sentinel: peer cooldown active, skipping restart", "peer_container", container)
+			slog.Debug("sentinel: peer cooldown active, skipping restart", "peer_container", container)
 			continue
 		}
 		nm.deadPeers[peerID] = true
