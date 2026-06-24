@@ -11,7 +11,7 @@ const (
 	StageFilterPeriod1           uint8 = 7
 	StageFilterPeriod2           uint8 = 8
 	StageFilterQ3                uint8 = 9
-	StageSharderQ1               uint8 = 10
+	StageFilterAmountLt50        uint8 = 10
 	StageSharderQ4               uint8 = 11
 	StageJoinerUSD               uint8 = 12
 	StageMaxQ2                   uint8 = 13
@@ -37,7 +37,7 @@ var stageTypeByName = map[string]uint8{
 	"FilterPeriod1":           StageFilterPeriod1,
 	"FilterPeriod2":           StageFilterPeriod2,
 	"FilterQ3":                StageFilterQ3,
-	"SharderQ1":               StageSharderQ1,
+	"FilterAmountLt50":        StageFilterAmountLt50,
 	"SharderQ4":               StageSharderQ4,
 	"JoinerUSD":               StageJoinerUSD,
 	"MaxQ2":                   StageMaxQ2,
