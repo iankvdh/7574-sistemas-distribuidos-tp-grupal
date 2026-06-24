@@ -61,6 +61,8 @@ help:
 	@echo "--- Debug de tolerancia a fallos ---"
 	@echo "  sentinel-logs                    Filtra logs de muerte/revival/elección de sentinels en tiempo real."
 	@echo "  watch-sentinels                  Monitorea cuántos sentinels están vivos, alerta si llegan a 0."
+	@echo "  checkpoint CONTAINER=<nombre>    Muestra los checkpoints persistidos por un contenedor (vivo o caído)."
+	@echo "             [CHECKPOINT_MAX_BYTES=2048] [FULL=1]"
 	@echo ""
 	@echo "--- Tests ---"
 	@echo "  test                             Corre go test ./... en src/."
@@ -169,6 +171,36 @@ generate-ref:
 compare:
 	@python3 compare_results.py compare --dataset $(DATASET) --results-dir results/$(DATASET)/client_$(CLIENT_NAME)
 .PHONY: compare
+
+CHECKPOINT_MAX_BYTES ?= 2048
+
+checkpoint:
+	@if [ -z "$(CONTAINER)" ]; then \
+		echo "Uso: make checkpoint CONTAINER=<nombre> [CHECKPOINT_MAX_BYTES=2048] [FULL=1]"; \
+		echo "Ejemplo: make checkpoint CONTAINER=gateway_1"; \
+		exit 2; \
+	fi
+	@vol=$(COMPOSE_PROJECT_NAME_SERVER)_data_$(CONTAINER); \
+	if ! docker volume inspect "$$vol" >/dev/null 2>&1; then \
+		echo "No existe el volumen $$vol (¿nombre de contenedor correcto? ¿servidor levantado?)"; \
+		exit 1; \
+	fi; \
+	echo "=== Checkpoints de $(CONTAINER) (volumen $$vol) ==="; \
+	docker run --rm -v "$$vol":/data:ro alpine sh -c '\
+		cd /data || exit 1; \
+		if [ -z "$$(find . -type f)" ]; then echo "(sin checkpoints todavía)"; exit 0; fi; \
+		find . -type f | sort | while read f; do \
+			size=$$(wc -c < "$$f"); \
+			echo ""; \
+			echo "--- $${f#./} ($$size bytes) ---"; \
+			if [ -n "$(FULL)" ] || [ "$$size" -le $(CHECKPOINT_MAX_BYTES) ]; then \
+				cat "$$f"; echo ""; \
+			else \
+				head -c $(CHECKPOINT_MAX_BYTES) "$$f"; echo ""; \
+				echo "... [truncado: primeros $(CHECKPOINT_MAX_BYTES) de $$size bytes; usá FULL=1 para verlo completo] ..."; \
+			fi; \
+		done'
+.PHONY: checkpoint
 
 # --- Tests ------------------------------------------------------------------
 

@@ -47,8 +47,8 @@ chaos_monkey:
     - gateway_3
     - gateway_4
   env:
-    KILL_INTERVAL_SECONDS: 10
-    KILL_TIMEOUT_SECONDS: 5
+    KILL_INTERVAL_SECONDS: 20
+    KILL_TIMEOUT_SECONDS: 10
     KILL_COUNT: 3
 
 fetchers:
