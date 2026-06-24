@@ -1,17 +1,15 @@
-# TP Grupal — Money Laundering Analysis
+# TP Grupal - Money Laundering Analysis
 
 Sistema distribuido para detección de anomalías en transacciones bancarias.
-Implementa cinco consultas analíticas sobre un dataset de transferencias: transacciones menores a 50 USD, máximos por banco, anomalías contra el promedio por formato de pago, patrón scatter-gather, y micro-transacciones Wire/ACH convertidas a USD.
-
-La arquitectura es una pipeline de workers stateless/stateful comunicados por RabbitMQ. Cada tipo de worker implementa una `strategy`; la topología se declara en un spec YAML y se expande automáticamente a un compose del servidor.
+Implementa cinco consultas analíticas sobre un dataset de transferencias: transacciones menores a 50 USD, máximos por banco, anomalías contra el promedio por formato de pago, patrón scatter-gather, y micro-transacciones con formato de pago Wire/ACH convertidas a USD.
 
 ## Integrantes
 
 | Nombre y Apellido | Padrón | Email |
 |-------------------|--------|-------|
-| Juan Martín de la Cruz | 109588 | jdelacruz@fi.uba.ar |
-| Ian Klaus von der Heyde | 107638 | ivon@fi.uba.ar |
-| Agustín Altamirano | 110237 | aaltamirano@fi.uba.ar |
+| Juan Martín de la Cruz | 109588 | <jdelacruz@fi.uba.ar> |
+| Ian Klaus von der Heyde | 107638 | <ivon@fi.uba.ar> |
+| Agustín Altamirano | 110237 | <aaltamirano@fi.uba.ar> |
 
 ---
 
@@ -20,36 +18,36 @@ La arquitectura es una pipeline de workers stateless/stateful comunicados por Ra
 - Docker y Docker Compose v2
 - Go 1.22+ (solo para modificar o compilar localmente)
 - Python 3 (solo para `make compare` / `make generate-ref`)
-- Dataset en `datasets/` (los CSVs de transacciones y cuentas)
+- Datasets en formato CSV de transacciones y cuentas en `datasets/`
 
 ---
 
 ## Flujo de uso
 
-El sistema separa el servidor (gateways + workers + RabbitMQ) de los clientes. El servidor se levanta una vez y los clientes se conectan de forma independiente, cada uno en su propia terminal.
+El sistema separa el servidor (gateways + workers + RabbitMQ + sentinels) de los clientes. El servidor se levanta una vez y los clientes se conectan de forma independiente, cada uno en su propia terminal.
 
 ### 1. Levantar el servidor
 
 ```bash
-make up-server SPEC=default
+make up-server SPEC=chaos
 ```
 
-El servidor queda corriendo en primer plano. Ctrl-C hace graceful stop.
+Donde `SPEC` es el nombre de uno de los escenarios definidos en la carpeta `/scenarios/specs`. El servidor queda corriendo en primer plano. Presionando Ctrl-C se detiene de forma _graceful_.
 
 ### 2. Levantar clientes
 
 En terminales separadas, una por cliente:
 
 ```bash
-make up-client SPEC=default DATASET=small CLIENT_NAME=0
-make up-client SPEC=default DATASET=medium CLIENT_NAME=1
-make up-client SPEC=default DATASET=large CLIENT_NAME=2
+make up-client SPEC=chaos DATASET=small CLIENT_NAME=0
+make up-client SPEC=chaos DATASET=medium CLIENT_NAME=1
+make up-client SPEC=chaos DATASET=large CLIENT_NAME=2
 ```
 
-`DATASET` determina qué CSVs lee el cliente (`small` / `medium` / `large`, default `small`).  
+Donde `DATASET` determina qué CSVs lee el cliente (`small` / `medium` / `large`, default `small`).
 `CLIENT_NAME` es un identificador libre (número o string) que nombra el subdirectorio donde se guardan los resultados: `results/<dataset>/client_<CLIENT_NAME>/`.
 
-`up-client` usa el spec para saber cuántos gateways hay y cómo se llaman, y genera un compose de un único cliente en `/tmp/tp-client-<CLIENT_NAME>.yaml`. Ese archivo se borra automáticamente al hacer `down-client` o `down`.
+`SPEC` debe coincidir con el valor especificado para el servidor (ver posibles valores en la sección [Specs disponibles](#specs-disponibles)). `up-client` usa el spec para saber cuántos gateways hay y cómo se llaman, y genera un compose de un único cliente en `/tmp/tp-client-<CLIENT_NAME>.yaml`. Ese archivo se borra automáticamente al hacer `down-client` o `down`.
 
 Cada cliente es completamente independiente. Se puede correr cualquier combinación de datasets y clientes contra el mismo servidor.
 
@@ -59,10 +57,10 @@ Cada cliente es completamente independiente. Se puede correr cualquier combinaci
 make down-server                  # para el servidor
 make down-client CLIENT_NAME=0    # para un cliente específico
 make down-all-clients             # para todos los clientes activos
-make down                         # para servidor y todos los clientes
+make down                         # para servidor y todos los clientes (borra volúmenes con sus datos persistidos)
 ```
 
-### 4. Generar la referencia serial (una sola vez por dataset)
+### 4. Generar la referencia serial
 
 ```bash
 make generate-ref DATASET=small
@@ -70,7 +68,7 @@ make generate-ref DATASET=medium
 make generate-ref DATASET=large
 ```
 
-Calcula los resultados correctos de forma serial y los guarda en `notebooks/<dataset>/reference/`. Solo hay que correrlo una vez.
+Calcula los resultados correctos de forma serial y los guarda en `notebooks/<dataset>/reference/`. Solo es necesario correrlo una vez.
 
 ### 5. Comparar resultados
 
@@ -87,15 +85,21 @@ make compare DATASET=medium CLIENT_NAME=1
 
 Los specs definen la topología del servidor: número de gateways y réplicas por worker. El dataset se pasa por parámetro al momento de correr.
 
-| Spec | Gateways | Réplicas | Uso recomendado |
-|------|----------|----------|-----------------|
-| `minimal` | 1 | 1 por worker | modelo mínimo |
-| `default` | 2 | 3 en workers de alta carga | Dataset small/medium, múltiples clientes |
-| `scaled` | 4 | Ajustadas por profiling de CPU | Dataset más grades, alta concurrencia |
+| Spec | Gateways | Sentinels | Réplicas | Uso recomendado |
+|------|----------|-----------|----------|-----------------|
+| `minimal` | 1 | 3 | 1 por worker | modelo mínimo |
+| `default` | 2 | 3 | 3 en workers de alta carga | Dataset small/medium, múltiples clientes |
+| `scaled` | 4 | 5 | Ajustadas según uso de CPU | Dataset más grades, alta concurrencia |
+| `chaos` | 4 | 3 | = `scaled` | Demo de tolerancia a fallos: el Chaos Monkey mata workers, gateways y sentinels al azar. |
+| `chaos_no_gateway_kill` | 4 | 3 | = `scaled` | Chaos Monkey mata workers y sentinels, pero no gateways ni fetchers. |
+| `chaos_no_gateway_no_sentinel_kill` | 4 | 3 | = `scaled` | Chaos Monkey mata solo workers (no gateways, sentinels ni fetchers). |
+| `chaos_sentinel_only` | 4 | 3 | = `scaled` | Chaos Monkey mata **solo** sentinels. Prueba el self-revival entre pares. |
+
+Los specs `chaos*` agregan dos bloques sobre la topología base: `sentinels` + `sentinels_env` (los procesos de monitoreo que reviven nodos caídos) y `chaos_monkey` (el inyector de fallas). Ver más abajo cómo se leen.
 
 ---
 
-## Makefile — referencia de targets
+## Referencia de targets de Makefile
 
 | Target | Descripción |
 |--------|-------------|
@@ -104,15 +108,16 @@ Los specs definen la topología del servidor: número de gateways y réplicas po
 | `make down-server` | Para y elimina los contenedores del servidor. |
 | `make down-client [CLIENT_NAME=N]` | Para y elimina el cliente N. |
 | `make down-all-clients` | Para y elimina todos los clientes activos. |
-| `make down` | Para y elimina servidor y todos los clientes. |
+| `make down` | Para y elimina servidor y todos los clientes (borra volúmenes con sus checkpoints). |
 | `make generate-ref [DATASET=small]` | Calcula los CSVs de referencia (correr una vez por dataset). |
 | `make compare [DATASET=small] [CLIENT_NAME=N]` | Compara `results/<dataset>/client_<N>/` contra la referencia. |
-| `make test` | Corre `go test ./...` en `src/`. |
 | `make logs` | Muestra logs del compose de servidor actual. |
+| `make watch-sentinels` | Monitorea cuántos sentinels están vivos; imprime una línea cada vez que cambia el número y un `[CRITICAL]` si en algún momento llegan a 0/N. |
+| `make help` | Lista todos los targets y los specs disponibles. |
 
 ---
 
-## Specs — cómo leerlos y modificarlos
+## Cómo leer y modificar los specs
 
 Cada spec es un YAML declarativo que describe la topología del servidor. `compose-gen` lo expande inyectando automáticamente todas las variables de coordinación (N_FINAL_JOINERS, EXPECTED_EOFS, K_SUSPICIOUS_FILTERS, etc.) a partir de los replica counts.
 
@@ -158,10 +163,53 @@ workers:
 
 | Sintaxis | Semántica |
 |----------|-----------|
-| `queue:NAME` | Cola compartida (competing consumers). |
+| `queue:NAME` | Cola dedicada de una réplica. |
+| `bound_queue:QUEUE:EXCHANGE:{REPLICA_ID}` | Igual que la anterior, pero bindeada a un exchange por routing key. |
 | `direct_exchange:NAME:{REPLICA_ID}` | Exchange directo; cada réplica escucha su propia routing key. |
-| `sharded_queues:PREFIX:K` | K colas `PREFIX_0..PREFIX_{K-1}`; el runtime rutea por `FNV(client_id) mod K`. |
+| `sharded_queues:PREFIX:K` | K colas `PREFIX_0..PREFIX_{K-1}`; el runtime rutea por `hash(client_id) mod K`. |
+| `batch_queues:PREFIX:K` | K colas `PREFIX_0..PREFIX_{K-1}`; rutea el **batch entero** a un shard elegido por `hash(client_id, seq_id)`, de modo que cada origin id lo procesa una sola réplica por etapa. |
 | `final_queues` | Solo en `final_joiner`; se expande a una cola por gateway. |
+
+> **Nota sobre `batch_queues` vs `sharded_queues`:** ambos shardean, pero `sharded_queues` agrupa por `client_id` (afinidad para nodos stateful) y `batch_queues` distribuye carga por batch sin subdividir sus ítems.
+
+### Sentinels y Chaos Monkey (specs `chaos*`)
+
+```yaml
+sentinels: 3                         # cantidad de procesos sentinel
+sentinels_env:
+  SENTINEL_HB_INTERVAL_SECONDS: 1    # cada cuánto un sentinel emite heartbeat a sus pares
+  SENTINEL_PEER_TIMEOUT_SECONDS: 3   # sin heartbeat por este tiempo ⇒ par considerado caído
+  SENTINEL_PEER_GRACE_SECONDS: 5     # ventana de gracia antes de actuar sobre un par
+  SENTINEL_PEER_COOLDOWN_SECONDS: 12 # tras revivir un par, no volver a tocarlo por este tiempo
+  SENTINEL_DETECTION_INTERVAL_SECONDS: 1
+  OK_TIMEOUT_SECONDS: 3              # timeout del health-check a un worker monitoreado
+
+chaos_monkey:
+  exclude:                           # nombres de servicio que el monkey NUNCA mata
+    - fetcher_q5
+  env:
+    KILL_INTERVAL_SECONDS: 20        # cada cuánto mata un container al azar
+    KILL_TIMEOUT_SECONDS: 10
+```
+
+Los sentinels se monitorean entre sí (heartbeats por UDP + control por TCP, elección de líder por **bully**) y monitorean a los workers; al detectar una caída reinician el container vía docker-from-docker. `TARGETS` (qué containers puede matar el monkey) y `EXCLUDE` los calcula `compose-gen` automáticamente a partir del spec, no se deben editar a mano. `exclude` permite sacar nodos puntuales del conjunto de nodos a monitorear.
+
+### Fórmula de invarianza de los sentinels
+
+Si se desea modificar los parámetros de configuración de tiempos de los sentinels, se tiene que tener en cuenta los siguientes invariantes. El tiempo que tarda un sentinel caído en volver a estar operativo es:
+
+```txt
+revival_time = SENTINEL_PEER_TIMEOUT + OK_TIMEOUT + T_restart_docker
+```
+
+Para que el cluster sea indestructible, `SENTINEL_PEER_COOLDOWN` debe cumplir:
+
+```txt
+revival_time  <  SENTINEL_PEER_COOLDOWN  <  KILL_INTERVAL × N_sentinels
+```
+
+- **Cota inferior** (`revival_time < COOLDOWN`): evita restart loops (no reiniciar un nodo que todavía está levantando).
+- **Cota superior** (`COOLDOWN < KILL_INTERVAL × N`): garantiza que un sentinel bloqueado por cooldown salga de él **antes** de que el monkey alcance a matar las N réplicas. Si `COOLDOWN ≥ KILL_INTERVAL × N`, el mismo nodo puede seguir bloqueado mientras el monkey elimina las restantes, y por lo tanto se produce un  colapso total (0/N vivos).
 
 Solo hay que declarar los parámetros de lógica de negocio (`SUSPICIOUS_THRESHOLD`, `MIN_INTERMEDIATES`, `AMOUNT_THRESHOLD_PCT`, `BUFFER_DIR`, `MAX_CONVERTED_AMOUNT_USD`). Los de coordinación entre workers los infiere el generador.
 
@@ -169,64 +217,3 @@ Solo hay que declarar los parámetros de lógica de negocio (`SUSPICIOUS_THRESHO
 
 1. Crear `scenarios/specs/<nombre>.yaml`.
 2. `make up-server SPEC=<nombre>` para verificar que expande sin errores y levantarlo.
-
----
-
-## Strategies disponibles
-
-| Strategy | Tipo | Descripción |
-|----------|------|-------------|
-| `filter_period1` | filter | Transacciones en `[2022-09-01, 2022-09-05]`. |
-| `filter_period2` | filter | Transacciones en `[2022-09-06, 2022-09-15]`, proyecta sin fecha. |
-| `filter_wire_ach` | filter | `payment_format ∈ {Wire, ACH}`. |
-| `filter_currency_usd_p1/p2/other_periods` | filter | `payment_currency == "US Dollar"`, proyecta sin moneda ni fecha. |
-| `filter_amount_lt_50` | filter | `amount_paid < 50`. |
-| `filter_q3` | stateful filter | Descarta transacciones P2-USD con monto ≥ 1% del promedio por formato (recibido del aggregator_q3). |
-| `joiner_usd` | joiner | Espera EOFs de todas las ramas USD upstream y emite uno unificado. |
-| `sharder_q1` | sharder | Distribuye resultados Q1 entre réplicas de final_joiner por client_id. |
-| `sharder_q4` | sharder | Distribuye transacciones P1-USD entre réplicas de suspicious_account_filter. |
-| `suspicious_account_filter` | stateful filter | Bufferiza por cuenta; emite cuentas con ≥ SUSPICIOUS_THRESHOLD destinos distintos. |
-| `path_finder_q4` | stateful | Detecta pares (A→B→C) donde B es la cuenta intermedia del patrón scatter-gather. |
-| `counter_q4` | aggregator | Cuenta pares distintos por cuenta; emite los que superan MIN_INTERMEDIATES. |
-| `max_q2` | aggregator | Máximo de amount_paid por banco (anillo). |
-| `bank_aggregator` | aggregator | Lee cuentas y agrupa nombre de banco por account_id (anillo). |
-| `aggregator_q2` | joiner | Une max_q2 + bank_aggregator para emitir máximo por nombre de banco. |
-| `sum_q3` | aggregator | Suma y cuenta amount_paid por payment_format para calcular promedio parcial (anillo). |
-| `aggregator_q3` | aggregator | Combina parciales de sum_q3 y hace broadcast del promedio global. |
-| `micro_transaction_counter` | stateful counter | Consume cotizaciones del fetcher + transacciones Wire/ACH; cuenta micro-transacciones en USD < 1. |
-| `aggregator_q5` | joiner | Suma conteos parciales de micro_transaction_counter. |
-| `final_joiner` | sink | Recibe resultados de todas las queries; los despacha al gateway correspondiente por client_id. |
-
----
-
-## Coordinación de EOF
-
-**Filters con anillo (N > 1 réplicas):** cuando una réplica recibe un EOF del upstream, inicia una ronda por el anillo de réplicas para acumular los conteos de cada una. Una vez completada la ronda, la réplica iniciadora emite exactamente 1 EOF por output, garantizando que cada cola downstream reciba un único EOF por cliente independientemente de cuántas réplicas haya upstream.
-
-**Workers sin anillo** (aggregators, joiners, path_finder, counter): cada réplica es independiente y opera sobre su propio shard. El upstream ya garantiza la afinidad por client_id vía sharding FNV.
-
-**joiner_usd:** espera `EXPECTED_EOFS` EOFs por cliente (uno por rama upstream: filter_currency_usd_p1, p2 y other_periods) y emite uno unificado.
-
-**final_joiner:** recibe los EOFs de cada query y los despacha al gateway correspondiente usando el `gateway_id` del cliente como índice de output.
-
----
-
-## Estructura del repositorio
-
-```
-scenarios/
-  specs/                   # fuentes declarativas (editar estos)
-docker-compose-server.yaml # compose del servidor generado por up-server
-src/
-  client/         # cliente Go: sube CSV y recibe resultados
-  gateway/        # gateway TCP ↔ RabbitMQ
-  worker/         # workers con strategy pattern
-    strategy/     # una carpeta por strategy
-  fetcher/        # consulta cotizaciones de divisas (Q5)
-  common/         # middleware: EOF, hashing, protocol, etc.
-  tools/
-    compose-gen/  # generador de docker-compose desde specs
-datasets/         # CSVs de entrada (no versionados)
-results/          # salida por dataset y cliente (no versionada)
-notebooks/        # referencia serial para validación
-```
