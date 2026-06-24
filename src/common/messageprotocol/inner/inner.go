@@ -93,13 +93,12 @@ type Header struct {
 	// MinterStageType/MinterReplicaID identify the minter of SeqID: the root of the
 	// idSpaceId (dedup key). For gateway-origin data: (StageGateway, shard). For
 	// reducer-minted data: (reducerStage, replicaID). Carried unchanged by online
-	// stages; reset on re-mint. (Fase 0: campos presentes en el wire; aún sin uso.)
+	// stages; reset on re-mint.
 	MinterStageType uint8
 	MinterReplicaID uint16
 	// BranchPath records the outputIndex taken at each semantic fan-out (e.g. filter
 	// matched vs nomatched). Appended at fan-outs, preserved by passthrough/joiner,
 	// reset on re-mint. Together with the minter root it forms the idSpaceId.
-	// (Fase 0: presente en el wire, normalmente vacío; aún sin uso.)
 	BranchPath []uint8
 }
 
@@ -128,8 +127,8 @@ type CoordinationDedupKey struct {
 // DedupKey identifies a dense origin-id space at a consumer. Data batches are
 // deduplicated per DedupKey: within a key the SeqID (origin id) is dense and
 // unique. IDSpace encodes the minter root (MinterStageType, MinterReplicaID) and
-// the BranchPath, so batches que comparten un SeqID pero vienen de lineages
-// distintos (p.ej. matched vs nomatched que reconvergen en un joiner) no colisionan.
+// the BranchPath, so batches that share a SeqID but come from different lineages
+// (e.g. matched vs nomatched that re-converge in a joiner) do not collide.
 type DedupKey struct {
 	ClientID ClientID
 	IDSpace  string
@@ -137,18 +136,18 @@ type DedupKey struct {
 
 // IDSpaceOf encodes the minter root + branchPath of a header into a compact,
 // comparable string usable as a map key.
-// IDSpaceOf devuelve la raíz de la clave de deduplicación de datos (lo que va con
-// el SeqID en (ClientID, idSpace, SeqID)). Combina:
-//   - el MINTER acarreado (quién acuñó el SeqID): distingue fuentes cuyos SeqID se
-//     solapan en un fan-in (p.ej. final_joiner reenviando filas de varios
-//     aggregators, cada uno acuñando desde 1).
-//   - el SENDER (la réplica emisora inmediata): distingue las reconvergencias
-//     multi-réplica — cuando el sharding por ítem reparte un batch de origen entre
-//     varias réplicas de un stage que re-emiten el mismo (minter, SeqID) acarreado,
-//     cada réplica emisora produce una clave distinta, así no se descartan como
-//     duplicados falsos (causa del deadlock multi-réplica). Una redelivery/re-emisión
-//     conserva el mismo sender → sigue deduplicando.
-//   - el branchPath: distingue las salidas de un mismo nodo (matched/nomatched).
+// IDSpaceOf returns the root of the data deduplication key (what goes with the
+// SeqID in (ClientID, idSpace, SeqID)). It combines:
+//   - the carried MINTER (who minted the SeqID): distinguishes sources whose SeqIDs
+//     overlap in a fan-in (e.g. final_joiner forwarding rows from several
+//     aggregators, each minting from 1).
+//   - the SENDER (the immediate publishing replica): distinguishes multi-replica
+//     re-convergences — when per-item sharding splits an origin batch across
+//     several replicas of a stage that re-emit the same carried (minter, SeqID),
+//     each publishing replica produces a distinct key, so they are not discarded as
+//     false duplicates (cause of the multi-replica deadlock). A redelivery/re-emission
+//     keeps the same sender → still deduplicates.
+//   - the branchPath: distinguishes the outputs of a single node (matched/nomatched).
 func IDSpaceOf(h Header) string {
 	b := make([]byte, 0, 6+len(h.BranchPath))
 	b = append(b, h.MinterStageType, byte(h.MinterReplicaID>>8), byte(h.MinterReplicaID))
@@ -186,9 +185,9 @@ type Envelope struct {
 	SeqID           uint64
 	SenderStageType uint8
 	SenderReplicaID uint16
-	// LocalCount: ítems distintos procesados para este cliente (lo setea el runtime
-	// en el EOF). Lo usan los nodos JAC para el chequeo de completitud por conteo
-	// (Fase 3b): no finalizar hasta haber drenado todos los datos.
+	// LocalCount: distinct items processed for this client (set by the runtime on
+	// the EOF). Used by the JAC nodes for the count-based completeness check:
+	// do not finalize until all data has been drained.
 	LocalCount uint64
 }
 
