@@ -1,6 +1,7 @@
 package aggregator_q5
 
 import (
+	"encoding/json"
 	"fmt"
 	"strconv"
 
@@ -13,7 +14,13 @@ import (
 
 const queryID uint8 = 5
 
+type aggQ5Checkpoint struct {
+	Total uint64               `json:"total"`
+	JAC   eof.JACStateSnapshot `json:"jac"`
+}
+
 type AggregatorQ5 struct {
+	strategy.NoopValidator
 	cfg           strategy.StrategyConfig
 	coordinator   *eof.JoinerAccumulateCoordinator
 	totals        map[inner.ClientID]uint64
@@ -55,14 +62,12 @@ func (a *AggregatorQ5) ProcessMessage(envelope *inner.Envelope) ([]strategy.Outp
 }
 
 func (a *AggregatorQ5) OnUpstreamEOF(envelope *inner.Envelope) (strategy.EOFOutcome, error) {
-	action := a.coordinator.OnUpstreamEOF(envelope.ClientID, envelope.Total)
+	action := a.coordinator.OnUpstreamEOF(envelope.ClientID, envelope.SenderStageType, envelope.SenderReplicaID, envelope.Total, envelope.LocalCount)
 	if action.Kind != eof.ActionEmitEOFs {
 		return strategy.EOFOutcome{Action: action}, nil
 	}
 
 	total := a.totals[envelope.ClientID]
-	delete(a.totals, envelope.ClientID)
-
 	rk := strconv.Itoa(hashing.Shard(string(envelope.ClientID), a.nFinalJoiners))
 	body, err := inner.SerializeQuery5Row(&inner.Query5Row{Count: total})
 	if err != nil {
@@ -84,9 +89,32 @@ func (a *AggregatorQ5) OnUpstreamEOF(envelope *inner.Envelope) (strategy.EOFOutc
 			RoutingKey:  rk,
 			QueryID:     queryID,
 		}},
+		ClientCompleted: true,
 	}, nil
 }
 
-func (a *AggregatorQ5) OnRingToken(_ *eof.Token) (strategy.EOFOutcome, error) {
+func (a *AggregatorQ5) OnRingToken(_ *eof.Token, _ uint64) (strategy.EOFOutcome, error) {
 	return strategy.EOFOutcome{Action: eof.Action{Kind: eof.ActionNone}}, nil
+}
+
+func (a *AggregatorQ5) MarshalClientState(clientID inner.ClientID) ([]byte, error) {
+	return json.Marshal(aggQ5Checkpoint{
+		Total: a.totals[clientID],
+		JAC:   a.coordinator.GetClientJACState(clientID),
+	})
+}
+
+func (a *AggregatorQ5) UnmarshalClientState(clientID inner.ClientID, data []byte) error {
+	var checkPoint aggQ5Checkpoint
+	if err := json.Unmarshal(data, &checkPoint); err != nil {
+		return err
+	}
+	a.totals[clientID] = checkPoint.Total
+	a.coordinator.RestoreClientJACState(clientID, checkPoint.JAC)
+	return nil
+}
+
+func (a *AggregatorQ5) CleanupClient(clientID inner.ClientID) {
+	delete(a.totals, clientID)
+	a.coordinator.CleanupClient(clientID)
 }

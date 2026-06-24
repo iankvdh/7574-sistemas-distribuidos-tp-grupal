@@ -2,6 +2,8 @@ package messagehandler
 
 import (
 	"fmt"
+	"hash/fnv"
+	"strconv"
 
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/account"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/messageprotocol/external"
@@ -15,6 +17,7 @@ type MessageHandler struct {
 	clientID          inner.ClientID
 	transactionAmount uint32
 	accountAmount     uint32
+	outSeqID          uint64
 }
 
 func NewMessageHandler(gatewayID inner.GatewayID, clientID inner.ClientID) MessageHandler {
@@ -26,6 +29,45 @@ func NewMessageHandler(gatewayID inner.GatewayID, clientID inner.ClientID) Messa
 
 func (handler *MessageHandler) ClientID() inner.ClientID {
 	return handler.clientID
+}
+
+func (handler *MessageHandler) nextSeqID() uint64 {
+	handler.outSeqID++
+	return handler.outSeqID
+}
+
+func (handler *MessageHandler) outHeader() inner.Header {
+	return inner.Header{
+		GatewayID:       handler.gatewayID,
+		ClientID:        handler.clientID,
+		SeqID:           handler.nextSeqID(),
+		SenderStageType: inner.StageGateway,
+		SenderReplicaID: 0,
+	}
+}
+
+func TxShardForBatch(batch []transaction.Transaction, nShards int) (string, error) {
+	h := fnv.New32a()
+	for i := range batch {
+		payload, err := external.SerializeTransaction(&batch[i])
+		if err != nil {
+			return "", err
+		}
+		_, _ = h.Write(payload)
+	}
+	return strconv.Itoa(int(h.Sum32()) % nShards), nil
+}
+
+func AcctShardForBatch(batch []account.Account, nShards int) (string, error) {
+	h := fnv.New32a()
+	for i := range batch {
+		payload, err := external.SerializeAccount(&batch[i])
+		if err != nil {
+			return "", err
+		}
+		_, _ = h.Write(payload)
+	}
+	return strconv.Itoa(int(h.Sum32()) % nShards), nil
 }
 
 // SerializeTransactionBatch produces a single Batch message carrying all
@@ -44,7 +86,7 @@ func (handler *MessageHandler) SerializeTransactionBatch(batch []transaction.Tra
 		items = append(items, inner.BatchItem{QueryID: 0, Payload: payload})
 	}
 	msg, err := serialize(&inner.BatchMessage{
-		Header:   inner.Header{GatewayID: handler.gatewayID, ClientID: handler.clientID},
+		Header:   handler.outHeader(),
 		ItemKind: inner.TransactionMessage,
 		Items:    items,
 	})
@@ -57,7 +99,7 @@ func (handler *MessageHandler) SerializeTransactionBatch(batch []transaction.Tra
 
 func (handler *MessageHandler) SerializeTransactionEOFMessage() (*middleware.Message, error) {
 	return serialize(&inner.EOFMessage{
-		Header: inner.Header{GatewayID: handler.gatewayID, ClientID: handler.clientID},
+		Header: handler.outHeader(),
 		Total:  handler.transactionAmount,
 	})
 }
@@ -77,7 +119,7 @@ func (handler *MessageHandler) SerializeAccountBatch(batch []account.Account) (*
 		items = append(items, inner.BatchItem{QueryID: 0, Payload: payload})
 	}
 	msg, err := serialize(&inner.BatchMessage{
-		Header:   inner.Header{GatewayID: handler.gatewayID, ClientID: handler.clientID},
+		Header:   handler.outHeader(),
 		ItemKind: inner.AccountMessage,
 		Items:    items,
 	})
@@ -90,7 +132,7 @@ func (handler *MessageHandler) SerializeAccountBatch(batch []account.Account) (*
 
 func (handler *MessageHandler) SerializeAccountEOFMessage() (*middleware.Message, error) {
 	return serialize(&inner.EOFMessage{
-		Header: inner.Header{GatewayID: handler.gatewayID, ClientID: handler.clientID},
+		Header: handler.outHeader(),
 		Total:  handler.accountAmount,
 	})
 }
@@ -105,9 +147,13 @@ func serialize(msg inner.InternalMessage) (*middleware.Message, error) {
 }
 
 type FinalBatch struct {
-	GatewayID inner.GatewayID
-	ClientID  inner.ClientID
-	Items     []inner.QueryResultItem
+	GatewayID       inner.GatewayID
+	ClientID        inner.ClientID
+	SeqID           uint64
+	SenderStageType uint8
+	SenderReplicaID uint16
+	IDSpace         string
+	Items           []inner.QueryResultItem
 }
 
 func DeserializeFinalBatch(message *middleware.Message) (*FinalBatch, error) {
@@ -126,8 +172,12 @@ func DeserializeFinalBatch(message *middleware.Message) (*FinalBatch, error) {
 		items = append(items, inner.QueryResultItem{QueryID: item.QueryID, Data: string(item.Payload)})
 	}
 	return &FinalBatch{
-		GatewayID: batch.GatewayID,
-		ClientID:  batch.ClientID,
-		Items:     items,
+		GatewayID:       batch.GatewayID,
+		ClientID:        batch.ClientID,
+		SeqID:           batch.SeqID,
+		SenderStageType: batch.SenderStageType,
+		SenderReplicaID: batch.SenderReplicaID,
+		IDSpace:         inner.IDSpaceOf(batch.Header),
+		Items:           items,
 	}, nil
 }

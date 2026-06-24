@@ -1,5 +1,7 @@
 package client
 
+import "log/slog"
+
 type resultsCollector struct {
 	writer     *queryResultsWriter
 	eofByQuery map[uint8]struct{}
@@ -29,6 +31,15 @@ func (client *Client) closeResultsCollector() error {
 	err := client.results.writer.Close()
 	client.results = nil
 	return err
+}
+
+func (client *Client) cleanupPartialResults() {
+	if client.clientID == "" {
+		return
+	}
+	if err := removeResultFiles(client.config.ResultsDir, client.clientID); err != nil {
+		slog.Warn("While removing partial result files", "client_id", client.clientID, "err", err)
+	}
 }
 
 func (client *Client) hasAllQueryEOFs() bool {

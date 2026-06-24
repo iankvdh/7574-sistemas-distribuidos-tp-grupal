@@ -8,25 +8,34 @@ import (
 )
 
 const (
-	defaultAllTransactionsQueue  = "all_transactions"
-	defaultAllAccountsQueue      = "all_accounts"
-	defaultFinalQueue            = "final"
-	defaultMomPort               = 5672
-	defaultMaxExternalBatchBytes = 8192
-	defaultExpectedQueryEOFs     = 5
+	defaultAllTransactionsExchange = "all_transactions"
+	defaultAllAccountsExchange     = "all_accounts"
+	defaultFinalQueue              = "final"
+	defaultMomPort                 = 5672
+	defaultMaxExternalBatchBytes   = 8192
+	defaultExpectedQueryEOFs       = 5
+	defaultShardCount              = 1
+	defaultPublisherPoolSize       = 8
+	defaultDataDir                 = "/data"
+	defaultClientAbortsExchange    = "client_aborts"
 )
 
 type GatewayConfig struct {
-	AllTransactionsQueue  string
-	AllAccountsQueue      string
-	FinalQueue            string
-	MaxExternalBatchBytes int
-	ExpectedQueryEOFs     int
-	GatewayID             int
-	ServerHost            string
-	ServerPort            string
-	MomHost               string
-	MomPort               int
+	AllTransactionsExchange string
+	AllAccountsExchange     string
+	NTxShards               int
+	NAccountShards          int
+	FinalQueue              string
+	MaxExternalBatchBytes   int
+	ExpectedQueryEOFs       int
+	GatewayID               int
+	ServerHost              string
+	ServerPort              string
+	MomHost                 string
+	MomPort                 int
+	PublisherPoolSize       int
+	DataDir                 string
+	ClientAbortsExchange    string
 
 	HeartbeatEnabled  bool
 	ContainerName     string
@@ -71,6 +80,20 @@ func Load() (GatewayConfig, error) {
 		return GatewayConfig{}, err
 	}
 
+	nTxShards, err := env.IntWithDefault("N_TX_SHARDS", defaultShardCount, true)
+	if err != nil {
+		return GatewayConfig{}, err
+	}
+
+	nAccountShards, err := env.IntWithDefault("N_ACCOUNT_SHARDS", defaultShardCount, true)
+	if err != nil {
+		return GatewayConfig{}, err
+	}
+	publisherPoolSize, err := env.IntWithDefault("GATEWAY_PUBLISHER_POOL_SIZE", defaultPublisherPoolSize, true)
+	if err != nil {
+		return GatewayConfig{}, err
+	}
+
 	heartbeatEnabled := strings.EqualFold(env.StringWithDefault("HEARTBEAT_ENABLED", "true"), "true")
 	containerName := env.StringWithDefault("CONTAINER_NAME", "")
 	sentinelUDP := env.SplitNonEmpty(env.StringWithDefault("SENTINEL_UDP", ""))
@@ -84,16 +107,21 @@ func Load() (GatewayConfig, error) {
 	}
 
 	return GatewayConfig{
-		AllTransactionsQueue:  env.StringWithDefault("ALL_TRANSACTIONS_QUEUE", defaultAllTransactionsQueue),
-		AllAccountsQueue:      env.StringWithDefault("ALL_ACCOUNTS_QUEUE", defaultAllAccountsQueue),
-		FinalQueue:            env.StringWithDefault("FINAL_QUEUE", defaultFinalQueue),
-		MaxExternalBatchBytes: maxExternalBatchBytes,
-		ExpectedQueryEOFs:     expectedQueryEOFs,
-		GatewayID:             gatewayID,
-		ServerHost:            serverHost,
-		ServerPort:            serverPort,
-		MomHost:               momHost,
-		MomPort:               momPort,
+		AllTransactionsExchange: env.StringWithDefault("ALL_TRANSACTIONS_EXCHANGE", defaultAllTransactionsExchange),
+		AllAccountsExchange:     env.StringWithDefault("ALL_ACCOUNTS_EXCHANGE", defaultAllAccountsExchange),
+		NTxShards:               nTxShards,
+		NAccountShards:          nAccountShards,
+		FinalQueue:              env.StringWithDefault("FINAL_QUEUE", defaultFinalQueue),
+		MaxExternalBatchBytes:   maxExternalBatchBytes,
+		ExpectedQueryEOFs:       expectedQueryEOFs,
+		GatewayID:               gatewayID,
+		ServerHost:              serverHost,
+		ServerPort:              serverPort,
+		MomHost:                 momHost,
+		MomPort:                 momPort,
+		PublisherPoolSize:       publisherPoolSize,
+		DataDir:                 env.StringWithDefault("DATA_DIR", defaultDataDir),
+		ClientAbortsExchange:    env.StringWithDefault("CLIENT_ABORTS_EXCHANGE", defaultClientAbortsExchange),
 
 		HeartbeatEnabled:  heartbeatEnabled,
 		ContainerName:     containerName,

@@ -1,6 +1,7 @@
 package micro_transaction_counter
 
 import (
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -13,6 +14,14 @@ import (
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/transaction"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/worker/strategy"
 )
+
+type microTxCheckpoint struct {
+	Count            uint64                        `json:"count"`
+	Seen             uint64                        `json:"seen"`
+	Ring             eof.RingStateSnapshot         `json:"ring"`
+	Rates            map[uint32]map[string]float64 `json:"rates,omitempty"`
+	ConversionsReady bool                          `json:"conversionsReady,omitempty"`
+}
 
 const (
 	queryID             uint8 = 5
@@ -45,13 +54,15 @@ type clientState struct {
 }
 
 type MicroTransactionCounter struct {
-	cfg             strategy.StrategyConfig
-	rates           map[uint32]map[string]float64
-	maxConvertedUSD float64
-	nAggregators    int
-	state           map[inner.ClientID]*clientState
-	txRing          *eof.RingCoordinator
-	rkCache         []string
+	strategy.NoopValidator
+	cfg              strategy.StrategyConfig
+	rates            map[uint32]map[string]float64
+	conversionsReady bool
+	maxConvertedUSD  float64
+	nAggregators     int
+	state            map[inner.ClientID]*clientState
+	txRing           *eof.RingCoordinator
+	rkCache          []string
 }
 
 func New() *MicroTransactionCounter {
@@ -61,6 +72,9 @@ func New() *MicroTransactionCounter {
 }
 
 func (m *MicroTransactionCounter) DeferredInputs() []int {
+	if m.conversionsReady {
+		return nil
+	}
 	return []int{inputIndexTxs}
 }
 
@@ -127,6 +141,7 @@ func (m *MicroTransactionCounter) ProcessMessage(envelope *inner.Envelope) ([]st
 
 func (m *MicroTransactionCounter) OnUpstreamEOF(envelope *inner.Envelope) (strategy.EOFOutcome, error) {
 	if envelope.InputIndex == inputIndexConv {
+		m.conversionsReady = true
 		return strategy.EOFOutcome{
 			Action:              eof.Action{Kind: eof.ActionNone},
 			StartDeferredInputs: []int{inputIndexTxs},
@@ -138,7 +153,7 @@ func (m *MicroTransactionCounter) OnUpstreamEOF(envelope *inner.Envelope) (strat
 	return m.outcomeFor(envelope.ClientID, action), nil
 }
 
-func (m *MicroTransactionCounter) OnRingToken(token *eof.Token) (strategy.EOFOutcome, error) {
+func (m *MicroTransactionCounter) OnRingToken(token *eof.Token, _ uint64) (strategy.EOFOutcome, error) {
 	if m.txRing == nil {
 		return strategy.EOFOutcome{Action: eof.Action{Kind: eof.ActionNone}}, nil
 	}
@@ -172,10 +187,66 @@ func (m *MicroTransactionCounter) outcomeFor(clientID inner.ClientID, action eof
 			OutputIndex: 0,
 			RoutingKey:  rk,
 			QueryID:     queryID,
+			Total:       uint32(len(outputs)),
 		}}
-		delete(m.state, clientID)
+		outcome.ClientCompleted = true
 	}
 	return outcome
+}
+
+func (m *MicroTransactionCounter) MarshalClientState(clientID inner.ClientID) ([]byte, error) {
+	state := m.state[clientID]
+	checkPoint := microTxCheckpoint{}
+	if state != nil {
+		checkPoint.Count = state.count
+		checkPoint.Seen = state.seen
+	}
+	checkPoint.Ring, _ = m.txRing.GetClientRingState(clientID)
+	checkPoint.ConversionsReady = m.conversionsReady
+	if len(m.rates) > 0 {
+		checkPoint.Rates = m.rates
+	}
+	return json.Marshal(checkPoint)
+}
+
+func (m *MicroTransactionCounter) UnmarshalClientState(clientID inner.ClientID, data []byte) error {
+	var checkPoint microTxCheckpoint
+	if err := json.Unmarshal(data, &checkPoint); err != nil {
+		return err
+	}
+	state := m.stateFor(clientID)
+	state.count = checkPoint.Count
+	state.seen = checkPoint.Seen
+	if checkPoint.Rates != nil {
+		m.rates = cloneRates(checkPoint.Rates)
+	}
+	if checkPoint.ConversionsReady {
+		m.conversionsReady = true
+	}
+	m.txRing.RestoreClientRingState(clientID, checkPoint.Ring)
+	return nil
+}
+
+type globalRatesState struct {
+	Rates map[uint32]map[string]float64 `json:"rates"`
+}
+
+func (m *MicroTransactionCounter) MarshalGlobalState() ([]byte, error) {
+	return json.Marshal(globalRatesState{Rates: m.rates})
+}
+
+func (m *MicroTransactionCounter) UnmarshalGlobalState(data []byte) error {
+	var gs globalRatesState
+	if err := json.Unmarshal(data, &gs); err != nil {
+		return err
+	}
+	m.rates = gs.Rates
+	return nil
+}
+
+func (m *MicroTransactionCounter) CleanupClient(clientID inner.ClientID) {
+	delete(m.state, clientID)
+	m.txRing.CleanupClient(clientID)
 }
 
 func (m *MicroTransactionCounter) processTxPayload(clientID inner.ClientID, payload []byte) (bool, error) {
@@ -231,6 +302,17 @@ func (m *MicroTransactionCounter) mergeRates(rates map[uint32]map[string]float64
 			m.rates[date][currency] = rate
 		}
 	}
+}
+
+func cloneRates(rates map[uint32]map[string]float64) map[uint32]map[string]float64 {
+	cloned := make(map[uint32]map[string]float64, len(rates))
+	for date, perCurrency := range rates {
+		cloned[date] = make(map[string]float64, len(perCurrency))
+		for currency, rate := range perCurrency {
+			cloned[date][currency] = rate
+		}
+	}
+	return cloned
 }
 
 func (m *MicroTransactionCounter) routingKeyFor(clientID inner.ClientID) string {

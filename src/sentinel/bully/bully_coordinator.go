@@ -32,26 +32,22 @@ func (s State) String() string {
 const noLeader byte = 0xFF
 
 type Config struct {
-	SelfID             byte
-	Peers              []Peer
-	LeaderPingInterval time.Duration
-	LeaderPingFailures int
-	OKTimeout          time.Duration
-	CoordTimeout       time.Duration
-	BaseJitter         time.Duration
-}
-type Control interface {
-	Send(peerAddr string, msg SentinelMessage) error
+	SelfID              byte
+	Peers               []Peer
+	LeaderCheckInterval time.Duration // how often to check the heartbeat map
+	LeaderTimeout       time.Duration // how long without a heartbeat before triggering election
+	OKTimeout           time.Duration
+	CoordTimeout        time.Duration
+	BaseJitter          time.Duration
 }
 
-type Pinger interface {
-	PingOnce(leaderAddr string, self byte) bool
+type Control interface {
+	Send(peerAddr string, msg SentinelMessage) error
 }
 
 type BullyCoordinator struct {
 	cfg           Config
 	control       Control
-	ping          Pinger
 	peersByID     map[byte]Peer
 	mu            sync.RWMutex
 	state         State
@@ -60,9 +56,12 @@ type BullyCoordinator struct {
 	okReceived    chan struct{}
 	coordReceived chan struct{}
 	jitterFn      func() time.Duration
+
+	peerMu       sync.RWMutex
+	peerLastSeen map[byte]time.Time
 }
 
-func NewBullyCoordinator(cfg Config, control Control, ping Pinger) *BullyCoordinator {
+func NewBullyCoordinator(cfg Config, control Control) *BullyCoordinator {
 	byID := make(map[byte]Peer, len(cfg.Peers))
 	for _, p := range cfg.Peers {
 		byID[p.ID] = p
@@ -70,12 +69,12 @@ func NewBullyCoordinator(cfg Config, control Control, ping Pinger) *BullyCoordin
 	bc := &BullyCoordinator{
 		cfg:           cfg,
 		control:       control,
-		ping:          ping,
 		peersByID:     byID,
 		state:         Follower,
 		leaderID:      noLeader,
 		okReceived:    make(chan struct{}, 1),
 		coordReceived: make(chan struct{}, 1),
+		peerLastSeen:  make(map[byte]time.Time),
 	}
 	bc.jitterFn = func() time.Duration {
 		if cfg.BaseJitter <= 0 {
@@ -98,6 +97,39 @@ func (bc *BullyCoordinator) LeaderID() byte {
 	return bc.leaderID
 }
 
+func (bc *BullyCoordinator) RecordPeerHeartbeat(peerID byte) {
+	bc.peerMu.Lock()
+	bc.peerLastSeen[peerID] = time.Now()
+	bc.peerMu.Unlock()
+}
+
+func (bc *BullyCoordinator) PeersLastSeen() map[byte]time.Time {
+	bc.peerMu.RLock()
+	defer bc.peerMu.RUnlock()
+	out := make(map[byte]time.Time, len(bc.peerLastSeen))
+	for k, v := range bc.peerLastSeen {
+		out[k] = v
+	}
+	return out
+}
+
+func (bc *BullyCoordinator) EmitPeerHeartbeats(ctx context.Context, sender HeartbeatSender, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			for _, peer := range bc.cfg.Peers {
+				if err := sender.SendHeartbeat(peer.UDPAddr, bc.cfg.SelfID); err != nil {
+					slog.Debug("bully: failed to send heartbeat to peer", "peer", peer.ID, "err", err)
+				}
+			}
+		}
+	}
+}
+
 func (bc *BullyCoordinator) Run(ctx context.Context) {
 	go func() {
 		select {
@@ -111,9 +143,8 @@ func (bc *BullyCoordinator) Run(ctx context.Context) {
 }
 
 func (bc *BullyCoordinator) monitorLeader(ctx context.Context) {
-	ticker := time.NewTicker(bc.cfg.LeaderPingInterval)
+	ticker := time.NewTicker(bc.cfg.LeaderCheckInterval)
 	defer ticker.Stop()
-	failures := 0
 	for {
 		select {
 		case <-ctx.Done():
@@ -123,24 +154,16 @@ func (bc *BullyCoordinator) monitorLeader(ctx context.Context) {
 			state, leader := bc.state, bc.leaderID
 			bc.mu.RUnlock()
 			if state == Leader || leader == noLeader {
-				failures = 0
 				continue
 			}
-			peer, ok := bc.peersByID[leader]
-			if !ok {
-				failures = 0
+			bc.peerMu.RLock()
+			lastSeen, seen := bc.peerLastSeen[leader]
+			bc.peerMu.RUnlock()
+			if seen && time.Since(lastSeen) <= bc.cfg.LeaderTimeout {
 				continue
 			}
-			if bc.ping.PingOnce(peer.UDPAddr, bc.cfg.SelfID) {
-				failures = 0
-				continue
-			}
-			failures++
-			if failures >= bc.cfg.LeaderPingFailures {
-				failures = 0
-				slog.Info("bully: leader not responding over UDP, starting election", "leader", leader)
-				bc.triggerElection()
-			}
+			slog.Info("bully: leader heartbeat timeout, starting election", "leader", leader)
+			bc.triggerElection()
 		}
 	}
 }
@@ -167,6 +190,7 @@ func (bc *BullyCoordinator) onCoord(sender byte) {
 		go bc.triggerElection()
 		return
 	}
+	bc.RecordPeerHeartbeat(sender)
 	bc.mu.Lock()
 	bc.leaderID = sender
 	bc.state = Follower

@@ -1,39 +1,3 @@
-// compose-gen renders a docker-compose.yaml from a tiny declarative spec.
-//
-// Usage:
-//
-//	compose-gen <spec.yaml> server [DATASET]          → server compose (gateways+workers+rabbit)
-//	compose-gen <spec.yaml> client [LABEL [DATASET]]  → single-client compose
-//
-// DATASET is one of: small, medium, large (default: small).
-// LABEL   is the client identifier used for the results directory (default: 0).
-//
-// Spec format (whitespace-significant, YAML-subset; no external deps):
-//
-//	gateways: <int>          how many gateway_N services to declare
-//	sentinels: <int>         optional; how many sentinel_N replicas to declare (default: 3)
-//	log_level: <string>      optional; LOG_LEVEL emitted to every service (default: info)
-//	expected_query_eofs: <int>  number of query EOFs the gateway/client expect (default: 5)
-//	workers:
-//	  - name: <prefix>                   docker-compose service name (suffixed by replica index if replicas>1)
-//	    strategy: <STRATEGY env value>   which strategy this worker runs
-//	    replicas: <int>                  how many replicas; ring queues are auto-derived when >1
-//	    input: <kind>:<target>[:<key>]   queue:NAME | direct_exchange:NAME[:KEY]
-//	    match_count: <int>               optional; how many of `outputs` are "match" (filters use it; others omit)
-//	    outputs:                         ordered list; first match_count are match, rest are no-match
-//	      - <kind>:<target>[:<key>]
-//	    env:                             optional arbitrary env vars (EXPECTED_EOFS, WINDOW_SIZE, ...)
-//	      KEY: value
-//	chaos_monkey:            optional; when present, emits a chaos_monkey service
-//	  env:                   optional tuning vars (KILL_INTERVAL_SECONDS, ...)
-//	    KEY: value           TARGETS/EXCLUDE are computed automatically
-//
-// All worker and gateway services automatically load .env (repo root) so that
-// shared variables (MOM_HOST, MOM_PORT, PERIOD1_START, …) are defined once.
-//
-// New worker families (reducer, aggregator, joiner, ...) plug in by simply
-// registering a STRATEGY in the worker binary and adding a block here — the
-// generator itself is family-agnostic.
 package main
 
 import (
@@ -54,7 +18,7 @@ type workerSpec struct {
 	MatchCount int
 	Outputs    []string
 	Env        map[string]string
-	Volumes    []string // optional, mounted on every replica of the worker
+	Volumes    []string
 }
 
 type fetcherSpec struct {
@@ -62,28 +26,26 @@ type fetcherSpec struct {
 	Env  map[string]string
 }
 
-// chaosSpec declares the Chaos Monkey service. Its TARGETS/EXCLUDE lists are
-// computed automatically by compose-gen (like EXPECTED_CONTAINERS); the spec
-// only carries the optional tuning env vars (KILL_INTERVAL_SECONDS, ...).
 type chaosSpec struct {
-	Env map[string]string
+	Exclude     []string
+	TargetsOnly []string // if non-empty, restrict chaos targets to this list
+	Env         map[string]string
 }
 
 type spec struct {
 	Gateways          int
-	Sentinels         int // 0 means "use defaultSentinelReplicas" (= 3)
+	Sentinels         int
 	Transactions      string
 	Accounts          string
-	Dataset           string // optional; auto-derived from Transactions if empty
+	Dataset           string
 	LogLevel          string
-	ExpectedQueryEOFs int // 0 means "leave gateway/client defaults" (= 5)
+	ExpectedQueryEOFs int
 	Workers           []workerSpec
 	Fetchers          []fetcherSpec
-	ChaosMonkey       *chaosSpec // non-nil when the spec declares a chaos_monkey
+	ChaosMonkey       *chaosSpec
+	SentinelsEnv      map[string]string
 }
 
-// datasetFromTransactions extracts a lowercase dataset name from a transactions
-// path like "/datasets/LI-Small_Trans.csv" → "small".
 func datasetFromTransactions(transactions string) string {
 	base := filepath.Base(transactions)
 	if idx := strings.Index(base, "LI-"); idx >= 0 {
@@ -97,11 +59,6 @@ func datasetFromTransactions(transactions string) string {
 
 const defaultLogLevel = "info"
 
-// strategiesWithRing lista las strategies que coordinan EOFs con un anillo
-// entre réplicas (RING_QUEUE_IN/OUT). Sólo se generan ring queues para estas
-// strategies cuando replicas > 1. Si la strategy no usa anillo (path_finder_q4,
-// counter_q4, drain, noop, ...) las ring queues se omiten incluso con varias
-// réplicas, evitando colas que nadie consume.
 var strategiesWithRing = map[string]struct{}{
 	"filter_period1":                    {},
 	"filter_wire_ach":                   {},
@@ -109,10 +66,9 @@ var strategiesWithRing = map[string]struct{}{
 	"filter_currency_usd_p2":            {},
 	"filter_currency_usd_other_periods": {},
 	"filter_period2":                    {},
-	"filter_amount_lt_50":               {},
 	"joiner_usd":                        {},
 	"sharder_q4":                        {},
-	"sharder_q1":                        {},
+	"filter_amount_lt_50":                {},
 	"max_q2":                            {},
 	"bank_aggregator":                   {},
 	"sum_q3":                            {},
@@ -125,18 +81,52 @@ func strategyUsesRing(strategy string) bool {
 	return ok
 }
 
-// sharedNetworkName is the explicit Docker network that links the server and
-// client compose projects when running in split mode.
+var stageTypeByStrategy = map[string]string{
+	"filter_period1":                    "FilterPeriod1",
+	"filter_wire_ach":                   "FilterWireACH",
+	"filter_currency_usd_p1":            "FilterCurrencyUsdP1",
+	"filter_period2":                    "FilterPeriod2",
+	"filter_currency_usd_p2":            "FilterCurrencyUsdP2",
+	"filter_currency_usd_other_periods": "FilterCurrencyUsdOther",
+	"joiner_usd":                        "JoinerUSD",
+	"filter_amount_lt_50":                "FilterAmountLt50",
+	"sharder_q4":                        "SharderQ4",
+	"suspicious_account_filter":         "SuspiciousFilter",
+	"path_finder_q4":                    "PathFinder",
+	"counter_q4":                        "CounterQ4",
+	"max_q2":                            "MaxQ2",
+	"bank_aggregator":                   "BankAggregator",
+	"aggregator_q2":                     "AggregatorQ2",
+	"sum_q3":                            "SumQ3",
+	"aggregator_q3":                     "AggregatorQ3",
+	"filter_q3":                         "FilterQ3",
+	"micro_transaction_counter":         "MicroTransactionCounter",
+	"aggregator_q5":                     "AggregatorQ5",
+	"final_joiner":                      "FinalJoiner",
+}
+
+func stageTypeFor(strategy string) string {
+	stageType, ok := stageTypeByStrategy[strategy]
+	if !ok {
+		panic(fmt.Sprintf("compose-gen: no STAGE_TYPE mapping for strategy %q (add it to stageTypeByStrategy)", strategy))
+	}
+	return stageType
+}
+
+const workerDataDir = "/data"
+
+func workerDataVolume(serviceName string) string {
+	return "data_" + serviceName
+}
+
 const sharedNetworkName = "tp_grupal_network"
 
-// Sentinel cluster constants. The replica count is configurable per scenario
-// (spec.Sentinels); everything else is derived here.
 const (
 	defaultSentinelReplicas = 3
-	sentinelTCPPort         = 8090 // bully control (Election/OK/Coord)
-	sentinelUDPPort         = 8092 // bully ping/pong liveness
-	sentinelWorkerPort      = 8091 // worker heartbeats
-	sentinelStartGrace      = 90   // STARTUP_GRACE_SECONDS
+	sentinelTCPPort         = 8090
+	sentinelUDPPort         = 8092
+	sentinelWorkerPort      = 8091
+	sentinelStartGrace      = 90
 	heartbeatIntervalS      = 5
 	heartbeatJitterMs       = 1000
 	dockerSocketMount       = "/var/run/docker.sock:/var/run/docker.sock"
@@ -144,8 +134,6 @@ const (
 
 func sentinelName(i int) string { return fmt.Sprintf("sentinel_%d", i) }
 
-// sentinelHeartbeatTargets is the SENTINEL_UDP value injected into every
-// monitored worker: the worker-heartbeat port on each sentinel replica.
 func sentinelHeartbeatTargets(replicas int) string {
 	parts := make([]string, 0, replicas)
 	for i := 0; i < replicas; i++ {
@@ -154,8 +142,6 @@ func sentinelHeartbeatTargets(replicas int) string {
 	return strings.Join(parts, ",")
 }
 
-// datasetFilePaths maps short dataset names (small, medium, large) to their
-// transactions and accounts CSV paths inside the container.
 var datasetFilePaths = map[string][2]string{
 	"small":  {"/datasets/LI-Small_Trans.csv", "/datasets/LI-Small_accounts.csv"},
 	"medium": {"/datasets/LI-Medium_Trans.csv", "/datasets/LI-Medium_accounts.csv"},
@@ -163,7 +149,6 @@ var datasetFilePaths = map[string][2]string{
 }
 
 func main() {
-	// usage: compose-gen <spec.yaml> [server [DATASET] | client [LABEL [DATASET]]]
 	if len(os.Args) < 2 || len(os.Args) > 5 {
 		fmt.Fprintln(os.Stderr, "usage: compose-gen <spec.yaml> [server [DATASET] | client [LABEL [DATASET]]]")
 		os.Exit(2)
@@ -222,16 +207,6 @@ func main() {
 	}
 }
 
-// parseSpec is a tiny YAML-subset parser tailored to the format documented above.
-// It handles indentation-based scoping but only the constructs the spec uses.
-//
-// Indentation contract (whitespace-significant):
-//
-//	0 :  top-level scalars + "workers:"
-//	2 :  "- name: ..." starts a new worker
-//	4 :  worker fields (strategy, replicas, input, match_count) and the
-//	     section headers "outputs:" / "env:"
-//	6 :  "- <value>" items of outputs, "KEY: value" entries of env
 func parseSpec(src string) (*spec, error) {
 	s := &spec{Gateways: 1}
 	var cur *workerSpec
@@ -279,6 +254,10 @@ func parseSpec(src string) (*spec, error) {
 				s.ExpectedQueryEOFs, _ = strconv.Atoi(value)
 			case "chaos_monkey":
 				s.ChaosMonkey = &chaosSpec{Env: map[string]string{}}
+			case "sentinels_env":
+				if s.SentinelsEnv == nil {
+					s.SentinelsEnv = map[string]string{}
+				}
 			}
 			section = key
 			currentList = ""
@@ -351,11 +330,24 @@ func parseSpec(src string) (*spec, error) {
 		case section == "chaos_monkey" && indent == 2:
 			currentList = ""
 			key, value := splitKV(trimmed)
-			if value == "" && key == "env" {
+			if value == "" && (key == "env" || key == "exclude" || key == "targets_only") {
 				currentList = key
+			} else if key == "exclude" {
+				s.ChaosMonkey.Exclude = appendCSVValues(s.ChaosMonkey.Exclude, value)
 			}
 		case section == "chaos_monkey" && indent >= 4:
 			if s.ChaosMonkey == nil {
+				continue
+			}
+			if (currentList == "exclude" || currentList == "targets_only") && strings.HasPrefix(trimmed, "- ") {
+				value := strings.TrimSpace(strings.TrimPrefix(trimmed, "- "))
+				if value != "" {
+					if currentList == "exclude" {
+						s.ChaosMonkey.Exclude = append(s.ChaosMonkey.Exclude, value)
+					} else {
+						s.ChaosMonkey.TargetsOnly = append(s.ChaosMonkey.TargetsOnly, value)
+					}
+				}
 				continue
 			}
 			if currentList == "env" {
@@ -363,6 +355,11 @@ func parseSpec(src string) (*spec, error) {
 				if key != "" {
 					s.ChaosMonkey.Env[key] = value
 				}
+			}
+		case section == "sentinels_env" && indent >= 2:
+			key, value := splitKV(trimmed)
+			if key != "" && s.SentinelsEnv != nil {
+				s.SentinelsEnv[key] = value
 			}
 		}
 	}
@@ -398,8 +395,6 @@ func splitKV(line string) (string, string) {
 	}
 	key := strings.TrimSpace(line[:idx])
 	value := stripInlineComment(strings.TrimSpace(line[idx+1:]))
-	// Strip optional quoting (env vars often need to be quoted in YAML to keep
-	// the parser happy with values like "3" or "*").
 	if len(value) >= 2 {
 		if (value[0] == '"' && value[len(value)-1] == '"') || (value[0] == '\'' && value[len(value)-1] == '\'') {
 			value = value[1 : len(value)-1]
@@ -408,14 +403,16 @@ func splitKV(line string) (string, string) {
 	return key, value
 }
 
-// stripInlineComment drops YAML-style trailing comments (" # ..." or "\t# ...")
-// while leaving '#' characters that are part of quoted values or that aren't
-// preceded by whitespace untouched. Without this, a line like
-//
-//	EXPECTED_EOFS: "3"   # = N_REPLICAS de sharder_q1
-//
-// would yield value = `"3"   # = N_REPLICAS de sharder_q1` and the worker
-// would later fail to parse it as an integer.
+func appendCSVValues(values []string, raw string) []string {
+	for _, part := range strings.Split(raw, ",") {
+		value := strings.TrimSpace(part)
+		if value != "" {
+			values = append(values, value)
+		}
+	}
+	return values
+}
+
 func stripInlineComment(s string) string {
 	if s == "" {
 		return s
@@ -439,10 +436,6 @@ func stripInlineComment(s string) string {
 	return s
 }
 
-// injectDerivedEnvs auto-populates all cross-reference env vars (N_FINAL_JOINERS,
-// K_AGGREGATORS_Q2, EXPECTED_PARTIAL_EOFS, EXPECTED_EOFS_Q*, etc.) from replica
-// counts so specs only need to declare domain-logic params (thresholds, dirs, …).
-// Values already set in the spec take precedence (explicit override).
 func injectDerivedEnvs(workers []workerSpec, fetchers []fetcherSpec) {
 	r := func(name string) int {
 		for _, w := range workers {
@@ -459,8 +452,6 @@ func injectDerivedEnvs(workers []workerSpec, fetchers []fetcherSpec) {
 		}
 	}
 
-	// Count distinct worker types that feed into joiner_usd (each ring-worker
-	// emits exactly 1 EOF downstream regardless of replica count).
 	joinerUSDUpstreams := 0
 	for _, w := range workers {
 		for _, o := range w.Outputs {
@@ -474,7 +465,7 @@ func injectDerivedEnvs(workers []workerSpec, fetchers []fetcherSpec) {
 	for i := range workers {
 		env := workers[i].Env
 		switch workers[i].Strategy {
-		case "sharder_q1":
+		case "filter_amount_lt_50":
 			if n := r("final_joiner"); n > 0 {
 				set(env, "N_FINAL_JOINERS", itoa(n))
 			}
@@ -549,7 +540,7 @@ func injectDerivedEnvs(workers []workerSpec, fetchers []fetcherSpec) {
 				set(env, "EXPECTED_EOFS", itoa(joinerUSDUpstreams))
 			}
 		case "final_joiner":
-			if n := r("sharder_q1"); n > 0 {
+			if n := r("filter_amount_lt_50"); n > 0 {
 				set(env, "EXPECTED_EOFS_Q1", itoa(n))
 			}
 			if n := r("aggregator_q2"); n > 0 {
@@ -577,9 +568,6 @@ func injectDerivedEnvs(workers []workerSpec, fetchers []fetcherSpec) {
 	}
 }
 
-// expandOutputs replaces the magic token "final_queues" with one
-// final_queue:final_<i> entry per gateway so the final_joiner always has
-// exactly as many outputs as gateways, without manual bookkeeping in specs.
 func expandOutputs(outputs []string, gateways int) []string {
 	result := make([]string, 0, len(outputs))
 	for _, o := range outputs {
@@ -614,8 +602,6 @@ func (s *spec) resolveParams() (transactions, accounts, dataset, logLevel string
 	return
 }
 
-// renderServer writes a compose file with all services except clients.
-// It creates the shared Docker network so the client compose can attach to it.
 func (s *spec) renderServer(w io.Writer) error {
 	fmt.Fprintln(w, "services:")
 	_, _, _, logLevel := s.resolveParams()
@@ -623,9 +609,11 @@ func (s *spec) renderServer(w io.Writer) error {
 	if sentinels <= 0 {
 		sentinels = defaultSentinelReplicas
 	}
+	nTxShards := shardCountForExchange(s.Workers, "all_transactions")
+	nAcctShards := shardCountForExchange(s.Workers, "all_accounts")
 	var gatewayNames []string
 	for i := 1; i <= s.Gateways; i++ {
-		writeGateway(w, i, logLevel, s.ExpectedQueryEOFs, sentinels)
+		writeGateway(w, i, logLevel, s.ExpectedQueryEOFs, sentinels, nTxShards, nAcctShards)
 		gatewayNames = append(gatewayNames, gatewayName(i))
 	}
 	injectDerivedEnvs(s.Workers, s.Fetchers)
@@ -639,26 +627,57 @@ func (s *spec) renderServer(w io.Writer) error {
 	for _, fs := range s.Fetchers {
 		writeFetcher(w, fs, logLevel)
 	}
-	// Both workers and gateways emit heartbeats and are restarted by the
-	// Sentinel, so both are monitored (EXPECTED_CONTAINERS) and both are valid
-	// Chaos Monkey targets.
+	var sentinelNames []string
+	for i := 0; i < sentinels; i++ {
+		sentinelNames = append(sentinelNames, sentinelName(i))
+	}
+	var fetcherNames []string
+	for _, fs := range s.Fetchers {
+		fetcherNames = append(fetcherNames, fs.Name)
+	}
 	monitored := append(append([]string{}, workerNames...), gatewayNames...)
-	writeSentinels(w, monitored, logLevel, sentinels)
+	chaosTargets := append(append(append([]string{}, monitored...), sentinelNames...), fetcherNames...)
+	writeSentinels(w, monitored, logLevel, sentinels, s.SentinelsEnv)
 	if s.ChaosMonkey != nil {
-		writeChaosMonkey(w, s.ChaosMonkey, monitored, sentinels, s.Fetchers, logLevel)
+		finalTargets := chaosTargets
+		if len(s.ChaosMonkey.TargetsOnly) > 0 {
+			allowed := make(map[string]bool, len(s.ChaosMonkey.TargetsOnly))
+			for _, t := range s.ChaosMonkey.TargetsOnly {
+				allowed[t] = true
+			}
+			filtered := finalTargets[:0:0]
+			for _, t := range chaosTargets {
+				if allowed[t] {
+					filtered = append(filtered, t)
+				}
+			}
+			finalTargets = filtered
+		}
+		writeChaosMonkey(w, s.ChaosMonkey, finalTargets, logLevel)
 	}
 	writeRabbit(w)
 	writeNetwork(w, false)
+	writeDataVolumes(w, append(append([]string{}, gatewayNames...), workerNames...))
 	return nil
 }
 
-// writeSentinels emits the Sentinel cluster. Each replica gets the
-// full list of monitored containers to watch (EXPECTED_CONTAINERS: workers +
-// gateways), the addresses of its peers (PEERS, as id:host:tcpPort:udpPort),
-// and the host docker socket mounted read-write so it can `docker restart`
-// crashed containers (docker-from-docker). Sentinels are NOT monitored themselves.
-func writeSentinels(w io.Writer, monitored []string, logLevel string, replicas int) {
+func writeDataVolumes(w io.Writer, serviceNames []string) {
+	if len(serviceNames) == 0 {
+		return
+	}
+	fmt.Fprintln(w, "volumes:")
+	for _, name := range serviceNames {
+		fmt.Fprintf(w, "  %s:\n", workerDataVolume(name))
+	}
+}
+
+func writeSentinels(w io.Writer, monitored []string, logLevel string, replicas int, extraEnv map[string]string) {
 	expected := strings.Join(monitored, ",")
+	var extraKeys []string
+	for k := range extraEnv {
+		extraKeys = append(extraKeys, k)
+	}
+	sort.Strings(extraKeys)
 	for i := 0; i < replicas; i++ {
 		var peers []string
 		for j := 0; j < replicas; j++ {
@@ -675,19 +694,18 @@ func writeSentinels(w io.Writer, monitored []string, logLevel string, replicas i
 		fmt.Fprintf(w, "      - PEERS=%s\n", strings.Join(peers, ","))
 		fmt.Fprintf(w, "      - EXPECTED_CONTAINERS=%s\n", expected)
 		fmt.Fprintf(w, "      - SENTINEL_BULLY_TCP_PORT=%d\n", sentinelTCPPort)
-		fmt.Fprintf(w, "      - SENTINEL_BULLY_UDP_PORT=%d\n", sentinelUDPPort)
+		fmt.Fprintf(w, "      - SENTINEL_HB_UDP_PORT=%d\n", sentinelUDPPort)
 		fmt.Fprintf(w, "      - SENTINEL_UDP_PORT=%d\n", sentinelWorkerPort)
 		fmt.Fprintf(w, "      - STARTUP_GRACE_SECONDS=%d\n", sentinelStartGrace)
 		fmt.Fprintf(w, "      - LOG_LEVEL=%s\n", logLevel)
+		for _, k := range extraKeys {
+			fmt.Fprintf(w, "      - %s=%s\n", k, extraEnv[k])
+		}
 		fmt.Fprintln(w, "    volumes:")
 		fmt.Fprintf(w, "      - %s\n", dockerSocketMount)
 	}
 }
 
-// renderClient writes a compose file with only the client services.
-// It joins the shared Docker network created by the server compose.
-// No depends_on references to server services — the client has its own retry
-// logic (CONNECT_MAX_ATTEMPTS / BACKOFF_BASE_MS) to wait for the gateway.
 func (s *spec) renderClient(w io.Writer, clientLabel string) error {
 	fmt.Fprintln(w, "services:")
 	transactions, accounts, dataset, logLevel := s.resolveParams()
@@ -696,9 +714,6 @@ func (s *spec) renderClient(w io.Writer, clientLabel string) error {
 	return nil
 }
 
-// writeNetwork appends the networks section that pins the default network to
-// sharedNetworkName. external=true is used by the client compose (joins an
-// existing network); external=false is used by the server compose (creates it).
 func writeNetwork(w io.Writer, external bool) {
 	fmt.Fprintln(w, "networks:")
 	fmt.Fprintln(w, "  default:")
@@ -715,8 +730,6 @@ func serviceName(ws workerSpec, replica int) string {
 	return fmt.Sprintf("%s_%d", ws.Name, replica)
 }
 
-// writeClientSplit is like writeClient but omits depends_on entirely — used in
-// the split-compose client file where all server services are in another project.
 func writeClientSplit(w io.Writer, label string, gateways int, transactions, accounts, dataset, logLevel string, expectedQueryEOFs int) {
 	fmt.Fprintln(w, "  client:")
 	fmt.Fprintln(w, "    build: { context: ./src/, dockerfile: client/Dockerfile }")
@@ -744,7 +757,22 @@ func writeClientSplit(w io.Writer, label string, gateways int, transactions, acc
 
 func gatewayName(id int) string { return fmt.Sprintf("gateway_%d", id) }
 
-func writeGateway(w io.Writer, id int, logLevel string, expectedQueryEOFs, sentinels int) {
+func shardCountForExchange(workers []workerSpec, exchange string) int {
+	for _, ws := range workers {
+		for _, in := range ws.Inputs {
+			parts := strings.Split(in, ":")
+			if len(parts) >= 3 && parts[0] == "bound_queue" && parts[2] == exchange {
+				if ws.Replicas > 0 {
+					return ws.Replicas
+				}
+				return 1
+			}
+		}
+	}
+	return 1
+}
+
+func writeGateway(w io.Writer, id int, logLevel string, expectedQueryEOFs, sentinels, nTxShards, nAcctShards int) {
 	name := gatewayName(id)
 	fmt.Fprintf(w, "  %s:\n", name)
 	fmt.Fprintln(w, "    build: { context: ./src/, dockerfile: gateway/Dockerfile }")
@@ -753,8 +781,10 @@ func writeGateway(w io.Writer, id int, logLevel string, expectedQueryEOFs, senti
 	fmt.Fprintln(w, "    env_file:")
 	fmt.Fprintln(w, "      - .env")
 	fmt.Fprintln(w, "    environment:")
-	fmt.Fprintln(w, "      - ALL_TRANSACTIONS_QUEUE=all_transactions")
-	fmt.Fprintln(w, "      - ALL_ACCOUNTS_QUEUE=all_accounts")
+	fmt.Fprintln(w, "      - ALL_TRANSACTIONS_EXCHANGE=all_transactions")
+	fmt.Fprintln(w, "      - ALL_ACCOUNTS_EXCHANGE=all_accounts")
+	fmt.Fprintf(w, "      - N_TX_SHARDS=%d\n", nTxShards)
+	fmt.Fprintf(w, "      - N_ACCOUNT_SHARDS=%d\n", nAcctShards)
 	fmt.Fprintln(w, "      - FINAL_QUEUE=final")
 	fmt.Fprintf(w, "      - GATEWAY_ID=%d\n", id)
 	fmt.Fprintln(w, "      - SERVER_HOST=0.0.0.0")
@@ -764,9 +794,13 @@ func writeGateway(w io.Writer, id int, logLevel string, expectedQueryEOFs, senti
 	}
 	fmt.Fprintf(w, "      - LOG_LEVEL=%s\n", logLevel)
 	fmt.Fprintf(w, "      - CONTAINER_NAME=%s\n", name)
+	fmt.Fprintf(w, "      - DATA_DIR=%s\n", workerDataDir)
 	fmt.Fprintf(w, "      - SENTINEL_UDP=%s\n", sentinelHeartbeatTargets(sentinels))
 	fmt.Fprintf(w, "      - HEARTBEAT_INTERVAL_SECONDS=%d\n", heartbeatIntervalS)
 	fmt.Fprintf(w, "      - HEARTBEAT_JITTER_MS=%d\n", heartbeatJitterMs)
+
+	fmt.Fprintln(w, "    volumes:")
+	fmt.Fprintf(w, "      - %s:%s\n", workerDataVolume(name), workerDataDir)
 }
 
 func writeWorker(w io.Writer, ws workerSpec, replica int, logLevel string, gateways, sentinels int) {
@@ -779,8 +813,10 @@ func writeWorker(w io.Writer, ws workerSpec, replica int, logLevel string, gatew
 	fmt.Fprintln(w, "      - .env")
 	fmt.Fprintln(w, "    environment:")
 	fmt.Fprintf(w, "      - STRATEGY=%s\n", ws.Strategy)
+	fmt.Fprintf(w, "      - STAGE_TYPE=%s\n", stageTypeFor(ws.Strategy))
 	fmt.Fprintf(w, "      - REPLICA_ID=%d\n", replica)
 	fmt.Fprintf(w, "      - N_REPLICAS=%d\n", ws.Replicas)
+	fmt.Fprintf(w, "      - DATA_DIR=%s\n", workerDataDir)
 	if len(ws.Inputs) == 1 {
 		input := strings.ReplaceAll(ws.Inputs[0], "{REPLICA_ID}", strconv.Itoa(replica))
 		fmt.Fprintf(w, "      - INPUT=%s\n", input)
@@ -806,8 +842,6 @@ func writeWorker(w io.Writer, ws workerSpec, replica int, logLevel string, gatew
 		fmt.Fprintf(w, "      - RING_QUEUE_IN=%s\n", ringIn)
 		fmt.Fprintf(w, "      - RING_QUEUE_OUT=%s\n", ringOut)
 	}
-	// Deterministic output order for extra env vars so the diff between two
-	// generated composes only reflects real spec changes.
 	if len(ws.Env) > 0 {
 		keys := make([]string, 0, len(ws.Env))
 		for k := range ws.Env {
@@ -818,17 +852,17 @@ func writeWorker(w io.Writer, ws workerSpec, replica int, logLevel string, gatew
 			fmt.Fprintf(w, "      - %s=%s\n", k, ws.Env[k])
 		}
 	}
-	if len(ws.Volumes) > 0 {
-		fmt.Fprintln(w, "    volumes:")
-		for _, v := range ws.Volumes {
-			fmt.Fprintf(w, "      - %s\n", v)
-		}
+	fmt.Fprintln(w, "    volumes:")
+	fmt.Fprintf(w, "      - %s:%s\n", workerDataVolume(name), workerDataDir)
+	for _, v := range ws.Volumes {
+		fmt.Fprintf(w, "      - %s\n", v)
 	}
 }
 
 func writeFetcher(w io.Writer, fs fetcherSpec, logLevel string) {
 	fmt.Fprintf(w, "  %s:\n", fs.Name)
 	fmt.Fprintln(w, "    build: { context: ./src/, dockerfile: fetcher/Dockerfile }")
+	fmt.Fprintf(w, "    container_name: %s\n", fs.Name)
 	fmt.Fprintln(w, "    depends_on: { rabbitmq: { condition: service_healthy } }")
 	fmt.Fprintln(w, "    env_file:")
 	fmt.Fprintln(w, "      - .env")
@@ -846,30 +880,17 @@ func writeFetcher(w io.Writer, fs fetcherSpec, logLevel string) {
 	}
 }
 
-// writeChaosMonkey emits the Chaos Monkey service. TARGETS and EXCLUDE are
-// computed automatically: TARGETS lists every monitored container (workers +
-// gateways), EXCLUDE protects rabbitmq, the sentinels and the one-shot fetchers.
-// It mounts the docker socket and kills victims via the docker CLI (like the
-// Sentinel's restarter), so the image bundles docker-cli. Tuning env vars come
-// from the spec (or fall back to defaults).
-func writeChaosMonkey(w io.Writer, cs *chaosSpec, monitored []string, sentinels int, fetchers []fetcherSpec, logLevel string) {
+func writeChaosMonkey(w io.Writer, cs *chaosSpec, targets []string, logLevel string) {
 	exclude := []string{"rabbitmq"}
-	for i := 0; i < sentinels; i++ {
-		exclude = append(exclude, sentinelName(i))
-	}
-	for _, fs := range fetchers {
-		exclude = append(exclude, fs.Name)
-	}
+	exclude = appendUnique(exclude, cs.Exclude...)
 
 	fmt.Fprintln(w, "  chaos_monkey:")
 	fmt.Fprintln(w, "    build: { context: ./src/, dockerfile: chaos_monkey/Dockerfile }")
 	fmt.Fprintln(w, "    container_name: chaos_monkey")
 	fmt.Fprintln(w, "    environment:")
-	fmt.Fprintf(w, "      - TARGETS=%s\n", strings.Join(monitored, ","))
+	fmt.Fprintf(w, "      - TARGETS=%s\n", strings.Join(targets, ","))
 	fmt.Fprintf(w, "      - EXCLUDE=%s\n", strings.Join(exclude, ","))
 	fmt.Fprintf(w, "      - LOG_LEVEL=%s\n", logLevel)
-	// Deterministic order for the extra tuning env vars (KILL_INTERVAL_SECONDS,
-	// KILL_TIMEOUT_SECONDS, ...) so diffs only reflect real spec changes.
 	if len(cs.Env) > 0 {
 		keys := make([]string, 0, len(cs.Env))
 		for k := range cs.Env {
@@ -882,6 +903,21 @@ func writeChaosMonkey(w io.Writer, cs *chaosSpec, monitored []string, sentinels 
 	}
 	fmt.Fprintln(w, "    volumes:")
 	fmt.Fprintf(w, "      - %s\n", dockerSocketMount)
+}
+
+func appendUnique(values []string, extras ...string) []string {
+	seen := make(map[string]struct{}, len(values)+len(extras))
+	for _, value := range values {
+		seen[value] = struct{}{}
+	}
+	for _, value := range extras {
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		values = append(values, value)
+		seen[value] = struct{}{}
+	}
+	return values
 }
 
 func writeRabbit(w io.Writer) {

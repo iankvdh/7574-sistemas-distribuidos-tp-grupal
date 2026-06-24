@@ -5,6 +5,7 @@ import (
 	"net"
 	"sync"
 
+	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/dedup"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/messageprotocol/inner"
 )
 
@@ -29,16 +30,18 @@ type ClientState struct {
 
 	resultQueue chan ResultDelivery
 	resultAckCh chan struct{}
+	seen map[string]*dedup.IntervalSet
 }
 
 func NewClientState(parentCtx context.Context, conn net.Conn) *ClientState {
 	ctx, cancel := context.WithCancel(parentCtx)
 	return &ClientState{
-		Conn:        conn,
-		ctx:         ctx,
-		cancel:      cancel,
+		Conn:          conn,
+		ctx:           ctx,
+		cancel:        cancel,
 		resultQueue: make(chan ResultDelivery, defaultResultQueueSize),
 		resultAckCh: make(chan struct{}, 1),
+		seen:        make(map[string]*dedup.IntervalSet),
 	}
 }
 
@@ -104,6 +107,26 @@ func (state *ClientState) WaitForResultBatchAck() bool {
 func (state *ClientState) Close() {
 	state.cancel()
 	_ = state.Conn.Close()
+}
+
+func (state *ClientState) IsDuplicate(idSpace string, seqID uint64) bool {
+	if seqID == 0 {
+		return false
+	}
+	set := state.seen[idSpace]
+	return set != nil && set.Contains(seqID)
+}
+
+func (state *ClientState) MarkReceived(idSpace string, seqID uint64) {
+	if seqID == 0 {
+		return
+	}
+	set := state.seen[idSpace]
+	if set == nil {
+		set = &dedup.IntervalSet{}
+		state.seen[idSpace] = set
+	}
+	set.Add(seqID)
 }
 
 type ClientRegistry struct {
