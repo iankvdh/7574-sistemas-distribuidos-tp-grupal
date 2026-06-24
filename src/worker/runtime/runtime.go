@@ -50,20 +50,20 @@ type Worker struct {
 	// Stores last upstream EOF message for each client (and the input it came
 	// from), to allow re-enqueuing to the right input if the strategy requests
 	// it. Cleared on successful EOF publish and on cleanupClientState.
-	upstreamEOFs   map[inner.ClientID]cachedEOF
-	inputWG        sync.WaitGroup
-	inputStartMu   sync.Mutex
-	startedInputs  []bool
-	deferredInputs map[int]bool
-	draining       bool
-	pendingAcks    map[inner.ClientID][]deliveryRef
-	firstPendingAt map[inner.ClientID]time.Time
-	totalPending   int
-	tombstones     map[inner.ClientID]time.Time
-	lastRecvSeqID  map[inner.SeqKey]uint64
-	dedupSeen      map[inner.DedupKey]*dedup.IntervalSet
-	processedItems map[inner.ClientID]uint64
-	outSeqID       map[inner.ClientID]uint64
+	upstreamEOFs          map[inner.ClientID]cachedEOF
+	inputWG               sync.WaitGroup
+	inputStartMu          sync.Mutex
+	startedInputs         []bool
+	deferredInputs        map[int]bool
+	draining              bool
+	pendingAcks           map[inner.ClientID][]deliveryRef
+	firstPendingAt        map[inner.ClientID]time.Time
+	totalPending          int
+	tombstones            map[inner.ClientID]time.Time
+	coordinationDedupSeen map[inner.CoordinationDedupKey]uint64
+	dedupSeen             map[inner.DedupKey]*dedup.IntervalSet
+	processedItems        map[inner.ClientID]uint64
+	outSeqID              map[inner.ClientID]uint64
 
 	deltaCP       strategy.DeltaCheckpointer
 	wals          map[inner.ClientID]*wal.Log
@@ -201,17 +201,17 @@ func New(cfg config.WorkerConfig) (*Worker, error) {
 		startedInputs:       make([]bool, len(inputs)),
 		deferredInputs:      map[int]bool{},
 
-		pendingAcks:    map[inner.ClientID][]deliveryRef{},
-		firstPendingAt: map[inner.ClientID]time.Time{},
-		tombstones:     map[inner.ClientID]time.Time{},
-		lastRecvSeqID:  map[inner.SeqKey]uint64{},
-		dedupSeen:      map[inner.DedupKey]*dedup.IntervalSet{},
-		processedItems: map[inner.ClientID]uint64{},
-		outSeqID:       map[inner.ClientID]uint64{},
-		wals:           map[inner.ClientID]*wal.Log{},
-		walGen:         map[inner.ClientID]uint64{},
-		pendingDeltas:  map[inner.ClientID][][]byte{},
-		lastSnapSize:   map[inner.ClientID]int64{},
+		pendingAcks:           map[inner.ClientID][]deliveryRef{},
+		firstPendingAt:        map[inner.ClientID]time.Time{},
+		tombstones:            map[inner.ClientID]time.Time{},
+		coordinationDedupSeen: map[inner.CoordinationDedupKey]uint64{},
+		dedupSeen:             map[inner.DedupKey]*dedup.IntervalSet{},
+		processedItems:        map[inner.ClientID]uint64{},
+		outSeqID:              map[inner.ClientID]uint64{},
+		wals:                  map[inner.ClientID]*wal.Log{},
+		walGen:                map[inner.ClientID]uint64{},
+		pendingDeltas:         map[inner.ClientID][][]byte{},
+		lastSnapSize:          map[inner.ClientID]int64{},
 	}
 	if dcp, ok := strat.(strategy.DeltaCheckpointer); ok && cfg.WALEnabled {
 		w.deltaCP = dcp
@@ -456,7 +456,7 @@ func (w *Worker) handleInputMessage(inputIndex int, msg middleware.Message, ack 
 
 	switch typed := parsed.(type) {
 	case *inner.EOFMessage:
-		if w.isDuplicateEOF(clientID, header) {
+		if w.isDuplicateCoordination(clientID, header) {
 			ack()
 			return
 		}
@@ -501,7 +501,7 @@ func (w *Worker) handleRingMessage(msg middleware.Message, ack func(), nack func
 		ack()
 		return
 	}
-	if w.isDuplicateEOF(clientID, header) {
+	if w.isDuplicateCoordination(clientID, header) {
 		ack()
 		return
 	}
@@ -509,11 +509,11 @@ func (w *Worker) handleRingMessage(msg middleware.Message, ack func(), nack func
 	w.handleRingToken(typed, header, ack, nack)
 }
 
-func (w *Worker) isDuplicateEOF(clientID inner.ClientID, header inner.Header) bool {
+func (w *Worker) isDuplicateCoordination(clientID inner.ClientID, header inner.Header) bool {
 	if header.SeqID == 0 {
 		return false
 	}
-	return header.SeqID <= w.lastRecvSeqID[seqKeyOf(clientID, header)]
+	return header.SeqID <= w.coordinationDedupSeen[coordinationDedupKeyOf(clientID, header)]
 }
 
 func (w *Worker) isDuplicateData(header inner.Header) bool {
@@ -578,7 +578,7 @@ func (w *Worker) handleUpstreamEOF(typed *inner.EOFMessage, msg middleware.Messa
 		slog.Error("Applying EOF outcome failed, exiting for redelivery", "client_id", envelope.ClientID, "err", err)
 		os.Exit(1)
 	}
-	w.lastRecvSeqID[seqKeyOf(header.ClientID, header)] = header.SeqID
+	w.coordinationDedupSeen[coordinationDedupKeyOf(header.ClientID, header)] = header.SeqID
 	if outcome.ClientCompleted {
 		w.completeClient(envelope.ClientID, deliveryRef{ack: ack, nack: nack})
 		return
@@ -599,7 +599,7 @@ func (w *Worker) handleRingToken(typed *inner.RingTokenMessage, header inner.Hea
 		slog.Error("Applying ring outcome failed, exiting for redelivery", "client_id", token.ClientID, "err", err)
 		os.Exit(1)
 	}
-	w.lastRecvSeqID[seqKeyOf(token.ClientID, header)] = header.SeqID
+	w.coordinationDedupSeen[coordinationDedupKeyOf(token.ClientID, header)] = header.SeqID
 	if outcome.ClientCompleted {
 		w.completeClient(token.ClientID, deliveryRef{ack: ack, nack: nack})
 		return
@@ -1064,14 +1064,14 @@ func (w *Worker) retryUpstreamEOFMessage(clientID inner.ClientID, msg middleware
 		return middleware.Message{}, fmt.Errorf("cached upstream EOF client mismatch: cached=%s expected=%s", eofMessage.ClientID, clientID)
 	}
 
-	key := seqKeyOf(clientID, eofMessage.Header)
+	key := coordinationDedupKeyOf(clientID, eofMessage.Header)
 	// Re-enqueued EOFs are internal retries. The original EOF may already be in
-	// lastRecvSeqID, so the retry needs a fresh seq while preserving sender ID.
+	// coordinationDedupSeen, so the retry needs a fresh seq while preserving sender ID.
 	nextSeqID := eofMessage.SeqID + 1
 	if nextSeqID == 0 {
 		return middleware.Message{}, errors.New("cached upstream EOF seq id overflow")
 	}
-	if last := w.lastRecvSeqID[key]; last >= nextSeqID {
+	if last := w.coordinationDedupSeen[key]; last >= nextSeqID {
 		if last == ^uint64(0) {
 			return middleware.Message{}, errors.New("last received seq id overflow")
 		}
@@ -1337,9 +1337,9 @@ func (w *Worker) cleanupClientState(clientID inner.ClientID) {
 	if recoverableClientState, ok := w.strategy.(strategy.RecoverableStrategy); ok {
 		recoverableClientState.CleanupClient(clientID)
 	}
-	for sequenceKey := range w.lastRecvSeqID {
-		if sequenceKey.ClientID == clientID {
-			delete(w.lastRecvSeqID, sequenceKey)
+	for coordKey := range w.coordinationDedupSeen {
+		if coordKey.ClientID == clientID {
+			delete(w.coordinationDedupSeen, coordKey)
 		}
 	}
 	for dedupKey := range w.dedupSeen {
@@ -1429,13 +1429,13 @@ func (w *Worker) loadCheckpoints() bool {
 			_ = os.Remove(checkpointPath)
 			continue
 		}
-		for upstreamKey, sequenceId := range clientCheckpoint.LastRecvSeqID {
-			sequenceKey, err := parseSeqKey(clientID, upstreamKey)
+		for encodedKey, lastSeqID := range clientCheckpoint.CoordinationDedupSeen {
+			coordKey, err := parseCoordinationDedupKey(clientID, encodedKey)
 			if err != nil {
-				slog.Warn("bad seq key in checkpoint", "file", name, "key", upstreamKey, "err", err)
+				slog.Warn("bad coordination dedup key in checkpoint", "file", name, "key", encodedKey, "err", err)
 				continue
 			}
-			w.lastRecvSeqID[sequenceKey] = sequenceId
+			w.coordinationDedupSeen[coordKey] = lastSeqID
 		}
 		for idSpace, set := range clientCheckpoint.DedupSeen {
 			if set == nil {
@@ -1488,12 +1488,12 @@ func (w *Worker) loadCheckpoints() bool {
 
 func (w *Worker) buildClientCheckpoint(clientID inner.ClientID) *checkpoint.ClientCheckpoint {
 	clientCheckpoint := &checkpoint.ClientCheckpoint{
-		ClientID:       string(clientID),
-		OutSeqID:       w.outSeqID[clientID],
-		LastRecvSeqID:  w.serializeSeqMap(clientID),
-		DedupSeen:      w.serializeDedup(clientID),
-		ProcessedItems: w.processedItems[clientID],
-		WALGen:         w.walGen[clientID],
+		ClientID:              string(clientID),
+		OutSeqID:              w.outSeqID[clientID],
+		CoordinationDedupSeen: w.serializeCoordinationDedup(clientID),
+		DedupSeen:             w.serializeDedup(clientID),
+		ProcessedItems:        w.processedItems[clientID],
+		WALGen:                w.walGen[clientID],
 	}
 	if recoverableStrategy, ok := w.strategy.(strategy.RecoverableStrategy); ok {
 		data, err := recoverableStrategy.MarshalClientState(clientID)
@@ -1510,8 +1510,8 @@ func (w *Worker) buildClientCheckpoint(clientID inner.ClientID) *checkpoint.Clie
 	return clientCheckpoint
 }
 
-func seqKeyOf(clientID inner.ClientID, h inner.Header) inner.SeqKey {
-	return inner.SeqKey{ClientID: clientID, StageType: h.SenderStageType, ReplicaID: h.SenderReplicaID}
+func coordinationDedupKeyOf(clientID inner.ClientID, h inner.Header) inner.CoordinationDedupKey {
+	return inner.CoordinationDedupKey{ClientID: clientID, StageType: h.SenderStageType, ReplicaID: h.SenderReplicaID}
 }
 
 func (w *Worker) serializeDedup(clientID inner.ClientID) map[string]*dedup.IntervalSet {
@@ -1527,9 +1527,9 @@ func (w *Worker) serializeDedup(clientID inner.ClientID) map[string]*dedup.Inter
 	return out
 }
 
-func (w *Worker) serializeSeqMap(clientID inner.ClientID) map[string]uint64 {
+func (w *Worker) serializeCoordinationDedup(clientID inner.ClientID) map[string]uint64 {
 	out := map[string]uint64{}
-	for k, v := range w.lastRecvSeqID {
+	for k, v := range w.coordinationDedupSeen {
 		if k.ClientID == clientID {
 			out[fmt.Sprintf("%d:%d", k.StageType, k.ReplicaID)] = v
 		}
@@ -1537,20 +1537,20 @@ func (w *Worker) serializeSeqMap(clientID inner.ClientID) map[string]uint64 {
 	return out
 }
 
-func parseSeqKey(clientID inner.ClientID, s string) (inner.SeqKey, error) {
+func parseCoordinationDedupKey(clientID inner.ClientID, s string) (inner.CoordinationDedupKey, error) {
 	parts := strings.SplitN(s, ":", 2)
 	if len(parts) != 2 {
-		return inner.SeqKey{}, fmt.Errorf("malformed seq key %q", s)
+		return inner.CoordinationDedupKey{}, fmt.Errorf("malformed coordination dedup key %q", s)
 	}
 	st, err := strconv.ParseUint(parts[0], 10, 8)
 	if err != nil {
-		return inner.SeqKey{}, fmt.Errorf("malformed stage type in seq key %q: %w", s, err)
+		return inner.CoordinationDedupKey{}, fmt.Errorf("malformed stage type in coordination dedup key %q: %w", s, err)
 	}
 	rid, err := strconv.ParseUint(parts[1], 10, 16)
 	if err != nil {
-		return inner.SeqKey{}, fmt.Errorf("malformed replica id in seq key %q: %w", s, err)
+		return inner.CoordinationDedupKey{}, fmt.Errorf("malformed replica id in coordination dedup key %q: %w", s, err)
 	}
-	return inner.SeqKey{ClientID: clientID, StageType: uint8(st), ReplicaID: uint16(rid)}, nil
+	return inner.CoordinationDedupKey{ClientID: clientID, StageType: uint8(st), ReplicaID: uint16(rid)}, nil
 }
 
 func (w *Worker) handleSignals() {

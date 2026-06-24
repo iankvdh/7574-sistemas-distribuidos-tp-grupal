@@ -70,7 +70,7 @@ func (f *Filter) ProcessMessage(env *inner.Envelope) ([]strategy.OutputMessage, 
 	if env.Kind != inner.TransactionMessage {
 		return nil, strategy.LocalCounts{}, fmt.Errorf("filter %s expects TransactionMessage, got kind=%d", f.name, env.Kind)
 	}
-	tx, err := external.DeserializeTransaction(env.Payload)
+	tx, inMask, err := external.DeserializeTransaction(env.Payload)
 	if err != nil {
 		return nil, strategy.LocalCounts{}, fmt.Errorf("deserialize transaction: %w", err)
 	}
@@ -82,7 +82,7 @@ func (f *Filter) ProcessMessage(env *inner.Envelope) ([]strategy.OutputMessage, 
 		if f.matchCount == 0 {
 			return nil, strategy.LocalCounts{Processed: 1, Matched: 1}, nil
 		}
-		body, err := f.project(tx, f.matchProjection, env.Payload)
+		body, err := f.project(tx, f.matchProjection, env.Payload, inMask)
 		if err != nil {
 			return nil, strategy.LocalCounts{}, fmt.Errorf("project match: %w", err)
 		}
@@ -98,7 +98,7 @@ func (f *Filter) ProcessMessage(env *inner.Envelope) ([]strategy.OutputMessage, 
 	if totalOutputs == f.matchCount {
 		return nil, strategy.LocalCounts{Processed: 1, NotMatched: 1}, nil
 	}
-	body, err := f.project(tx, f.noMatchProjection, env.Payload)
+	body, err := f.project(tx, f.noMatchProjection, env.Payload, inMask)
 	if err != nil {
 		return nil, strategy.LocalCounts{}, fmt.Errorf("project no-match: %w", err)
 	}
@@ -109,12 +109,12 @@ func (f *Filter) ProcessMessage(env *inner.Envelope) ([]strategy.OutputMessage, 
 	}}, strategy.LocalCounts{Processed: 1, NotMatched: 1}, nil
 }
 
-func (f *Filter) project(tx *transaction.Transaction, proj *Projection, original []byte) ([]byte, error) {
+func (f *Filter) project(tx *transaction.Transaction, proj *Projection, original []byte, inMask Projection) ([]byte, error) {
 	if proj == nil {
 		return original, nil
 	}
-	proj.Apply(tx)
-	result, err := external.SerializeTransaction(tx)
+	mask := inMask & *proj
+	result, err := external.SerializeTransaction(tx, mask)
 	if err == nil {
 		slog.Debug("projection applied", "filter", f.name, "before_bytes", len(original), "after_bytes", len(result))
 	}
