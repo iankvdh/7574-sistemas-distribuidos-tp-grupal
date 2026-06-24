@@ -113,14 +113,13 @@ const minHeaderSize = 1 + int(serializer.UINT16_SIZE) + 16 +
 	int(serializer.UINT64_SIZE) + 1 + int(serializer.UINT16_SIZE) +
 	1 + int(serializer.UINT16_SIZE) + 1
 
-// SeqKey is the dedup key used by consumers to track the last seen SeqID per
-// upstream sender. It distinguishes senders of the same stage type by ReplicaID,
-// and senders of different stage types by StageType (avoids collisions when two
-// stage types with the same REPLICA_ID publish to the same queue).
-//
-// Deprecated (plan_reordenamiento.md): el dedup pasa a usar DedupKey (por
-// idSpaceId). SeqKey se conserva mientras dura la migración del runtime.
-type SeqKey struct {
+// CoordinationDedupKey is the dedup key used by consumers to track the last seen
+// SeqID per upstream sender for coordination messages (EOF and RingToken). It
+// distinguishes senders of the same stage type by ReplicaID, and senders of
+// different stage types by StageType (avoids collisions when two stage types with
+// the same REPLICA_ID publish to the same queue).
+
+type CoordinationDedupKey struct {
 	ClientID  ClientID
 	StageType uint8
 	ReplicaID uint16

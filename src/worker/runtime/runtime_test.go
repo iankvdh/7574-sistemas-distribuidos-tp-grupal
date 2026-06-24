@@ -246,7 +246,7 @@ func TestRetryUpstreamEOFMessageBumpsSeqPastLastReceived(t *testing.T) {
 	}
 
 	worker := &Worker{
-		lastRecvSeqID: map[inner.SeqKey]uint64{
+		lastRecvSeqID: map[inner.CoordinationDedupKey]uint64{
 			{
 				ClientID:  clientID,
 				StageType: inner.StageFilterCurrencyUsdP2,
