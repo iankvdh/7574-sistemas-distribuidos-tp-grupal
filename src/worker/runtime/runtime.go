@@ -60,7 +60,7 @@ type Worker struct {
 	firstPendingAt map[inner.ClientID]time.Time
 	totalPending   int
 	tombstones     map[inner.ClientID]time.Time
-	lastRecvSeqID  map[inner.SeqKey]uint64
+	lastRecvSeqID  map[inner.CoordinationDedupKey]uint64
 	dedupSeen      map[inner.DedupKey]*dedup.IntervalSet
 	processedItems map[inner.ClientID]uint64
 	outSeqID       map[inner.ClientID]uint64
@@ -204,7 +204,7 @@ func New(cfg config.WorkerConfig) (*Worker, error) {
 		pendingAcks:    map[inner.ClientID][]deliveryRef{},
 		firstPendingAt: map[inner.ClientID]time.Time{},
 		tombstones:     map[inner.ClientID]time.Time{},
-		lastRecvSeqID:  map[inner.SeqKey]uint64{},
+		lastRecvSeqID:  map[inner.CoordinationDedupKey]uint64{},
 		dedupSeen:      map[inner.DedupKey]*dedup.IntervalSet{},
 		processedItems: map[inner.ClientID]uint64{},
 		outSeqID:       map[inner.ClientID]uint64{},
@@ -513,7 +513,7 @@ func (w *Worker) isDuplicateEOF(clientID inner.ClientID, header inner.Header) bo
 	if header.SeqID == 0 {
 		return false
 	}
-	return header.SeqID <= w.lastRecvSeqID[seqKeyOf(clientID, header)]
+	return header.SeqID <= w.lastRecvSeqID[coordinationDedupKeyOf(clientID, header)]
 }
 
 func (w *Worker) isDuplicateData(header inner.Header) bool {
@@ -578,7 +578,7 @@ func (w *Worker) handleUpstreamEOF(typed *inner.EOFMessage, msg middleware.Messa
 		slog.Error("Applying EOF outcome failed, exiting for redelivery", "client_id", envelope.ClientID, "err", err)
 		os.Exit(1)
 	}
-	w.lastRecvSeqID[seqKeyOf(header.ClientID, header)] = header.SeqID
+	w.lastRecvSeqID[coordinationDedupKeyOf(header.ClientID, header)] = header.SeqID
 	if outcome.ClientCompleted {
 		w.completeClient(envelope.ClientID, deliveryRef{ack: ack, nack: nack})
 		return
@@ -599,7 +599,7 @@ func (w *Worker) handleRingToken(typed *inner.RingTokenMessage, header inner.Hea
 		slog.Error("Applying ring outcome failed, exiting for redelivery", "client_id", token.ClientID, "err", err)
 		os.Exit(1)
 	}
-	w.lastRecvSeqID[seqKeyOf(token.ClientID, header)] = header.SeqID
+	w.lastRecvSeqID[coordinationDedupKeyOf(token.ClientID, header)] = header.SeqID
 	if outcome.ClientCompleted {
 		w.completeClient(token.ClientID, deliveryRef{ack: ack, nack: nack})
 		return
@@ -1064,7 +1064,7 @@ func (w *Worker) retryUpstreamEOFMessage(clientID inner.ClientID, msg middleware
 		return middleware.Message{}, fmt.Errorf("cached upstream EOF client mismatch: cached=%s expected=%s", eofMessage.ClientID, clientID)
 	}
 
-	key := seqKeyOf(clientID, eofMessage.Header)
+	key := coordinationDedupKeyOf(clientID, eofMessage.Header)
 	// Re-enqueued EOFs are internal retries. The original EOF may already be in
 	// lastRecvSeqID, so the retry needs a fresh seq while preserving sender ID.
 	nextSeqID := eofMessage.SeqID + 1
@@ -1430,9 +1430,9 @@ func (w *Worker) loadCheckpoints() bool {
 			continue
 		}
 		for upstreamKey, sequenceId := range clientCheckpoint.LastRecvSeqID {
-			sequenceKey, err := parseSeqKey(clientID, upstreamKey)
+			sequenceKey, err := parseCoordinationDedupKey(clientID, upstreamKey)
 			if err != nil {
-				slog.Warn("bad seq key in checkpoint", "file", name, "key", upstreamKey, "err", err)
+				slog.Warn("bad coordination dedup key in checkpoint", "file", name, "key", upstreamKey, "err", err)
 				continue
 			}
 			w.lastRecvSeqID[sequenceKey] = sequenceId
@@ -1510,8 +1510,8 @@ func (w *Worker) buildClientCheckpoint(clientID inner.ClientID) *checkpoint.Clie
 	return clientCheckpoint
 }
 
-func seqKeyOf(clientID inner.ClientID, h inner.Header) inner.SeqKey {
-	return inner.SeqKey{ClientID: clientID, StageType: h.SenderStageType, ReplicaID: h.SenderReplicaID}
+func coordinationDedupKeyOf(clientID inner.ClientID, h inner.Header) inner.CoordinationDedupKey {
+	return inner.CoordinationDedupKey{ClientID: clientID, StageType: h.SenderStageType, ReplicaID: h.SenderReplicaID}
 }
 
 func (w *Worker) serializeDedup(clientID inner.ClientID) map[string]*dedup.IntervalSet {
@@ -1537,20 +1537,20 @@ func (w *Worker) serializeSeqMap(clientID inner.ClientID) map[string]uint64 {
 	return out
 }
 
-func parseSeqKey(clientID inner.ClientID, s string) (inner.SeqKey, error) {
+func parseCoordinationDedupKey(clientID inner.ClientID, s string) (inner.CoordinationDedupKey, error) {
 	parts := strings.SplitN(s, ":", 2)
 	if len(parts) != 2 {
-		return inner.SeqKey{}, fmt.Errorf("malformed seq key %q", s)
+		return inner.CoordinationDedupKey{}, fmt.Errorf("malformed coordination dedup key %q", s)
 	}
 	st, err := strconv.ParseUint(parts[0], 10, 8)
 	if err != nil {
-		return inner.SeqKey{}, fmt.Errorf("malformed stage type in seq key %q: %w", s, err)
+		return inner.CoordinationDedupKey{}, fmt.Errorf("malformed stage type in coordination dedup key %q: %w", s, err)
 	}
 	rid, err := strconv.ParseUint(parts[1], 10, 16)
 	if err != nil {
-		return inner.SeqKey{}, fmt.Errorf("malformed replica id in seq key %q: %w", s, err)
+		return inner.CoordinationDedupKey{}, fmt.Errorf("malformed replica id in coordination dedup key %q: %w", s, err)
 	}
-	return inner.SeqKey{ClientID: clientID, StageType: uint8(st), ReplicaID: uint16(rid)}, nil
+	return inner.CoordinationDedupKey{ClientID: clientID, StageType: uint8(st), ReplicaID: uint16(rid)}, nil
 }
 
 func (w *Worker) handleSignals() {
