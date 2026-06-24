@@ -68,7 +68,7 @@ var strategiesWithRing = map[string]struct{}{
 	"filter_period2":                    {},
 	"joiner_usd":                        {},
 	"sharder_q4":                        {},
-	"filter_amount_lt_50":                {},
+	"filter_amount_lt_50":               {},
 	"max_q2":                            {},
 	"bank_aggregator":                   {},
 	"sum_q3":                            {},
@@ -89,7 +89,7 @@ var stageTypeByStrategy = map[string]string{
 	"filter_currency_usd_p2":            "FilterCurrencyUsdP2",
 	"filter_currency_usd_other_periods": "FilterCurrencyUsdOther",
 	"joiner_usd":                        "JoinerUSD",
-	"filter_amount_lt_50":                "FilterAmountLt50",
+	"filter_amount_lt_50":               "FilterAmountLt50",
 	"sharder_q4":                        "SharderQ4",
 	"suspicious_account_filter":         "SuspiciousFilter",
 	"path_finder_q4":                    "PathFinder",
@@ -653,7 +653,7 @@ func (s *spec) renderServer(w io.Writer) error {
 			}
 			finalTargets = filtered
 		}
-		writeChaosMonkey(w, s.ChaosMonkey, finalTargets, logLevel)
+		writeChaosMonkey(w, s.ChaosMonkey, finalTargets, sentinelNames, logLevel)
 	}
 	writeRabbit(w)
 	writeNetwork(w, false)
@@ -880,9 +880,20 @@ func writeFetcher(w io.Writer, fs fetcherSpec, logLevel string) {
 	}
 }
 
-func writeChaosMonkey(w io.Writer, cs *chaosSpec, targets []string, logLevel string) {
+func writeChaosMonkey(w io.Writer, cs *chaosSpec, targets, sentinels []string, logLevel string) {
 	exclude := []string{"rabbitmq"}
 	exclude = appendUnique(exclude, cs.Exclude...)
+
+	targetSet := make(map[string]struct{}, len(targets))
+	for _, t := range targets {
+		targetSet[t] = struct{}{}
+	}
+	var sentinelTargets []string
+	for _, s := range sentinels {
+		if _, ok := targetSet[s]; ok {
+			sentinelTargets = append(sentinelTargets, s)
+		}
+	}
 
 	fmt.Fprintln(w, "  chaos_monkey:")
 	fmt.Fprintln(w, "    build: { context: ./src/, dockerfile: chaos_monkey/Dockerfile }")
@@ -890,6 +901,7 @@ func writeChaosMonkey(w io.Writer, cs *chaosSpec, targets []string, logLevel str
 	fmt.Fprintln(w, "    environment:")
 	fmt.Fprintf(w, "      - TARGETS=%s\n", strings.Join(targets, ","))
 	fmt.Fprintf(w, "      - EXCLUDE=%s\n", strings.Join(exclude, ","))
+	fmt.Fprintf(w, "      - SENTINELS=%s\n", strings.Join(sentinelTargets, ","))
 	fmt.Fprintf(w, "      - LOG_LEVEL=%s\n", logLevel)
 	if len(cs.Env) > 0 {
 		keys := make([]string, 0, len(cs.Env))

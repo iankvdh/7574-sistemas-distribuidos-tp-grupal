@@ -1,0 +1,232 @@
+# Topología (idéntica a chaos.yaml) + Chaos Monkey "multikill".
+# Igual que chaos.yaml, pero el Chaos Monkey mata KILL_COUNT contenedores al azar
+# en cada KILL_INTERVAL (en lugar de uno solo).
+# TARGETS/EXCLUDE/SENTINELS los calcula compose-gen automáticamente (no editar a mano).
+#
+# ── Invariante de sentinels ──────────────────────────────────────────────────
+#
+#   A lo sumo se mata UN sentinel por tick, sin importar cuán grande sea KILL_COUNT.
+#   Si en una ronda el azar elige más de un sentinel, los sentinels sobrantes se
+#   saltean (se matan menos de KILL_COUNT containers ese tick). Gracias a esto, el
+#   effective kill rate sobre sentinels sigue siendo ≤ 1 cada KILL_INTERVAL, así que
+#   la fórmula de invarianza de chaos.yaml se mantiene válida sin cambios:
+#
+#   revival_time = SENTINEL_PEER_TIMEOUT + OK_TIMEOUT + T_restart_docker
+#               =          3s           +     3s      +      ~3s
+#               = ~9s
+#
+#     revival_time  <  SENTINEL_PEER_COOLDOWN  <  KILL_INTERVAL × N_sentinels
+#          9s       <        12s               <       20s × 3 = 60s          ✓
+#
+#   - Cota inferior: evita restart loops (no reiniciar un nodo que aún está levantando).
+#   - Cota superior: garantiza que un nodo bloqueado por cooldown salga de él antes
+#     de que el chaos monkey pueda agotar TODAS las N réplicas de sentinels.
+#
+#   KILL_COUNT solo aumenta la presión sobre workers/gateways/fetchers, que se
+#   recuperan vía sentinels; no rompe la invariante de sentinels.
+# ────────────────────────────────────────────────────────────────────────────
+
+gateways: 4
+sentinels: 3
+log_level: info
+expected_query_eofs: 5
+
+sentinels_env:
+  SENTINEL_HB_INTERVAL_SECONDS: 1
+  SENTINEL_PEER_TIMEOUT_SECONDS: 3
+  SENTINEL_PEER_GRACE_SECONDS: 5
+  SENTINEL_PEER_COOLDOWN_SECONDS: 12
+  SENTINEL_DETECTION_INTERVAL_SECONDS: 1
+  OK_TIMEOUT_SECONDS: 3
+
+chaos_monkey:
+  exclude:
+    - fetcher_q5
+    - gateway_1
+    - gateway_2
+    - gateway_3
+    - gateway_4
+  env:
+    KILL_INTERVAL_SECONDS: 10
+    KILL_TIMEOUT_SECONDS: 5
+    KILL_COUNT: 3
+
+fetchers:
+  - name: fetcher_q5
+    env:
+      CONVERSIONS_QUEUE_PREFIX: conversions
+      CONVERSIONS_BASE_CURRENCY: USD
+
+workers:
+  - name: filter_period1
+    strategy: filter_period1
+    replicas: 3
+    input: bound_queue:all_transactions_{REPLICA_ID}:all_transactions:{REPLICA_ID}
+    match_count: 2
+    outputs:
+      - batch_queues:period1_for_wire_ach:2
+      - batch_queues:period1_for_currency_usd_p1:3
+      - batch_queues:non_period1_transactions:3
+
+  - name: filter_wire_ach
+    strategy: filter_wire_ach
+    replicas: 2
+    input: queue:period1_for_wire_ach_{REPLICA_ID}
+    match_count: 1
+    outputs:
+      - sharded_queues:period1_wire_ach:2
+
+  - name: filter_currency_usd_p1
+    strategy: filter_currency_usd_p1
+    replicas: 3
+    input: queue:period1_for_currency_usd_p1_{REPLICA_ID}
+    match_count: 3
+    outputs:
+      - batch_queues:period1_usd_transactions:2
+      - sharded_queues:joiner_usd_input:2
+      - sharded_queues:q3_p1_usd:2
+
+  - name: filter_period2
+    strategy: filter_period2
+    replicas: 3
+    input: queue:non_period1_transactions_{REPLICA_ID}
+    match_count: 1
+    outputs:
+      - batch_queues:period2_transactions:3
+      - batch_queues:other_dates_transactions:1
+
+  - name: filter_currency_usd_p2
+    strategy: filter_currency_usd_p2
+    replicas: 3
+    input: queue:period2_transactions_{REPLICA_ID}
+    match_count: 2
+    outputs:
+      - sharded_queues:joiner_usd_input:2
+      - sharded_queues:q3_p2_for_filter:1
+
+  - name: filter_currency_usd_other_periods
+    strategy: filter_currency_usd_other_periods
+    replicas: 1
+    input: queue:other_dates_transactions_{REPLICA_ID}
+    match_count: 1
+    outputs:
+      - sharded_queues:joiner_usd_input:2
+
+  - name: joiner_usd
+    strategy: joiner_usd
+    replicas: 2
+    input: queue:joiner_usd_input_{REPLICA_ID}
+    outputs:
+      - batch_queues:q1_input:2
+      - sharded_queues:q2_input:2
+
+  - name: filter_amount_lt_50
+    strategy: filter_amount_lt_50
+    replicas: 2
+    input: queue:q1_input_{REPLICA_ID}
+    outputs:
+      - direct_exchange:results
+
+  - name: sharder_q4
+    strategy: sharder_q4
+    replicas: 2
+    input: queue:period1_usd_transactions_{REPLICA_ID}
+    outputs:
+      - direct_exchange:q4_account_shards
+
+  - name: suspicious_account_filter
+    strategy: suspicious_account_filter
+    replicas: 2
+    input: direct_exchange:q4_account_shards:{REPLICA_ID}
+    outputs:
+      - direct_exchange:q4_suspicious_account_shards
+    env:
+      SUSPICIOUS_THRESHOLD: "5"
+
+  - name: path_finder_q4
+    strategy: path_finder_q4
+    replicas: 2
+    input: direct_exchange:q4_suspicious_account_shards:{REPLICA_ID}
+    outputs:
+      - direct_exchange:q4_pair_shards
+
+  - name: counter_q4
+    strategy: counter_q4
+    replicas: 1
+    input: direct_exchange:q4_pair_shards:{REPLICA_ID}
+    outputs:
+      - direct_exchange:results
+    env:
+      MIN_INTERMEDIATES: "5"
+
+  - name: max_q2
+    strategy: max_q2
+    replicas: 2
+    input: queue:q2_input_{REPLICA_ID}
+    outputs:
+      - direct_exchange:q2_agg_input
+
+  - name: bank_aggregator
+    strategy: bank_aggregator
+    replicas: 2
+    input: bound_queue:all_accounts_{REPLICA_ID}:all_accounts:{REPLICA_ID}
+    outputs:
+      - direct_exchange:q2_agg_input
+
+  - name: aggregator_q2
+    strategy: aggregator_q2
+    replicas: 1
+    input: direct_exchange:q2_agg_input:{REPLICA_ID}
+    outputs:
+      - direct_exchange:results
+
+  - name: sum_q3
+    strategy: sum_q3
+    replicas: 2
+    input: queue:q3_p1_usd_{REPLICA_ID}
+    outputs:
+      - direct_exchange:q3_avg_global_input
+
+  - name: aggregator_q3
+    strategy: aggregator_q3
+    replicas: 1
+    input: direct_exchange:q3_avg_global_input:{REPLICA_ID}
+    outputs:
+      - direct_exchange:q3_averages
+
+  - name: filter_q3
+    strategy: filter_q3
+    replicas: 1
+    inputs:
+      - queue:q3_p2_for_filter_{REPLICA_ID}
+      - direct_exchange:q3_averages:{REPLICA_ID}
+    outputs:
+      - direct_exchange:results
+    env:
+      AMOUNT_THRESHOLD_PCT: "0.01"
+      BUFFER_DIR: "/tmp"
+
+  - name: micro_transaction_counter
+    strategy: micro_transaction_counter
+    replicas: 2
+    inputs:
+      - queue:conversions_{REPLICA_ID}
+      - queue:period1_wire_ach_{REPLICA_ID}
+    outputs:
+      - direct_exchange:partial_counts_q5
+    env:
+      MAX_CONVERTED_AMOUNT_USD: "1"
+
+  - name: aggregator_q5
+    strategy: aggregator_q5
+    replicas: 2
+    input: direct_exchange:partial_counts_q5:{REPLICA_ID}
+    outputs:
+      - direct_exchange:results
+
+  - name: final_joiner
+    strategy: final_joiner
+    replicas: 2
+    input: direct_exchange:results:{REPLICA_ID}
+    outputs:
+      - final_queues
