@@ -94,9 +94,7 @@ func parseOutputConfig(raw string, idx int) (OutputConfig, error) {
 			return OutputConfig{}, fmt.Errorf("OUTPUT_%d invalid shard count in %q", idx, raw)
 		}
 		return OutputConfig{Name: prefix, Kind: KindShardedQueues, ShardCount: K}, nil
-	case "batch_queues", "content_hash_queues":
-		// "content_hash_queues" se acepta como alias histórico; ahora todas las
-		// salidas de este tipo shardean por-batch (ver KindBatchQueues).
+	case "batch_queues":
 		subParts := strings.SplitN(rest, ":", 2)
 		if len(subParts) != 2 || subParts[0] == "" || subParts[1] == "" {
 			return OutputConfig{}, fmt.Errorf("OUTPUT_%d invalid batch_queues config: %q (expected batch_queues:PREFIX:K)", idx, raw)

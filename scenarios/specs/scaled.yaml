@@ -18,9 +18,9 @@ workers:
     input: bound_queue:all_transactions_{REPLICA_ID}:all_transactions:{REPLICA_ID}
     match_count: 2
     outputs:
-      - content_hash_queues:period1_for_wire_ach:2
-      - content_hash_queues:period1_for_currency_usd_p1:3
-      - content_hash_queues:non_period1_transactions:3
+      - batch_queues:period1_for_wire_ach:2
+      - batch_queues:period1_for_currency_usd_p1:3
+      - batch_queues:non_period1_transactions:3
 
   - name: filter_wire_ach
     strategy: filter_wire_ach
@@ -36,7 +36,7 @@ workers:
     input: queue:period1_for_currency_usd_p1_{REPLICA_ID}
     match_count: 3
     outputs:
-      - content_hash_queues:period1_usd_transactions:2
+      - batch_queues:period1_usd_transactions:2
       - sharded_queues:joiner_usd_input:2
       - sharded_queues:q3_p1_usd:2
 
@@ -46,8 +46,8 @@ workers:
     input: queue:non_period1_transactions_{REPLICA_ID}
     match_count: 1
     outputs:
-      - content_hash_queues:period2_transactions:3
-      - content_hash_queues:other_dates_transactions:1
+      - batch_queues:period2_transactions:3
+      - batch_queues:other_dates_transactions:1
 
   - name: filter_currency_usd_p2
     strategy: filter_currency_usd_p2
@@ -71,7 +71,7 @@ workers:
     replicas: 2
     input: queue:joiner_usd_input_{REPLICA_ID}
     outputs:
-      - content_hash_queues:q1_input:2
+      - batch_queues:q1_input:2
       - sharded_queues:q2_input:2
 
   - name: filter_amount_lt_50
