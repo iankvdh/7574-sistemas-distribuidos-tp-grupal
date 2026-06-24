@@ -8,13 +8,14 @@ import (
 )
 
 const (
-	defaultConnectMaxAttempts    = 6
-	defaultBackoffBaseMs         = 200
-	defaultBackoffMaxMs          = 3000
-	defaultConnectTimeoutMs      = 800
-	defaultMaxExternalBatchBytes = 8192
-	defaultResultsDir            = "results"
-	defaultExpectedQueryEOFs     = 5
+	defaultConnectMaxAttempts         = 6
+	defaultBackoffBaseMs              = 200
+	defaultBackoffMaxMs               = 3000
+	defaultConnectTimeoutMs           = 800
+	defaultMaxExternalBatchBytes      = 8192
+	defaultResultsDir                 = "results"
+	defaultExpectedQueryEOFs          = 5
+	defaultReconnectMaxElapsedSeconds = 180
 )
 
 func Load() (client.ClientConfig, error) {
@@ -64,6 +65,10 @@ func Load() (client.ClientConfig, error) {
 	if err != nil {
 		return client.ClientConfig{}, err
 	}
+	reconnectMaxElapsedSecs, err := env.IntWithDefault("RECONNECT_MAX_ELAPSED_SECONDS", defaultReconnectMaxElapsedSeconds, true)
+	if err != nil {
+		return client.ClientConfig{}, err
+	}
 
 	expectedQueryEOFs, err := env.IntWithDefault("EXPECTED_QUERY_EOFS", defaultExpectedQueryEOFs, true)
 	if err != nil {
@@ -83,5 +88,6 @@ func Load() (client.ClientConfig, error) {
 		BackoffBase:           time.Duration(backoffBaseMs) * time.Millisecond,
 		BackoffMax:            time.Duration(backoffMaxMs) * time.Millisecond,
 		ConnectTimeout:        time.Duration(connectTimeoutMs) * time.Millisecond,
+		ReconnectMaxElapsed:   time.Duration(reconnectMaxElapsedSecs) * time.Second,
 	}, nil
 }

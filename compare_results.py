@@ -28,6 +28,21 @@ import pandas as pd
 
 ROOT = Path(__file__).parent
 
+CHUNK_SIZE = 500_000
+
+TRANS_DTYPES = {
+    "From Bank":          "int32",
+    "To Bank":            "int32",
+    "Receiving Currency": "category",
+    "Payment Currency":   "category",
+    "Payment Format":     "category",
+    "Is Laundering":      "int8",
+}
+
+
+def _iter_trans(path: Path):
+    return pd.read_csv(path, dtype=TRANS_DTYPES, chunksize=CHUNK_SIZE)
+
 FRANKFURTER_API = "https://api.frankfurter.dev/v2"
 
 # ---------------------------------------------------------------------------
@@ -53,19 +68,32 @@ DATASETS = {
 # Queries de referencia
 # ---------------------------------------------------------------------------
 
-def ref_q1(trans_df: pd.DataFrame) -> pd.DataFrame:
-    usd = trans_df[trans_df["Payment Currency"] == "US Dollar"]
-    result = usd[usd["Amount Paid"] < 50][["From Bank", "Account", "To Bank", "Account.1", "Amount Paid"]].copy()
-    result["Amount Paid"] = result["Amount Paid"].round(2)
-    return result.reset_index(drop=True)
+def ref_q1(trans_path: Path) -> pd.DataFrame:
+    cols = ["From Bank", "Account", "To Bank", "Account.1", "Amount Paid", "Payment Currency"]
+    parts = []
+    for chunk in _iter_trans(trans_path):
+        usd = chunk[chunk["Payment Currency"] == "US Dollar"]
+        filtered = usd[usd["Amount Paid"] < 50][cols[:-1]].copy()
+        filtered["Amount Paid"] = filtered["Amount Paid"].round(2)
+        parts.append(filtered)
+    return pd.concat(parts).reset_index(drop=True)
 
 
-def ref_q2(trans_df: pd.DataFrame, accounts_df: pd.DataFrame) -> pd.DataFrame:
-    usd = trans_df[trans_df["Payment Currency"] == "US Dollar"]
-    idx = usd.groupby("From Bank")["Amount Paid"].idxmax()
-    top = usd.loc[idx]
+def ref_q2(trans_path: Path, accounts_df: pd.DataFrame) -> pd.DataFrame:
     bank_names = accounts_df[["Bank ID", "Bank Name"]].drop_duplicates(subset=["Bank ID"])
-    merged = top.merge(bank_names, left_on="From Bank", right_on="Bank ID", how="left")
+    best = None
+    for chunk in _iter_trans(trans_path):
+        usd = chunk[chunk["Payment Currency"] == "US Dollar"]
+        if usd.empty:
+            continue
+        idx = usd.groupby("From Bank")["Amount Paid"].idxmax()
+        top = usd.loc[idx]
+        if best is None:
+            best = top
+        else:
+            combined = pd.concat([best, top])
+            best = combined.loc[combined.groupby("From Bank")["Amount Paid"].idxmax()]
+    merged = best.merge(bank_names, left_on="From Bank", right_on="Bank ID", how="left")
     merged["Bank Name"] = merged.apply(
         lambda r: r["Bank Name"] if pd.notna(r["Bank Name"]) and str(r["Bank Name"]).strip() != ""
                   else f"UNKNOWN_{int(r['From Bank'])}",
@@ -77,10 +105,15 @@ def ref_q2(trans_df: pd.DataFrame, accounts_df: pd.DataFrame) -> pd.DataFrame:
     return result.reset_index(drop=True)
 
 
-def ref_q3(trans_df: pd.DataFrame) -> pd.DataFrame:
-    usd = trans_df[trans_df["Payment Currency"] == "US Dollar"]
-    base  = usd[(usd["Timestamp"] >= "2022/09/01") & (usd["Timestamp"] < "2022/09/06")]
-    eval_ = usd[(usd["Timestamp"] >= "2022/09/06") & (usd["Timestamp"] < "2022/09/16")]
+def ref_q3(trans_path: Path) -> pd.DataFrame:
+    base_parts = []
+    eval_parts = []
+    for chunk in _iter_trans(trans_path):
+        usd = chunk[chunk["Payment Currency"] == "US Dollar"]
+        base_parts.append(usd[(usd["Timestamp"] >= "2022/09/01") & (usd["Timestamp"] < "2022/09/06")])
+        eval_parts.append(usd[(usd["Timestamp"] >= "2022/09/06") & (usd["Timestamp"] < "2022/09/16")])
+    base  = pd.concat(base_parts)
+    eval_ = pd.concat(eval_parts)
     avg = (
         base.groupby("Payment Format", as_index=False)["Amount Paid"]
         .mean()
@@ -92,10 +125,13 @@ def ref_q3(trans_df: pd.DataFrame) -> pd.DataFrame:
     return result.reset_index(drop=True)
 
 
-def ref_q4(trans_df: pd.DataFrame) -> pd.DataFrame:
-    usd    = trans_df[trans_df["Payment Currency"] == "US Dollar"]
-    window = usd[(usd["Timestamp"] >= "2022/09/01") & (usd["Timestamp"] < "2022/09/06")]
-    edges  = window[["From Bank", "Account", "To Bank", "Account.1"]].drop_duplicates()
+def ref_q4(trans_path: Path) -> pd.DataFrame:
+    edge_parts = []
+    for chunk in _iter_trans(trans_path):
+        usd = chunk[chunk["Payment Currency"] == "US Dollar"]
+        window = usd[(usd["Timestamp"] >= "2022/09/01") & (usd["Timestamp"] < "2022/09/06")]
+        edge_parts.append(window[["From Bank", "Account", "To Bank", "Account.1"]].drop_duplicates())
+    edges = pd.concat(edge_parts).drop_duplicates()
 
     fanout     = edges.groupby(["From Bank", "Account"]).size().reset_index(name="n")
     candidates = fanout[fanout["n"] >= 5][["From Bank", "Account"]]
@@ -167,14 +203,19 @@ def _build_rates_df(date_range: pd.DatetimeIndex) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def ref_q5(trans_df: pd.DataFrame) -> int:
-    window   = trans_df[(trans_df["Timestamp"] >= "2022/09/01") & (trans_df["Timestamp"] < "2022/09/06")]
-    wire_ach = window[window["Payment Format"].isin(["Wire", "ACH"])].copy()
-    wire_ach["Date"] = pd.to_datetime(wire_ach["Timestamp"]).dt.strftime("%Y-%m-%d")
-    rates_df  = _build_rates_df(pd.date_range("2022-09-01", "2022-09-05", freq="D"))
-    wire_ach  = wire_ach.merge(rates_df, on=["Date", "Payment Currency"], how="left")
-    wire_ach["Amount"] = wire_ach["Amount Paid"] * wire_ach["usd_rate"]
-    return int(wire_ach[wire_ach["Amount"] < 1].shape[0])
+def ref_q5(trans_path: Path) -> int:
+    rates_df = _build_rates_df(pd.date_range("2022-09-01", "2022-09-05", freq="D"))
+    total = 0
+    for chunk in _iter_trans(trans_path):
+        window   = chunk[(chunk["Timestamp"] >= "2022/09/01") & (chunk["Timestamp"] < "2022/09/06")]
+        wire_ach = window[window["Payment Format"].isin(["Wire", "ACH"])].copy()
+        if wire_ach.empty:
+            continue
+        wire_ach["Date"] = pd.to_datetime(wire_ach["Timestamp"]).dt.strftime("%Y-%m-%d")
+        wire_ach = wire_ach.merge(rates_df, on=["Date", "Payment Currency"], how="left")
+        wire_ach["Amount"] = wire_ach["Amount Paid"] * wire_ach["usd_rate"]
+        total += int(wire_ach[wire_ach["Amount"] < 1].shape[0])
+    return total
 
 
 # ---------------------------------------------------------------------------
@@ -186,24 +227,21 @@ def cmd_generate(args):
     ref_dir = Path(args.ref_dir or f"notebooks/{args.dataset}/reference")
     ref_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"Cargando {ds['trans'].name} ...")
-    trans_df    = pd.read_csv(ds["trans"])
     accounts_df = pd.read_csv(ds["accounts"])
-
     queries = [int(q) for q in args.queries.split(",")]
 
     for q in queries:
         print(f"  Calculando Q{q} ...", end=" ", flush=True)
         if q == 1:
-            ref_q1(trans_df).to_csv(ref_dir / "q1.csv", index=False)
+            ref_q1(ds["trans"]).to_csv(ref_dir / "q1.csv", index=False)
         elif q == 2:
-            ref_q2(trans_df, accounts_df).to_csv(ref_dir / "q2.csv", index=False)
+            ref_q2(ds["trans"], accounts_df).to_csv(ref_dir / "q2.csv", index=False)
         elif q == 3:
-            ref_q3(trans_df).to_csv(ref_dir / "q3.csv", index=False)
+            ref_q3(ds["trans"]).to_csv(ref_dir / "q3.csv", index=False)
         elif q == 4:
-            ref_q4(trans_df).to_csv(ref_dir / "q4.csv", index=False)
+            ref_q4(ds["trans"]).to_csv(ref_dir / "q4.csv", index=False)
         elif q == 5:
-            count = ref_q5(trans_df)
+            count = ref_q5(ds["trans"])
             pd.DataFrame({"count": [count]}).to_csv(ref_dir / "q5.csv", index=False)
         print("OK")
 

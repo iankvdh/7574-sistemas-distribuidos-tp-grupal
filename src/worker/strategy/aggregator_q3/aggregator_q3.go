@@ -1,7 +1,9 @@
 package aggregator_q3
 
 import (
+	"encoding/json"
 	"fmt"
+	"slices"
 	"strconv"
 
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/env"
@@ -17,7 +19,14 @@ type clientState struct {
 	counts map[string]uint64
 }
 
+type aggQ3Checkpoint struct {
+	Sums   map[string]float64   `json:"sums"`
+	Counts map[string]uint64    `json:"counts"`
+	JAC    eof.JACStateSnapshot `json:"jac"`
+}
+
 type AggregatorQ3 struct {
+	strategy.NoopValidator
 	cfg         strategy.StrategyConfig
 	nFilterQ3   int
 	coordinator *eof.JoinerAccumulateCoordinator
@@ -66,23 +75,31 @@ func (a *AggregatorQ3) ProcessMessage(envelope *inner.Envelope) ([]strategy.Outp
 }
 
 func (a *AggregatorQ3) OnUpstreamEOF(envelope *inner.Envelope) (strategy.EOFOutcome, error) {
-	action := a.coordinator.OnUpstreamEOF(envelope.ClientID, envelope.Total)
+	action := a.coordinator.OnUpstreamEOF(envelope.ClientID, envelope.SenderStageType, envelope.SenderReplicaID, envelope.Total, envelope.LocalCount)
 	if action.Kind != eof.ActionEmitEOFs {
 		return strategy.EOFOutcome{Action: action}, nil
 	}
 
 	st := a.stateFor(envelope.ClientID)
-	outputs := make([]strategy.OutputMessage, 0, len(st.sums)*a.nFilterQ3)
+
+	formats := make([]string, 0, len(st.sums))
+	for k := range st.sums {
+		formats = append(formats, k)
+	}
+	slices.Sort(formats)
+
+	outputs := make([]strategy.OutputMessage, 0, len(formats)*a.nFilterQ3)
 	eofs := make([]eof.EOFEmit, 0, a.nFilterQ3)
 
 	for i := 0; i < a.nFilterQ3; i++ {
 		rk := a.rkCache[i]
-		for format, sum := range st.sums {
+		var n uint32
+		for _, format := range formats {
 			count := st.counts[format]
 			if count == 0 {
 				continue
 			}
-			avg := sum / float64(count)
+			avg := st.sums[format] / float64(count)
 			body, err := inner.SerializeQ3Average(&inner.Q3Average{
 				PaymentFormat: format,
 				Average:       avg,
@@ -98,34 +115,69 @@ func (a *AggregatorQ3) OnUpstreamEOF(envelope *inner.Envelope) (strategy.EOFOutc
 				BatchItemKind: inner.Q3AverageItem,
 				BatchQueryID:  queryID,
 			})
+			n++
 		}
 		eofs = append(eofs, eof.EOFEmit{
 			OutputIndex: 0,
 			RoutingKey:  rk,
 			QueryID:     queryID,
+			Total:       n,
 		})
 	}
-	delete(a.state, envelope.ClientID)
 
 	return strategy.EOFOutcome{
-		Action:  eof.Action{Kind: eof.ActionEmitEOFs},
-		Outputs: outputs,
-		EOFs:    eofs,
+		Action:          eof.Action{Kind: eof.ActionEmitEOFs},
+		Outputs:         outputs,
+		EOFs:            eofs,
+		ClientCompleted: true,
 	}, nil
 }
 
-func (a *AggregatorQ3) OnRingToken(_ *eof.Token) (strategy.EOFOutcome, error) {
+func (a *AggregatorQ3) OnRingToken(_ *eof.Token, _ uint64) (strategy.EOFOutcome, error) {
 	return strategy.EOFOutcome{Action: eof.Action{Kind: eof.ActionNone}}, nil
 }
 
+func (a *AggregatorQ3) MarshalClientState(clientID inner.ClientID) ([]byte, error) {
+	state := a.state[clientID]
+	checkPoint := aggQ3Checkpoint{
+		JAC: a.coordinator.GetClientJACState(clientID),
+	}
+	if state != nil {
+		checkPoint.Sums = state.sums
+		checkPoint.Counts = state.counts
+	}
+	return json.Marshal(checkPoint)
+}
+
+func (a *AggregatorQ3) UnmarshalClientState(clientID inner.ClientID, data []byte) error {
+	var checkPoint aggQ3Checkpoint
+	if err := json.Unmarshal(data, &checkPoint); err != nil {
+		return err
+	}
+	state := a.stateFor(clientID)
+	if checkPoint.Sums != nil {
+		state.sums = checkPoint.Sums
+	}
+	if checkPoint.Counts != nil {
+		state.counts = checkPoint.Counts
+	}
+	a.coordinator.RestoreClientJACState(clientID, checkPoint.JAC)
+	return nil
+}
+
+func (a *AggregatorQ3) CleanupClient(clientID inner.ClientID) {
+	delete(a.state, clientID)
+	a.coordinator.CleanupClient(clientID)
+}
+
 func (a *AggregatorQ3) stateFor(clientID inner.ClientID) *clientState {
-	st, ok := a.state[clientID]
+	state, ok := a.state[clientID]
 	if !ok {
-		st = &clientState{
+		state = &clientState{
 			sums:   map[string]float64{},
 			counts: map[string]uint64{},
 		}
-		a.state[clientID] = st
+		a.state[clientID] = state
 	}
-	return st
+	return state
 }

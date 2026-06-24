@@ -1,11 +1,14 @@
 package strategy
 
 import (
+	"errors"
 	"iter"
 
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/eof"
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/messageprotocol/inner"
 )
+
+var ErrInvalidData = errors.New("strategy: invalid data")
 
 type OutputMessage struct {
 	OutputIndices []int // output target indices to send the message to
@@ -41,13 +44,19 @@ type EOFOutcome struct {
 	Outputs             []OutputMessage // data messages to emit before downstream EOFs
 	OutputsIterator     iter.Seq[OutputMessage]
 	StartDeferredInputs []int
+	ClientCompleted     bool
 }
+
+type NoopValidator struct{}
+
+func (NoopValidator) Validate(_ *inner.Envelope) error { return nil }
 
 type Strategy interface {
 	Init(cfg StrategyConfig) error
+	Validate(env *inner.Envelope) error
 	ProcessMessage(env *inner.Envelope) ([]OutputMessage, LocalCounts, error)
 	OnUpstreamEOF(env *inner.Envelope) (EOFOutcome, error)
-	OnRingToken(token *eof.Token) (EOFOutcome, error)
+	OnRingToken(token *eof.Token, localCount uint64) (EOFOutcome, error)
 }
 
 type DeferredInputProvider interface {
@@ -56,4 +65,37 @@ type DeferredInputProvider interface {
 
 type ReadyEOFEmitter interface {
 	ReadyEOFs(env *inner.Envelope) (EOFOutcome, bool)
+}
+
+type RecoverableStrategy interface {
+	Strategy
+	MarshalClientState(clientID inner.ClientID) ([]byte, error)
+	UnmarshalClientState(clientID inner.ClientID, data []byte) error
+	CleanupClient(clientID inner.ClientID)
+}
+
+type GlobalStateProvider interface {
+	MarshalGlobalState() ([]byte, error)
+	UnmarshalGlobalState(data []byte) error
+}
+
+type RawBatchStrategy interface {
+	Strategy
+	ProcessRawBatch(batch *inner.BatchMessage, rawBatch []byte, inputIndex int) (
+		outputs []OutputMessage, counts LocalCounts, handled bool, err error,
+	)
+}
+
+type DedupRecoverer interface {
+	RecoveredDedupHeaders() []inner.Header
+}
+
+type BufferFlusher interface {
+	CloseAllBuffers()
+}
+
+type DeltaCheckpointer interface {
+	RecoverableStrategy
+	TakeDelta(clientID inner.ClientID) []byte
+	ApplyDelta(clientID inner.ClientID, delta []byte) error
 }

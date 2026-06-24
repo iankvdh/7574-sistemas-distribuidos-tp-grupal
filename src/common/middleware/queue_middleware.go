@@ -1,31 +1,17 @@
 package middleware
 
-import (
-	"fmt"
-
-	amqp "github.com/rabbitmq/amqp091-go"
-)
-
 type queueMiddleware struct {
-	conn      *amqp.Connection
-	channel   *amqp.Channel
+	*publisher
 	queueName string
 }
 
-func newQueueMiddleware(queueName string, connectionSettings ConnSettings) (*queueMiddleware, error) {
-	url := fmt.Sprintf("amqp://guest:guest@%s:%d/", connectionSettings.Hostname, connectionSettings.Port)
-
-	conn, err := amqp.Dial(url)
+func newQueueMiddleware(queueName string, settings ConnSettings) (*queueMiddleware, error) {
+	p, err := newPublisher(settings)
 	if err != nil {
-		return nil, ErrMessageMiddlewareDisconnected
+		return nil, err
 	}
 
-	ch, err := conn.Channel()
-	if err != nil {
-		return nil, closeConnection(conn, err)
-	}
-
-	if _, err := ch.QueueDeclare(
+	if _, err := p.channel.QueueDeclare(
 		queueName,
 		false, // durable
 		false, // auto-delete
@@ -33,35 +19,14 @@ func newQueueMiddleware(queueName string, connectionSettings ConnSettings) (*que
 		false, // no-wait
 		nil,
 	); err != nil {
-		return nil, closeChannelAndConnection(ch, conn, err)
+		return nil, closeChannelAndConnection(p.channel, p.conn, err)
 	}
 
-	if err := ch.Qos(PrefetchCount, 0, false); err != nil {
-		return nil, closeChannelAndConnection(ch, conn, err)
-	}
-
-	return &queueMiddleware{
-		conn:      conn,
-		channel:   ch,
-		queueName: queueName,
-	}, nil
+	return &queueMiddleware{publisher: p, queueName: queueName}, nil
 }
 
 func (q *queueMiddleware) Send(msg Message) error {
-	err := q.channel.Publish(
-		"",          // exchange default
-		q.queueName, // routing key
-		false,       // mandatory
-		false,       // immediate
-		amqp.Publishing{
-			ContentType: "text/plain",
-			Body:        []byte(msg.Body),
-		},
-	)
-	if err != nil {
-		return middlewareError(err)
-	}
-	return nil
+	return q.Publish("", q.queueName, []byte(msg.Body))
 }
 
 func (q *queueMiddleware) SendWithKey(msg Message, _ string) error {
@@ -99,14 +64,4 @@ func (q *queueMiddleware) StartConsuming(callbackFunc func(msg Message, ack func
 
 func (q *queueMiddleware) StopConsuming() error {
 	return q.channel.Close()
-}
-
-func (q *queueMiddleware) Close() error {
-	if err := q.channel.Close(); err != nil && err != amqp.ErrClosed {
-		return ErrMessageMiddlewareClose
-	}
-	if err := q.conn.Close(); err != nil && err != amqp.ErrClosed {
-		return ErrMessageMiddlewareClose
-	}
-	return nil
 }

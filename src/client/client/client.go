@@ -31,23 +31,35 @@ type ClientConfig struct {
 	BackoffBase           time.Duration
 	BackoffMax            time.Duration
 	ConnectTimeout        time.Duration
+	ReconnectMaxElapsed   time.Duration
 }
 
+type sessionOutcome int
+
+const (
+	sessionCompleted sessionOutcome = iota
+	sessionStopped
+	sessionFailed
+)
+
 type Client struct {
+	config       ClientConfig
+	gatewayAddrs []string
+
+	ctx     context.Context
+	cancel  context.CancelFunc
+	running atomic.Bool
+
 	conn            net.Conn
 	clientID        string
-	running         atomic.Bool
-	allEOFsReceived atomic.Bool
-	config          ClientConfig
-	gatewayAddrs    []string
 	results         *resultsCollector
+	sessionCtx      context.Context
+	sessionCancel   context.CancelFunc
+	allEOFsReceived atomic.Bool
+	ingestAckCh     chan struct{}
+	allQueryEOFCh   chan struct{}
 
-	writeMu       sync.Mutex
-	ctx           context.Context
-	cancel        context.CancelFunc
-	ingestAckCh   chan struct{}
-	allQueryEOFCh chan struct{}
-
+	writeMu sync.Mutex
 	ioErrMu sync.Mutex
 	ioErr   error
 }
@@ -60,23 +72,12 @@ func NewClient(config ClientConfig) (*Client, error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	client := &Client{
-		config:        config,
-		gatewayAddrs:  gatewayAddrs,
-		ctx:           ctx,
-		cancel:        cancel,
-		ingestAckCh:   make(chan struct{}, 1),
-		allQueryEOFCh: make(chan struct{}),
+		config:       config,
+		gatewayAddrs: gatewayAddrs,
+		ctx:          ctx,
+		cancel:       cancel,
 	}
 	client.running.Store(true)
-
-	conn, clientID, err := client.connectToGateway()
-	if err != nil {
-		cancel()
-		return nil, err
-	}
-	client.conn = conn
-	client.clientID = clientID
-
 	return client, nil
 }
 
@@ -89,10 +90,116 @@ func buildGatewayAddresses(config ClientConfig) []string {
 	return addrs
 }
 
+func (client *Client) Run() error {
+	go client.handleSignals()
+	defer client.cancel()
+
+	deadline := time.Now().Add(client.config.ReconnectMaxElapsed)
+	for attempt := 1; ; attempt++ {
+		if !client.running.Load() {
+			return nil
+		}
+
+		switch client.runSession() {
+		case sessionCompleted:
+			slog.Info("Client completed successfully", "client_id", client.clientID)
+			return nil
+		case sessionStopped:
+			slog.Info("Client shutting down gracefully", "client_id", client.clientID)
+			return nil
+		case sessionFailed:
+			if !client.running.Load() {
+				return nil
+			}
+			if time.Now().After(deadline) {
+				return fmt.Errorf("reconnect budget exhausted after %s", client.config.ReconnectMaxElapsed)
+			}
+			slog.Warn("Gateway session lost; retrying from scratch",
+				"old_client_id", client.clientID, "attempt", attempt)
+			client.cleanupPartialResults()
+			client.interruptibleSleep(client.backoffForAttempt(attempt))
+		}
+	}
+}
+
+func (client *Client) runSession() sessionOutcome {
+	conn, clientID, err := client.connectToGateway()
+	if err != nil {
+		if !client.running.Load() {
+			return sessionStopped
+		}
+		slog.Warn("Could not establish a gateway connection for this attempt", "err", err)
+		return sessionFailed
+	}
+
+	sessionCtx, sessionCancel := context.WithCancel(client.ctx)
+	client.conn = conn
+	client.clientID = clientID
+	client.sessionCtx = sessionCtx
+	client.sessionCancel = sessionCancel
+	client.ingestAckCh = make(chan struct{}, 1)
+	client.allQueryEOFCh = make(chan struct{})
+	client.allEOFsReceived.Store(false)
+	client.clearIOError()
+
+	if err := client.initResultsCollector(); err != nil {
+		slog.Error("While initializing results collector", "client_id", clientID, "err", err)
+		sessionCancel()
+		_ = conn.Close()
+		return sessionFailed
+	}
+
+	var readerWG sync.WaitGroup
+	readerWG.Add(1)
+	go func() {
+		defer readerWG.Done()
+		client.readerLoop()
+	}()
+
+	client.runIngest()
+
+	sessionCancel()
+	_ = conn.Close()
+	readerWG.Wait()
+	if err := client.closeResultsCollector(); err != nil {
+		slog.Warn("While closing result files", "client_id", clientID, "err", err)
+	}
+
+	switch {
+	case client.allEOFsReceived.Load():
+		return sessionCompleted
+	case !client.running.Load():
+		return sessionStopped
+	default:
+		return sessionFailed
+	}
+}
+
+func (client *Client) runIngest() {
+	if err := client.sendTransactions(); err != nil {
+		slog.Debug("Transactions ingest ended", "client_id", client.clientID, "err", err)
+		return
+	}
+	slog.Info("All transactions sent", "client_id", client.clientID)
+
+	if err := client.sendAccounts(); err != nil {
+		slog.Debug("Accounts ingest ended", "client_id", client.clientID, "err", err)
+		return
+	}
+	slog.Info("All accounts sent", "client_id", client.clientID)
+
+	if err := client.waitForAllQueryEOFs(); err != nil {
+		slog.Debug("Waiting for query EOFs ended", "client_id", client.clientID, "err", err)
+	}
+}
+
 func (client *Client) connectToGateway() (net.Conn, string, error) {
 	var lastErr error
 
 	for attempt := 1; attempt <= client.config.ConnectMaxAttempts; attempt++ {
+		if client.ctx.Err() != nil {
+			return nil, "", client.ctx.Err()
+		}
 		addr := client.pickRandomGatewayAddr()
 		dialer := net.Dialer{Timeout: client.config.ConnectTimeout}
 
@@ -153,16 +260,27 @@ func (client *Client) pickRandomGatewayAddr() string {
 	return client.gatewayAddrs[idx]
 }
 
+func (client *Client) backoffForAttempt(attempt int) time.Duration {
+	delay := computeBackoffCap(client.config.BackoffBase, client.config.BackoffMax, attempt)
+	return time.Duration(rand.Int63n(int64(delay) + 1))
+}
+
 func (client *Client) sleepBackoff(attempt int) {
 	if attempt >= client.config.ConnectMaxAttempts {
 		return
 	}
+	client.interruptibleSleep(client.backoffForAttempt(attempt))
+}
 
-	delay := computeBackoffCap(client.config.BackoffBase, client.config.BackoffMax, attempt)
-
-	jitter := time.Duration(rand.Int63n(int64(delay) + 1))
-	if jitter > 0 {
-		time.Sleep(jitter)
+func (client *Client) interruptibleSleep(d time.Duration) {
+	if d <= 0 {
+		return
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+	case <-client.ctx.Done():
 	}
 }
 
@@ -185,62 +303,6 @@ func computeBackoffCap(base, max time.Duration, attempt int) time.Duration {
 		return max
 	}
 	return delay
-}
-
-func (client *Client) Run() error {
-	go client.handleSignals()
-	defer client.shutdown()
-
-	if err := client.initResultsCollector(); err != nil {
-		return err
-	}
-	defer func() {
-		if err := client.closeResultsCollector(); err != nil {
-			slog.Warn("While closing result files", "client_id", client.clientID, "err", err)
-		}
-	}()
-
-	go client.readerLoop()
-
-	if err := client.sendTransactions(); err != nil {
-		if client.allEOFsReceived.Load() {
-			slog.Info("All query EOFs received before finishing transactions; ingest aborted cleanly",
-				"client_id", client.clientID)
-			return nil
-		}
-		if client.running.Load() {
-			return err
-		}
-		return nil
-	}
-	slog.Info("All transactions sent", "client_id", client.clientID)
-
-	if err := client.sendAccounts(); err != nil {
-		if client.allEOFsReceived.Load() {
-			slog.Info("All query EOFs received before finishing accounts; ingest aborted cleanly",
-				"client_id", client.clientID)
-			return nil
-		}
-		if client.running.Load() {
-			return err
-		}
-		return nil
-	}
-	slog.Info("All accounts sent", "client_id", client.clientID)
-
-	if err := client.waitForAllQueryEOFs(); err != nil {
-		if client.allEOFsReceived.Load() {
-			return nil
-		}
-		if client.running.Load() {
-			return err
-		}
-		slog.Info("Client shutting down gracefully", "client_id", client.clientID)
-		return nil
-	}
-
-	slog.Info("Client completed successfully", "client_id", client.clientID)
-	return nil
 }
 
 func (client *Client) readerLoop() {
@@ -276,9 +338,6 @@ func (client *Client) readerLoop() {
 			if client.hasAllQueryEOFs() {
 				slog.Info("Received all query EOF markers", "client_id", client.clientID)
 				client.signalAllQueryEOFs()
-				// Done: the gateway will close the TCP session right after our
-				// ACK of this last batch; leaving the loop here avoids racing
-				// the close and reporting it as an I/O error.
 				return
 			}
 		default:
@@ -305,7 +364,7 @@ func (client *Client) waitForIngestAck() error {
 	select {
 	case <-client.ingestAckCh:
 		return nil
-	case <-client.ctx.Done():
+	case <-client.sessionCtx.Done():
 		return client.ioErrorOrStopped()
 	}
 }
@@ -314,7 +373,7 @@ func (client *Client) waitForAllQueryEOFs() error {
 	select {
 	case <-client.allQueryEOFCh:
 		return nil
-	case <-client.ctx.Done():
+	case <-client.sessionCtx.Done():
 		return client.ioErrorOrStopped()
 	}
 }
@@ -333,11 +392,7 @@ func (client *Client) signalAllQueryEOFs() {
 	default:
 		client.allEOFsReceived.Store(true)
 		close(client.allQueryEOFCh)
-		// Unblock any in-flight ingest waits (sendTransactions / sendAccounts
-		// stuck on an IngestAck that won't come — the gateway already closed
-		// the session at the EOF). Run() will distinguish this from a real
-		// I/O error by inspecting allEOFsReceived.
-		client.cancel()
+		client.sessionCancel()
 	}
 }
 
@@ -349,10 +404,15 @@ func (client *Client) setIOError(err error) {
 	client.ioErrMu.Lock()
 	if client.ioErr == nil {
 		client.ioErr = err
-		client.ioErrMu.Unlock()
-		client.shutdown()
-		return
 	}
+	client.ioErrMu.Unlock()
+
+	client.sessionCancel()
+}
+
+func (client *Client) clearIOError() {
+	client.ioErrMu.Lock()
+	client.ioErr = nil
 	client.ioErrMu.Unlock()
 }
 
@@ -365,20 +425,16 @@ func (client *Client) ioErrorOrStopped() error {
 	return errors.New("client stopped")
 }
 
-func (client *Client) shutdown() {
-	client.cancel()
-	if client.conn != nil {
-		_ = client.conn.Close()
-	}
-}
-
 func (client *Client) handleSignals() {
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
 	defer signal.Stop(signals)
 
-	sig := <-signals
-	slog.Info("Signal received, shutting down client", "signal", sig.String())
-	client.running.Store(false)
-	client.shutdown()
+	select {
+	case sig := <-signals:
+		slog.Info("Signal received, shutting down client", "signal", sig.String())
+		client.running.Store(false)
+		client.cancel()
+	case <-client.ctx.Done():
+	}
 }

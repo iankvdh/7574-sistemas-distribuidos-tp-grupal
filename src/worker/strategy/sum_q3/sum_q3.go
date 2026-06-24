@@ -1,7 +1,9 @@
 package sum_q3
 
 import (
+	"encoding/json"
 	"fmt"
+	"slices"
 	"strconv"
 
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/env"
@@ -15,16 +17,21 @@ import (
 const queryID uint8 = 3
 
 type partialAvg struct {
-	sum   float64
-	count uint64
+	Sum   float64
+	Count uint64
 }
 
 type clientState struct {
-	processed uint64
-	partials  map[string]*partialAvg
+	partials map[string]*partialAvg
+}
+
+type sumQ3Checkpoint struct {
+	Partials map[string]*partialAvg `json:"partials"`
+	Ring     eof.RingStateSnapshot  `json:"ring"`
 }
 
 type SumQ3 struct {
+	strategy.NoopValidator
 	cfg             strategy.StrategyConfig
 	kAggregators    int
 	ringCoordinator *eof.RingCoordinator
@@ -67,30 +74,26 @@ func (a *SumQ3) ProcessMessage(envelope *inner.Envelope) ([]strategy.OutputMessa
 	}
 
 	st := a.stateFor(envelope.ClientID)
-	st.processed++
-
 	pa, ok := st.partials[tx.PaymentFormat]
 	if !ok {
 		pa = &partialAvg{}
 		st.partials[tx.PaymentFormat] = pa
 	}
-	pa.sum += tx.AmountPaid
-	pa.count++
+	pa.Sum += tx.AmountPaid
+	pa.Count++
 	return nil, strategy.LocalCounts{Processed: 1, Matched: 1}, nil
 }
 
 func (a *SumQ3) OnUpstreamEOF(envelope *inner.Envelope) (strategy.EOFOutcome, error) {
-	st := a.stateFor(envelope.ClientID)
-	action, _ := a.ringCoordinator.OnUpstreamEOF(envelope.ClientID, envelope.Total, st.processed, 0)
+	action, _ := a.ringCoordinator.OnUpstreamEOF(envelope.ClientID, envelope.Total, envelope.LocalCount, 0)
 	return a.outcomeFor(envelope.ClientID, action), nil
 }
 
-func (a *SumQ3) OnRingToken(token *eof.Token) (strategy.EOFOutcome, error) {
+func (a *SumQ3) OnRingToken(token *eof.Token, localCount uint64) (strategy.EOFOutcome, error) {
 	if a.ringCoordinator == nil {
 		return strategy.EOFOutcome{Action: eof.Action{Kind: eof.ActionNone}}, nil
 	}
-	st := a.stateFor(token.ClientID)
-	action, _ := a.ringCoordinator.OnRingToken(token, st.processed, 0)
+	action, _ := a.ringCoordinator.OnRingToken(token, localCount, 0)
 	return a.outcomeFor(token.ClientID, action), nil
 }
 
@@ -100,12 +103,20 @@ func (a *SumQ3) outcomeFor(clientID inner.ClientID, action eof.Action) strategy.
 	case eof.ActionEmitEOFs, eof.ActionEmitEOFsAndForwardToken:
 		st := a.stateFor(clientID)
 		rk := a.routingKeyFor(clientID)
+
+		formats := make([]string, 0, len(st.partials))
+		for k := range st.partials {
+			formats = append(formats, k)
+		}
+		slices.Sort(formats)
+
 		outputs := make([]strategy.OutputMessage, 0, len(st.partials))
-		for format, pa := range st.partials {
+		for _, format := range formats {
+			pa := st.partials[format]
 			body, err := inner.SerializeQ3PartialAvg(&inner.Q3PartialAvg{
 				PaymentFormat: format,
-				Sum:           pa.sum,
-				Count:         pa.count,
+				Sum:           pa.Sum,
+				Count:         pa.Count,
 			})
 			if err != nil {
 				continue
@@ -124,10 +135,39 @@ func (a *SumQ3) outcomeFor(clientID inner.ClientID, action eof.Action) strategy.
 			OutputIndex: 0,
 			RoutingKey:  rk,
 			QueryID:     queryID,
+			Total:       uint32(len(outputs)),
 		}}
-		delete(a.state, clientID)
+		outcome.ClientCompleted = true
 	}
 	return outcome
+}
+
+func (a *SumQ3) MarshalClientState(clientID inner.ClientID) ([]byte, error) {
+	state := a.state[clientID]
+	checkPoint := sumQ3Checkpoint{}
+	if state != nil {
+		checkPoint.Partials = state.partials
+	}
+	checkPoint.Ring, _ = a.ringCoordinator.GetClientRingState(clientID)
+	return json.Marshal(checkPoint)
+}
+
+func (a *SumQ3) UnmarshalClientState(clientID inner.ClientID, data []byte) error {
+	var checkPoint sumQ3Checkpoint
+	if err := json.Unmarshal(data, &checkPoint); err != nil {
+		return err
+	}
+	st := a.stateFor(clientID)
+	if checkPoint.Partials != nil {
+		st.partials = checkPoint.Partials
+	}
+	a.ringCoordinator.RestoreClientRingState(clientID, checkPoint.Ring)
+	return nil
+}
+
+func (a *SumQ3) CleanupClient(clientID inner.ClientID) {
+	delete(a.state, clientID)
+	a.ringCoordinator.CleanupClient(clientID)
 }
 
 func (a *SumQ3) routingKeyFor(clientID inner.ClientID) string {

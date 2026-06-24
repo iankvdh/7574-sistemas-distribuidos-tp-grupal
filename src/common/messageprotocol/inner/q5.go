@@ -10,6 +10,8 @@ import (
 
 const MAX_CURRENCIES_PER_DATE = 65535
 
+const Q5ConversionsClientID ClientID = "00000000-0000-0000-0000-000000000005"
+
 type Q5Conversions struct {
 	Rates map[uint32]map[string]float64
 }

@@ -12,6 +12,7 @@ type InputConfig struct {
 	Name       string
 	Kind       OutputKind
 	RoutingKey string
+	Exchange   string
 }
 
 func ParseInput(raw string) (InputConfig, error) {
@@ -29,6 +30,7 @@ func ParseInput(raw string) (InputConfig, error) {
 		Name:       outputConfig.Name,
 		Kind:       outputConfig.Kind,
 		RoutingKey: outputConfig.RoutingKey,
+		Exchange:   outputConfig.Exchange,
 	}, nil
 }
 

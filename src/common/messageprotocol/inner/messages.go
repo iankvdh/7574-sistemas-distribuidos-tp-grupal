@@ -20,9 +20,6 @@ type BatchMessage struct {
 func (b *BatchMessage) Type() MessageType { return Batch }
 
 func (b *BatchMessage) Serialize() ([]byte, error) {
-	if len(b.Items) == 0 {
-		return nil, errors.New("batch must contain at least one item")
-	}
 	if len(b.Items) > 0xFFFF {
 		return nil, errors.New("batch exceeds max items (65535)")
 	}
@@ -135,6 +132,23 @@ func (t *RingTokenMessage) Serialize() ([]byte, error) {
 	buf = append(buf, serializer.SerializeUint64(t.AggNotMatched)...)
 	buf = append(buf, t.Phase)
 	return buf, nil
+}
+
+type ClientAbortedMessage struct {
+	Header
+}
+
+func (c *ClientAbortedMessage) Type() MessageType { return ClientAborted }
+
+func (c *ClientAbortedMessage) Serialize() ([]byte, error) {
+	return writeHeader(ClientAborted, c.Header)
+}
+
+func parseClientAborted(header Header, body []byte) (*ClientAbortedMessage, error) {
+	if len(body) != 0 {
+		return nil, ErrMalformedEnvelope
+	}
+	return &ClientAbortedMessage{Header: header}, nil
 }
 
 func parseRingToken(header Header, body []byte) (*RingTokenMessage, error) {

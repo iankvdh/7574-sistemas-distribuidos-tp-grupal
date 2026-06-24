@@ -5,11 +5,10 @@ import "fmt"
 type MsgType byte
 
 const (
-	MsgElection     MsgType = 0x01
-	MsgOK           MsgType = 0x02
-	MsgCoord        MsgType = 0x03
-	MsgSentinelPing MsgType = 0x04
-	MsgSentinelPong MsgType = 0x05
+	MsgElection          MsgType = 0x01
+	MsgOK                MsgType = 0x02
+	MsgCoord             MsgType = 0x03
+	MsgPeerHeartbeat MsgType = 0x04
 )
 
 func (t MsgType) String() string {
@@ -20,10 +19,8 @@ func (t MsgType) String() string {
 		return "OK"
 	case MsgCoord:
 		return "Coord"
-	case MsgSentinelPing:
-		return "Ping"
-	case MsgSentinelPong:
-		return "Pong"
+	case MsgPeerHeartbeat:
+		return "Heartbeat"
 	default:
 		return fmt.Sprintf("Unknown(0x%02x)", byte(t))
 	}
@@ -49,7 +46,8 @@ func DecodeSentinelMessage(b []byte) (SentinelMessage, error) {
 }
 
 type Peer struct {
-	ID      byte
-	TCPAddr string
-	UDPAddr string
+	ID       byte
+	Hostname string
+	TCPAddr  string
+	UDPAddr  string
 }

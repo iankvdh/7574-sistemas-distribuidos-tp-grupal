@@ -27,42 +27,45 @@ func run() int {
 	}
 	slog.SetDefault(slog.Default().With("sentinel_id", cfg.SelfID))
 
-	ping, err := bully.NewPingTransport(cfg.BullyUDPListenPort, cfg.PongTimeout)
+	hb, err := bully.NewHeartbeatTransport(cfg.SentinelHBListenPort)
 	if err != nil {
-		slog.Error("While binding bully UDP (ping) transport", "addr", cfg.BullyUDPListenPort, "err", err)
+		slog.Error("While binding bully UDP (hb) transport", "addr", cfg.SentinelHBListenPort, "err", err)
 		return 1
 	}
 	control, err := bully.NewControlTransport(cfg.BullyTCPListenPort, cfg.ControlDialTimeout, cfg.ControlIOTimeout)
 	if err != nil {
 		slog.Error("While binding bully TCP (control) transport", "addr", cfg.BullyTCPListenPort, "err", err)
-		_ = ping.Close()
+		_ = hb.Close()
 		return 1
 	}
 
-	// --- bully coordinator -----------------------------------------------------
 	coordinator := bully.NewBullyCoordinator(bully.Config{
 		SelfID:             cfg.SelfID,
 		Peers:              cfg.Peers,
-		LeaderPingInterval: cfg.LeaderPingInterval,
-		LeaderPingFailures: cfg.LeaderPingFailures,
+		LeaderCheckInterval: cfg.LeaderCheckInterval,
+		LeaderTimeout:      cfg.SentinelPeerTimeout,
 		OKTimeout:          cfg.OKTimeout,
 		CoordTimeout:       cfg.CoordTimeout,
 		BaseJitter:         cfg.BaseJitter,
-	}, control, ping)
+	}, control)
 
-	// --- monitor ----------------------------------------------------------
 	restarter := monitor.NewDockerRestarter(cfg.RestartTimeout, cfg.RestartStopGrace)
 	mon, err := monitor.NewNodeMonitor(monitor.Config{
-		ListenAddr:         cfg.WorkerUDPListenPort,
-		ExpectedContainers: cfg.ExpectedContainers,
-		StartupGrace:       cfg.StartupGrace,
-		HeartbeatTimeout:   cfg.HeartbeatTimeout,
-		DetectionInterval:  cfg.DetectionInterval,
-		RestartCooldown:    cfg.RestartCooldown,
-	}, coordinator, restarter, nil)
+		ListenAddr:           cfg.WorkerUDPListenPort,
+		ExpectedContainers:   cfg.ExpectedContainers,
+		StartupGrace:         cfg.StartupGrace,
+		HeartbeatTimeout:     cfg.HeartbeatTimeout,
+		DetectionInterval:    cfg.DetectionInterval,
+		RestartCooldown:      cfg.RestartCooldown,
+		SentinelPeers:             cfg.SentinelPeers,
+		SentinelPeerTimeout:       cfg.SentinelPeerTimeout,
+		SentinelPeerGrace:         cfg.SentinelPeerGrace,
+		SentinelPeerCooldown:      cfg.SentinelPeerCooldown,
+		SentinelDetectionInterval: cfg.SentinelDetectionInterval,
+	}, coordinator, restarter, nil, coordinator)
 	if err != nil {
 		slog.Error("While binding worker heartbeat listener", "addr", cfg.WorkerUDPListenPort, "err", err)
-		_ = ping.Close()
+		_ = hb.Close()
 		_ = control.Close()
 		return 1
 	}
@@ -70,17 +73,20 @@ func run() int {
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 
-	// Serve loops for both transports.
 	wg.Add(1)
 	go func() { defer wg.Done(); control.Serve(coordinator.Handle) }()
 	wg.Add(1)
-	go func() { defer wg.Done(); ping.ServePing(coordinator.IsLeader, cfg.SelfID) }()
+	go func() {
+		defer wg.Done()
+		hb.Serve(cfg.SelfID, coordinator.RecordPeerHeartbeat)
+	}()
 
-	// Bully state machine (bootstrap + leader monitoring).
 	wg.Add(1)
 	go func() { defer wg.Done(); coordinator.Run(ctx) }()
 
-	// Worker monitor (heartbeat receiver + detection/restart loop).
+	wg.Add(1)
+	go func() { defer wg.Done(); coordinator.EmitPeerHeartbeats(ctx, hb, cfg.SentinelHBInterval) }()
+
 	wg.Add(1)
 	go func() { defer wg.Done(); mon.Run(ctx) }()
 
@@ -88,18 +94,17 @@ func run() int {
 		"peers", len(cfg.Peers),
 		"expected_containers", len(cfg.ExpectedContainers),
 		"bully_tcp", cfg.BullyTCPListenPort,
-		"bully_udp", cfg.BullyUDPListenPort,
+		"bully_udp", cfg.SentinelHBListenPort,
 		"worker_udp", cfg.WorkerUDPListenPort,
 	)
 
-	// Graceful quit on SIGINT/SIGTERM.
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
 	sig := <-signals
 	slog.Info("Signal received, shutting down sentinel", "signal", sig.String())
 
 	cancel()
-	_ = ping.Close()
+	_ = hb.Close()
 	_ = control.Close()
 	wg.Wait()
 	return 0
