@@ -36,7 +36,7 @@ func BuildOutputTargets(outputConfigs []config.OutputConfig, conn middleware.Con
 		case config.KindShardedQueues, config.KindBatchQueues:
 			if outputConfig.ShardCount <= 0 {
 				closeOutputTargets(targets)
-				return nil, fmt.Errorf("output %q: sharded/content_hash queues requires ShardCount>0", outputConfig.Name)
+				return nil, fmt.Errorf("output %q: sharded/batch queues requires ShardCount>0", outputConfig.Name)
 			}
 			shards := make([]middleware.Middleware, 0, outputConfig.ShardCount)
 			for i := 0; i < outputConfig.ShardCount; i++ {
