@@ -40,6 +40,7 @@ const (
 	sessionCompleted sessionOutcome = iota
 	sessionStopped
 	sessionFailed
+	sessionDropped
 )
 
 type Client struct {
@@ -94,7 +95,7 @@ func (client *Client) Run() error {
 	go client.handleSignals()
 	defer client.cancel()
 
-	deadline := time.Now().Add(client.config.ReconnectMaxElapsed)
+	var reconnectDeadline time.Time
 	for attempt := 1; ; attempt++ {
 		if !client.running.Load() {
 			return nil
@@ -111,9 +112,20 @@ func (client *Client) Run() error {
 			if !client.running.Load() {
 				return nil
 			}
-			if time.Now().After(deadline) {
+			if reconnectDeadline.IsZero() {
+				reconnectDeadline = time.Now().Add(client.config.ReconnectMaxElapsed)
+			}
+			if time.Now().After(reconnectDeadline) {
 				return fmt.Errorf("reconnect budget exhausted after %s", client.config.ReconnectMaxElapsed)
 			}
+			slog.Warn("Could not connect to any gateway; retrying",
+				"attempt", attempt)
+			client.interruptibleSleep(client.backoffForAttempt(attempt))
+		case sessionDropped:
+			if !client.running.Load() {
+				return nil
+			}
+			reconnectDeadline = time.Now().Add(client.config.ReconnectMaxElapsed)
 			slog.Warn("Gateway session lost; retrying from scratch",
 				"old_client_id", client.clientID, "attempt", attempt)
 			client.cleanupPartialResults()
@@ -171,7 +183,7 @@ func (client *Client) runSession() sessionOutcome {
 	case !client.running.Load():
 		return sessionStopped
 	default:
-		return sessionFailed
+		return sessionDropped
 	}
 }
 
