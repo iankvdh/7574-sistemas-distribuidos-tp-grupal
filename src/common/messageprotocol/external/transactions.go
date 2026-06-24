@@ -9,84 +9,113 @@ import (
 	"github.com/iankvdh/7574-sistemas-distribuidos-tp-grupal/common/transaction"
 )
 
-func SerializeTransaction(tx *transaction.Transaction) ([]byte, error) {
-	fromAccount, err := serializer.SerializeShortString(tx.FromAccount)
-	if err != nil {
-		return nil, err
+func SerializeTransaction(tx *transaction.Transaction, mask transaction.Projection) ([]byte, error) {
+	var fromAccount, toAccount, currency, format []byte
+	var err error
+	if mask&transaction.FieldFromAccount != 0 {
+		if fromAccount, err = serializer.SerializeShortString(tx.FromAccount); err != nil {
+			return nil, err
+		}
 	}
-	toAccount, err := serializer.SerializeShortString(tx.ToAccount)
-	if err != nil {
-		return nil, err
+	if mask&transaction.FieldToAccount != 0 {
+		if toAccount, err = serializer.SerializeShortString(tx.ToAccount); err != nil {
+			return nil, err
+		}
 	}
-	currency, err := serializer.SerializeShortString(tx.PaymentCurrency)
-	if err != nil {
-		return nil, err
+	if mask&transaction.FieldPaymentCurrency != 0 {
+		if currency, err = serializer.SerializeShortString(tx.PaymentCurrency); err != nil {
+			return nil, err
+		}
 	}
-	format, err := serializer.SerializeShortString(tx.PaymentFormat)
-	if err != nil {
-		return nil, err
+	if mask&transaction.FieldPaymentFormat != 0 {
+		if format, err = serializer.SerializeShortString(tx.PaymentFormat); err != nil {
+			return nil, err
+		}
 	}
 
-	buf := make([]byte, 0, 24+len(fromAccount)+len(toAccount)+len(currency)+len(format))
-	buf = append(buf, serializer.SerializeUint32(tx.Date)...)
-	buf = append(buf, serializer.SerializeUint32(tx.FromBank)...)
+	buf := make([]byte, 0, 1+24+len(fromAccount)+len(toAccount)+len(currency)+len(format))
+	buf = append(buf, byte(mask))
+	if mask&transaction.FieldDate != 0 {
+		buf = append(buf, serializer.SerializeUint32(tx.Date)...)
+	}
+	if mask&transaction.FieldFromBank != 0 {
+		buf = append(buf, serializer.SerializeUint32(tx.FromBank)...)
+	}
 	buf = append(buf, fromAccount...)
-	buf = append(buf, serializer.SerializeUint32(tx.ToBank)...)
+	if mask&transaction.FieldToBank != 0 {
+		buf = append(buf, serializer.SerializeUint32(tx.ToBank)...)
+	}
 	buf = append(buf, toAccount...)
-	buf = append(buf, serializer.SerializeFloat64(tx.AmountPaid)...)
+	if mask&transaction.FieldAmountPaid != 0 {
+		buf = append(buf, serializer.SerializeFloat64(tx.AmountPaid)...)
+	}
 	buf = append(buf, currency...)
 	buf = append(buf, format...)
 	return buf, nil
 }
 
-func DeserializeTransaction(payload []byte) (*transaction.Transaction, error) {
+func DeserializeTransaction(payload []byte) (*transaction.Transaction, transaction.Projection, error) {
 	return deserializeTransaction(bytes.NewReader(payload))
 }
 
-func deserializeTransaction(reader io.Reader) (*transaction.Transaction, error) {
-	dateBuf, err := safeio.ReadAll(reader, serializer.UINT32_SIZE)
+func deserializeTransaction(reader io.Reader) (*transaction.Transaction, transaction.Projection, error) {
+	maskBuf, err := safeio.ReadAll(reader, serializer.UINT8_SIZE)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	fromBankBuf, err := safeio.ReadAll(reader, serializer.UINT32_SIZE)
-	if err != nil {
-		return nil, err
+	mask := transaction.Projection(serializer.DeserializeUint8(maskBuf))
+
+	tx := &transaction.Transaction{}
+	if mask&transaction.FieldDate != 0 {
+		dateBuf, err := safeio.ReadAll(reader, serializer.UINT32_SIZE)
+		if err != nil {
+			return nil, 0, err
+		}
+		tx.Date = serializer.DeserializeUint32(dateBuf)
 	}
-	fromAccount, err := readShortString(reader)
-	if err != nil {
-		return nil, err
+	if mask&transaction.FieldFromBank != 0 {
+		fromBankBuf, err := safeio.ReadAll(reader, serializer.UINT32_SIZE)
+		if err != nil {
+			return nil, 0, err
+		}
+		tx.FromBank = serializer.DeserializeUint32(fromBankBuf)
 	}
-	toBankBuf, err := safeio.ReadAll(reader, serializer.UINT32_SIZE)
-	if err != nil {
-		return nil, err
+	if mask&transaction.FieldFromAccount != 0 {
+		if tx.FromAccount, err = readShortString(reader); err != nil {
+			return nil, 0, err
+		}
 	}
-	toAccount, err := readShortString(reader)
-	if err != nil {
-		return nil, err
+	if mask&transaction.FieldToBank != 0 {
+		toBankBuf, err := safeio.ReadAll(reader, serializer.UINT32_SIZE)
+		if err != nil {
+			return nil, 0, err
+		}
+		tx.ToBank = serializer.DeserializeUint32(toBankBuf)
 	}
-	amountBuf, err := safeio.ReadAll(reader, serializer.UINT64_SIZE)
-	if err != nil {
-		return nil, err
+	if mask&transaction.FieldToAccount != 0 {
+		if tx.ToAccount, err = readShortString(reader); err != nil {
+			return nil, 0, err
+		}
 	}
-	currency, err := readShortString(reader)
-	if err != nil {
-		return nil, err
+	if mask&transaction.FieldAmountPaid != 0 {
+		amountBuf, err := safeio.ReadAll(reader, serializer.UINT64_SIZE)
+		if err != nil {
+			return nil, 0, err
+		}
+		tx.AmountPaid = serializer.DeserializeFloat64(amountBuf)
 	}
-	format, err := readShortString(reader)
-	if err != nil {
-		return nil, err
+	if mask&transaction.FieldPaymentCurrency != 0 {
+		if tx.PaymentCurrency, err = readShortString(reader); err != nil {
+			return nil, 0, err
+		}
+	}
+	if mask&transaction.FieldPaymentFormat != 0 {
+		if tx.PaymentFormat, err = readShortString(reader); err != nil {
+			return nil, 0, err
+		}
 	}
 
-	return &transaction.Transaction{
-		Date:            serializer.DeserializeUint32(dateBuf),
-		FromBank:        serializer.DeserializeUint32(fromBankBuf),
-		FromAccount:     fromAccount,
-		ToBank:          serializer.DeserializeUint32(toBankBuf),
-		ToAccount:       toAccount,
-		AmountPaid:      serializer.DeserializeFloat64(amountBuf),
-		PaymentCurrency: currency,
-		PaymentFormat:   format,
-	}, nil
+	return tx, mask, nil
 }
 
 func WriteTransactionBatch(writer io.Writer, txs []transaction.Transaction) error {
@@ -102,7 +131,7 @@ func WriteTransactionBatch(writer io.Writer, txs []transaction.Transaction) erro
 func SerializeTransactionBatchPayload(txs []transaction.Transaction) ([]byte, error) {
 	msg := serializer.SerializeUint32(uint32(len(txs)))
 	for i := range txs {
-		serialized, err := SerializeTransaction(&txs[i])
+		serialized, err := SerializeTransaction(&txs[i], transaction.AllFields)
 		if err != nil {
 			return nil, err
 		}
@@ -123,7 +152,7 @@ func ReadTransactionBatch(reader io.Reader) ([]transaction.Transaction, error) {
 	n := serializer.DeserializeUint32(nBuf)
 	txs := make([]transaction.Transaction, n)
 	for i := uint32(0); i < n; i++ {
-		tx, err := deserializeTransaction(reader)
+		tx, _, err := deserializeTransaction(reader)
 		if err != nil {
 			return nil, err
 		}

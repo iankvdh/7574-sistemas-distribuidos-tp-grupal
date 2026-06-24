@@ -63,7 +63,7 @@ func (s *Sharder) ProcessMessage(env *inner.Envelope) ([]strategy.OutputMessage,
 	if env.Kind != inner.TransactionMessage {
 		return nil, strategy.LocalCounts{}, fmt.Errorf("sharder_q4 expects TransactionMessage, got kind=%d", env.Kind)
 	}
-	tx, err := external.DeserializeTransaction(env.Payload)
+	tx, _, err := external.DeserializeTransaction(env.Payload)
 	if err != nil {
 		return nil, strategy.LocalCounts{}, fmt.Errorf("deserialize transaction: %w", err)
 	}

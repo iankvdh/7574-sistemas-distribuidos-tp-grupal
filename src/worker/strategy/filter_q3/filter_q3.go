@@ -232,7 +232,7 @@ func (f *FilterQ3) filterBatchItems(batch *inner.BatchMessage, state *clientStat
 	var outputs []strategy.OutputMessage
 	rk := f.routingKeyFor(batch.ClientID)
 	for _, item := range batch.Items {
-		tx, err := external.DeserializeTransaction(item.Payload)
+		tx, _, err := external.DeserializeTransaction(item.Payload)
 		if err != nil {
 			continue
 		}
@@ -409,7 +409,7 @@ func (f *FilterQ3) drainIterator(clientID inner.ClientID, st *clientState) (iter
 				continue
 			}
 			for _, item := range batch.Items {
-				tx, err := external.DeserializeTransaction(item.Payload)
+				tx, _, err := external.DeserializeTransaction(item.Payload)
 				if err != nil {
 					continue
 				}
@@ -471,7 +471,7 @@ func (f *FilterQ3) countQ3Rows(clientID inner.ClientID, st *clientState) uint32 
 			continue
 		}
 		for _, item := range batch.Items {
-			tx, err := external.DeserializeTransaction(item.Payload)
+			tx, _, err := external.DeserializeTransaction(item.Payload)
 			if err != nil {
 				continue
 			}
