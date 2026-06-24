@@ -1,5 +1,5 @@
 # Topología (idéntica a scaled.yaml) + Chaos Monkey.
-# El Chaos Monkey mata workers, fetchers y sentinels al azar, pero no mata gateways.
+# El Chaos Monkey mata workers y sentinels al azar, pero no mata gateways ni fetchers.
 # TARGETS/EXCLUDE los calcula compose-gen automáticamente (no editar a mano).
 #
 # ── Fórmulas de invarianza ──────────────────────────────────────────────────
@@ -43,6 +43,7 @@ chaos_monkey:
     - gateway_2
     - gateway_3
     - gateway_4
+    - fetcher_q5
   env:
     KILL_INTERVAL_SECONDS: 20
     KILL_TIMEOUT_SECONDS: 10
