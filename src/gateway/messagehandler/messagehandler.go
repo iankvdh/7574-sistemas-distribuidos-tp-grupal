@@ -49,7 +49,7 @@ func (handler *MessageHandler) outHeader() inner.Header {
 func TxShardForBatch(batch []transaction.Transaction, nShards int) (string, error) {
 	h := fnv.New32a()
 	for i := range batch {
-		payload, err := external.SerializeTransaction(&batch[i])
+		payload, err := external.SerializeTransaction(&batch[i], transaction.AllFields)
 		if err != nil {
 			return "", err
 		}
@@ -79,7 +79,7 @@ func (handler *MessageHandler) SerializeTransactionBatch(batch []transaction.Tra
 	}
 	items := make([]inner.BatchItem, 0, len(batch))
 	for i := range batch {
-		payload, err := external.SerializeTransaction(&batch[i])
+		payload, err := external.SerializeTransaction(&batch[i], transaction.AllFields)
 		if err != nil {
 			return nil, err
 		}

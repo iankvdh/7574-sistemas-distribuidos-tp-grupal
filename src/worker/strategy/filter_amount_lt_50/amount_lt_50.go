@@ -71,7 +71,7 @@ func (s *Filter) ProcessMessage(envelope *inner.Envelope) ([]strategy.OutputMess
 	if envelope.Kind != inner.TransactionMessage {
 		return nil, strategy.LocalCounts{}, fmt.Errorf("filter_amount_lt_50 expects TransactionMessage, got kind=%d", envelope.Kind)
 	}
-	tx, err := external.DeserializeTransaction(envelope.Payload)
+	tx, _, err := external.DeserializeTransaction(envelope.Payload)
 	if err != nil {
 		return nil, strategy.LocalCounts{}, fmt.Errorf("deserialize transaction: %w", err)
 	}

@@ -250,7 +250,7 @@ func (m *MicroTransactionCounter) CleanupClient(clientID inner.ClientID) {
 }
 
 func (m *MicroTransactionCounter) processTxPayload(clientID inner.ClientID, payload []byte) (bool, error) {
-	tx, err := external.DeserializeTransaction(payload)
+	tx, _, err := external.DeserializeTransaction(payload)
 	if err != nil {
 		return false, fmt.Errorf("deserialize transaction: %w", err)
 	}

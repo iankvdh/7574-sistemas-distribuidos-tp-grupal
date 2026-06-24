@@ -36,7 +36,7 @@ const (
 type MsgKind uint8
 
 const (
-	// TransactionMessage: payload = external.SerializeTransaction(tx).
+	// TransactionMessage: payload = external.SerializeTransaction(tx, mask).
 	TransactionMessage MsgKind = iota + 1
 	// AccountMessage: payload = external.SerializeAccount(acc).
 	AccountMessage
@@ -105,9 +105,8 @@ type Header struct {
 
 // minHeaderSize is the fixed wire size of the header (including the MessageType
 // byte and the BranchPathLen byte, with an empty BranchPath):
-// type(1)+gatewayID(2)+clientID(16)+seqID(8)+senderStage(1)+senderReplica(2)
-//
-//	+minterStage(1)+minterReplica(2)+branchPathLen(1) = 34.
+// type(1) + gatewayID(2) + clientID(16) + seqID(8) + senderStage(1) + senderReplica(2)
+//   - minterStage(1) + minterReplica(2) + branchPathLen(1) = 34.
 //
 // The real header is variable-length: it grows by len(BranchPath) bytes.
 const minHeaderSize = 1 + int(serializer.UINT16_SIZE) + 16 +
