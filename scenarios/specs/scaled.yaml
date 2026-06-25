@@ -5,6 +5,10 @@ sentinels: 5
 log_level: info
 expected_query_eofs: 5
 
+sentinels_env:
+  HEARTBEAT_TIMEOUT_SECONDS: 12
+  DETECTION_INTERVAL_SECONDS: 3
+
 fetchers:
   - name: fetcher_q5
     env:
@@ -24,7 +28,7 @@ workers:
 
   - name: filter_wire_ach
     strategy: filter_wire_ach
-    replicas: 2
+    replicas: 3
     input: queue:period1_for_wire_ach_{REPLICA_ID}
     match_count: 1
     outputs:
@@ -60,7 +64,7 @@ workers:
 
   - name: filter_currency_usd_other_periods
     strategy: filter_currency_usd_other_periods
-    replicas: 1
+    replicas: 3
     input: queue:other_dates_transactions_{REPLICA_ID}
     match_count: 1
     outputs:
@@ -68,7 +72,7 @@ workers:
 
   - name: joiner_usd
     strategy: joiner_usd
-    replicas: 2
+    replicas: 3
     input: queue:joiner_usd_input_{REPLICA_ID}
     outputs:
       - batch_queues:q1_input:2
@@ -76,21 +80,21 @@ workers:
 
   - name: filter_amount_lt_50
     strategy: filter_amount_lt_50
-    replicas: 2
+    replicas: 3
     input: queue:q1_input_{REPLICA_ID}
     outputs:
       - direct_exchange:results
 
   - name: sharder_q4
     strategy: sharder_q4
-    replicas: 2
+    replicas: 3
     input: queue:period1_usd_transactions_{REPLICA_ID}
     outputs:
       - direct_exchange:q4_account_shards
 
   - name: suspicious_account_filter
     strategy: suspicious_account_filter
-    replicas: 2
+    replicas: 3
     input: direct_exchange:q4_account_shards:{REPLICA_ID}
     outputs:
       - direct_exchange:q4_suspicious_account_shards
@@ -99,14 +103,14 @@ workers:
 
   - name: path_finder_q4
     strategy: path_finder_q4
-    replicas: 2
+    replicas: 3
     input: direct_exchange:q4_suspicious_account_shards:{REPLICA_ID}
     outputs:
       - direct_exchange:q4_pair_shards
 
   - name: counter_q4
     strategy: counter_q4
-    replicas: 1
+    replicas: 3
     input: direct_exchange:q4_pair_shards:{REPLICA_ID}
     outputs:
       - direct_exchange:results
@@ -115,42 +119,42 @@ workers:
 
   - name: max_q2
     strategy: max_q2
-    replicas: 2
+    replicas: 3
     input: queue:q2_input_{REPLICA_ID}
     outputs:
       - direct_exchange:q2_agg_input
 
   - name: bank_aggregator
     strategy: bank_aggregator
-    replicas: 2
+    replicas: 3
     input: bound_queue:all_accounts_{REPLICA_ID}:all_accounts:{REPLICA_ID}
     outputs:
       - direct_exchange:q2_agg_input
 
   - name: aggregator_q2
     strategy: aggregator_q2
-    replicas: 1
+    replicas: 3
     input: direct_exchange:q2_agg_input:{REPLICA_ID}
     outputs:
       - direct_exchange:results
 
   - name: sum_q3
     strategy: sum_q3
-    replicas: 2
+    replicas: 3
     input: queue:q3_p1_usd_{REPLICA_ID}
     outputs:
       - direct_exchange:q3_avg_global_input
 
   - name: aggregator_q3
     strategy: aggregator_q3
-    replicas: 1
+    replicas: 3
     input: direct_exchange:q3_avg_global_input:{REPLICA_ID}
     outputs:
       - direct_exchange:q3_averages
 
   - name: filter_q3
     strategy: filter_q3
-    replicas: 1
+    replicas: 3
     inputs:
       - queue:q3_p2_for_filter_{REPLICA_ID}
       - direct_exchange:q3_averages:{REPLICA_ID}
@@ -162,7 +166,7 @@ workers:
 
   - name: micro_transaction_counter
     strategy: micro_transaction_counter
-    replicas: 2
+    replicas: 3
     inputs:
       - queue:conversions_{REPLICA_ID}
       - queue:period1_wire_ach_{REPLICA_ID}
@@ -173,14 +177,14 @@ workers:
 
   - name: aggregator_q5
     strategy: aggregator_q5
-    replicas: 2
+    replicas: 3
     input: direct_exchange:partial_counts_q5:{REPLICA_ID}
     outputs:
       - direct_exchange:results
 
   - name: final_joiner
     strategy: final_joiner
-    replicas: 2
+    replicas: 3
     input: direct_exchange:results:{REPLICA_ID}
     outputs:
       - final_queues

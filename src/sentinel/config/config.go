@@ -16,19 +16,19 @@ type Config struct {
 	Peers  []bully.Peer
 
 	// Listen addresses (:port)
-	BullyTCPListenPort  string
-	SentinelHBListenPort  string
-	WorkerUDPListenPort string
+	BullyTCPListenPort   string
+	SentinelHBListenPort string
+	WorkerUDPListenPort  string
 
 	ExpectedContainers []string
 
 	// Bully config.
 	LeaderCheckInterval time.Duration
-	OKTimeout          time.Duration
-	CoordTimeout       time.Duration
-	BaseJitter         time.Duration
-	ControlDialTimeout time.Duration
-	ControlIOTimeout   time.Duration
+	OKTimeout           time.Duration
+	CoordTimeout        time.Duration
+	BaseJitter          time.Duration
+	ControlDialTimeout  time.Duration
+	ControlIOTimeout    time.Duration
 
 	// Worker monitor config.
 	StartupGrace      time.Duration
@@ -39,12 +39,12 @@ type Config struct {
 	RestartStopGrace  int
 
 	// Sentinel peer monitor config.
-	SentinelPeers                []monitor.SentinelPeerSpec
-	SentinelHBInterval           time.Duration
-	SentinelPeerTimeout          time.Duration
-	SentinelPeerGrace            time.Duration
-	SentinelPeerCooldown         time.Duration
-	SentinelDetectionInterval    time.Duration
+	SentinelPeers             []monitor.SentinelPeerSpec
+	SentinelHBInterval        time.Duration
+	SentinelPeerTimeout       time.Duration
+	SentinelPeerGrace         time.Duration
+	SentinelPeerCooldown      time.Duration
+	SentinelDetectionInterval time.Duration
 }
 
 func Load() (Config, error) {
@@ -93,8 +93,8 @@ func Load() (Config, error) {
 		def int
 	}{
 		{"STARTUP_GRACE_SECONDS", 30},
-		{"HEARTBEAT_TIMEOUT_SECONDS", 20},
-		{"DETECTION_INTERVAL_SECONDS", 5},
+		{"HEARTBEAT_TIMEOUT_SECONDS", 12},
+		{"DETECTION_INTERVAL_SECONDS", 3},
 		{"RESTART_COOLDOWN_SECONDS", 60},
 		{"RESTART_TIMEOUT_SECONDS", 30},
 		{"RESTART_STOP_GRACE_SECONDS", 10},
@@ -126,20 +126,20 @@ func Load() (Config, error) {
 	}
 
 	return Config{
-		SelfID:              byte(selfIDInt),
-		Peers:               peers,
-		BullyTCPListenPort:  fmt.Sprintf(":%d", tcpPort),
-		SentinelHBListenPort:  fmt.Sprintf(":%d", udpPort),
-		WorkerUDPListenPort: fmt.Sprintf(":%d", workerUDPPort),
+		SelfID:               byte(selfIDInt),
+		Peers:                peers,
+		BullyTCPListenPort:   fmt.Sprintf(":%d", tcpPort),
+		SentinelHBListenPort: fmt.Sprintf(":%d", udpPort),
+		WorkerUDPListenPort:  fmt.Sprintf(":%d", workerUDPPort),
 
 		ExpectedContainers: expected,
 
 		LeaderCheckInterval: secs(ints["LEADER_CHECK_INTERVAL_SECONDS"]),
-		OKTimeout:          secs(ints["OK_TIMEOUT_SECONDS"]),
-		CoordTimeout:       secs(ints["COORD_TIMEOUT_SECONDS"]),
-		BaseJitter:         msecs(ints["BULLY_BOOTSTRAP_JITTER_MS"]),
-		ControlDialTimeout: msecs(ints["CONTROL_DIAL_TIMEOUT_MS"]),
-		ControlIOTimeout:   msecs(ints["CONTROL_IO_TIMEOUT_MS"]),
+		OKTimeout:           secs(ints["OK_TIMEOUT_SECONDS"]),
+		CoordTimeout:        secs(ints["COORD_TIMEOUT_SECONDS"]),
+		BaseJitter:          msecs(ints["BULLY_BOOTSTRAP_JITTER_MS"]),
+		ControlDialTimeout:  msecs(ints["CONTROL_DIAL_TIMEOUT_MS"]),
+		ControlIOTimeout:    msecs(ints["CONTROL_IO_TIMEOUT_MS"]),
 
 		StartupGrace:      secs(ints["STARTUP_GRACE_SECONDS"]),
 		HeartbeatTimeout:  secs(ints["HEARTBEAT_TIMEOUT_SECONDS"]),
@@ -148,7 +148,7 @@ func Load() (Config, error) {
 		RestartTimeout:    secs(ints["RESTART_TIMEOUT_SECONDS"]),
 		RestartStopGrace:  ints["RESTART_STOP_GRACE_SECONDS"],
 
-		SentinelPeers:        sentinelPeers,
+		SentinelPeers:             sentinelPeers,
 		SentinelHBInterval:        secs(ints["SENTINEL_HB_INTERVAL_SECONDS"]),
 		SentinelPeerTimeout:       secs(ints["SENTINEL_PEER_TIMEOUT_SECONDS"]),
 		SentinelPeerGrace:         secs(ints["SENTINEL_PEER_GRACE_SECONDS"]),

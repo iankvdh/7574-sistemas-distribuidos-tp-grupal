@@ -5,6 +5,10 @@ sentinels: 3
 log_level: info
 expected_query_eofs: 5
 
+sentinels_env:
+  HEARTBEAT_TIMEOUT_SECONDS: 12
+  DETECTION_INTERVAL_SECONDS: 3
+
 fetchers:
   - name: fetcher_q5
     env:
